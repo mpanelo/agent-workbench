@@ -1,0 +1,15 @@
+[package]
+name = "workbench-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "workbench"
+path = "src/main.rs"
+
+[dependencies]
+workbench-core.workspace = true
+tokio.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
