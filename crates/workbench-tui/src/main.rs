@@ -103,8 +103,8 @@ async fn start() -> io::Result<()> {
                     state.pane,
                     item.title,
                     state.status_detail,
-                    item.repository.display(),
-                    item.workspace.display(),
+                    ui::display_path(&item.repository),
+                    ui::display_path(&item.workspace),
                     item.branch.as_deref().unwrap_or("unavailable")
                 );
             }

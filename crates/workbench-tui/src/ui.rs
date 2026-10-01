@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
@@ -158,12 +160,12 @@ fn render_items(
                 if view == View::Work {
                     lines.push(Line::from(format!(
                         "  Repository: {}",
-                        visible(&item.repository.to_string_lossy())
+                        visible(&display_path(&item.repository))
                     )));
                 }
                 lines.push(Line::from(format!(
                     "  Workspace: {}",
-                    visible(&item.workspace.to_string_lossy())
+                    visible(&display_path(&item.workspace))
                 )));
                 if view == View::Work
                     && let Some(branch) = &item.branch
@@ -300,7 +302,7 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &DiscoveryState, scroll: &mut
                                 "      cwd: {}",
                                 pane.working_directory
                                     .as_ref()
-                                    .map(|path| visible(&path.to_string_lossy()))
+                                    .map(|path| visible(&display_path(path)))
                                     .unwrap_or_else(|| "unavailable".to_owned())
                             ),
                             Style::default().fg(Color::DarkGray),
@@ -323,6 +325,26 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &DiscoveryState, scroll: &mut
         Paragraph::new("a/w/s: views | ↑/↓: scroll | Ctrl+d/u: half-page | q: quit • refresh: 2s"),
         footer,
     );
+}
+
+/// Abbreviate metadata paths for display only; stored paths remain absolute.
+pub(crate) fn display_path(path: &Path) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    abbreviate_home(path, home.as_deref())
+}
+
+fn abbreviate_home(path: &Path, home: Option<&Path>) -> String {
+    if let Some(home) = home
+        && home.is_absolute()
+        && home.parent().is_some()
+        && let Ok(relative) = path.strip_prefix(home)
+    {
+        if relative.as_os_str().is_empty() {
+            return "~".into();
+        }
+        return Path::new("~").join(relative).to_string_lossy().into_owned();
+    }
+    path.to_string_lossy().into_owned()
 }
 
 // Make control characters visible without letting names/titles distort the layout.
@@ -431,6 +453,40 @@ mod tests {
             status_detail: "Unsupported foreground command.".into(),
             attention_prompt: None,
         }
+    }
+
+    #[test]
+    fn home_paths_are_abbreviated_only_at_directory_boundaries() {
+        let home = Some(Path::new("/Users/person"));
+        for (path, expected) in [
+            ("/Users/person", "~"),
+            ("/Users/person/", "~"),
+            ("/Users/person/workspace/my repo", "~/workspace/my repo"),
+            ("/Users/person/λ🙂", "~/λ🙂"),
+            ("/Users/person-other/repo", "/Users/person-other/repo"),
+            ("/Users/another/repo", "/Users/another/repo"),
+            ("relative/path", "relative/path"),
+        ] {
+            assert_eq!(abbreviate_home(Path::new(path), home), expected);
+        }
+        for home in [
+            None,
+            Some(Path::new("")),
+            Some(Path::new("relative")),
+            Some(Path::new("/")),
+        ] {
+            assert_eq!(
+                abbreviate_home(Path::new("/Users/person/repo"), home),
+                "/Users/person/repo"
+            );
+        }
+        assert_eq!(
+            abbreviate_home(
+                Path::new("/custom/home/repo"),
+                Some(Path::new("/custom/home/"))
+            ),
+            "~/repo"
+        );
     }
 
     #[test]

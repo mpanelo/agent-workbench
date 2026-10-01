@@ -31,7 +31,9 @@ In ATTENTION and WORK, `j/k` or arrows move selection. `Ctrl+d`/`Ctrl+u` scroll
 down/up half a page in all views; Page Down/Page Up still scroll a full page. Home
 selects the first item. The sessions view still uses arrows to scroll. Resize is handled automatically.
 Long metadata lines are clipped to terminal width; control characters are displayed
-as escapes.
+as escapes. Repository, workspace, and session working-directory paths under the
+current `$HOME` are displayed with `~` (also in `workbench list`). Stored paths and
+approval command text are unchanged; paths outside `$HOME` remain absolute.
 
 ## Navigation and replies
 

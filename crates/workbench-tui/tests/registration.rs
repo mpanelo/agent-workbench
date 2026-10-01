@@ -64,6 +64,21 @@ fn registrations_survive_independent_processes_without_tmux_or_a_terminal() {
         assert!(text.contains(expected), "missing {expected:?}: {text}");
     }
     let original = fs::read(&path).unwrap();
+    let home_listed = Command::new(env!("CARGO_BIN_EXE_workbench"))
+        .args(["list", "--state-file"])
+        .arg(&path)
+        .env("HOME", "/work")
+        .env(
+            "TMUX",
+            format!("{},1,0", directory.path().join("absent.sock").display()),
+        )
+        .output()
+        .unwrap();
+    assert!(home_listed.status.success());
+    let text = String::from_utf8(home_listed.stdout).unwrap();
+    assert!(text.contains("Repository: ~/my repo"));
+    assert!(text.contains("Workspace: ~/task workspace"));
+    assert_eq!(fs::read(&path).unwrap(), original);
     let duplicate = register(&path, "ABC-123", "implementation", "%15");
     assert!(!duplicate.status.success());
     assert!(String::from_utf8_lossy(&duplicate.stderr).contains("already registered"));
