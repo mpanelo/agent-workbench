@@ -17,12 +17,12 @@ use tokio::{
 use crate::{Engine, WorkItem, WorkItemError};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
-const REVIEW_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_OUTPUT: usize = 2 * 1024 * 1024;
-const MAX_TOTAL_PATCH: usize = 16 * 1024 * 1024;
-const MAX_FILES: usize = 512;
-const MAX_PATCH_LINES: usize = 60_000;
-const MAX_LINE_BYTES: usize = 8192;
+pub(crate) const REVIEW_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const MAX_OUTPUT: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_TOTAL_PATCH: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_FILES: usize = 512;
+pub(crate) const MAX_PATCH_LINES: usize = 60_000;
+pub(crate) const MAX_LINE_BYTES: usize = 8192;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -238,7 +238,7 @@ impl GitClient {
         command
     }
 
-    async fn run(
+    pub(crate) async fn run(
         &self,
         workspace: &Path,
         args: &[OsString],
@@ -410,7 +410,7 @@ fn args(values: &[&str]) -> Vec<OsString> {
     values.iter().map(OsString::from).collect()
 }
 
-fn diff_args(values: &[&str]) -> Vec<OsString> {
+pub(crate) fn diff_args(values: &[&str]) -> Vec<OsString> {
     let mut result = args(&[
         "diff",
         "--no-color",
@@ -429,7 +429,7 @@ fn diff_args(values: &[&str]) -> Vec<OsString> {
     result
 }
 
-fn text(bytes: &[u8]) -> Result<&str, GitError> {
+pub(crate) fn text(bytes: &[u8]) -> Result<&str, GitError> {
     std::str::from_utf8(bytes).map_err(|_| {
         GitError::Invalid(
             "Git paths/diff text must be UTF-8; use an external viewer for undecodable content"
@@ -522,7 +522,7 @@ fn parse_names(bytes: &[u8]) -> Result<Vec<ChangedFile>, GitError> {
     Ok(files)
 }
 
-fn patch_counts(patch: &str) -> (Option<usize>, Option<usize>) {
+pub(crate) fn patch_counts(patch: &str) -> (Option<usize>, Option<usize>) {
     let mut in_hunk = false;
     let (mut added, mut deleted) = (0, 0);
     for line in patch.lines() {

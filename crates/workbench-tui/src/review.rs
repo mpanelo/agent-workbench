@@ -9,7 +9,7 @@ use ratatui::{
     text::Line,
     widgets::{Block, List, ListItem, ListState, Paragraph},
 };
-use workbench_core::{ReviewSession, ReviewStatus};
+use workbench_core::{ChangedFile, ReviewSession, ReviewStatus};
 
 use crate::ui::{display_path, visible};
 
@@ -25,6 +25,7 @@ pub(crate) struct ReviewUi {
     selected: usize,
     scroll: u16,
     horizontal: u16,
+    since_review: bool,
     pub base: Option<String>,
 }
 
@@ -71,6 +72,7 @@ impl ReviewUi {
         self.selected = 0;
         self.scroll = 0;
         self.horizontal = 0;
+        self.since_review = false;
         self.loading.then_some(self.generation)
     }
 
@@ -94,6 +96,7 @@ impl ReviewUi {
         self.loading = false;
         match result {
             Ok(session) if self.current.as_deref() == Some(session.diff.work_item_id.as_str()) => {
+                self.since_review = !session.changes_since_review().is_empty();
                 self.sessions
                     .insert(session.diff.work_item_id.clone(), session);
                 self.error = None;
@@ -112,6 +115,11 @@ impl ReviewUi {
         self.saving = false;
         match result {
             Ok(session) if self.current.as_deref() == Some(session.diff.work_item_id.as_str()) => {
+                self.selected = self
+                    .selected
+                    .min(files(&session, self.since_review).len().saturating_sub(1));
+                self.scroll = 0;
+                self.horizontal = 0;
                 self.sessions
                     .insert(session.diff.work_item_id.clone(), session);
                 self.save_error = None;
@@ -162,6 +170,13 @@ impl ReviewUi {
         if key.code == KeyCode::Char('r') {
             return ReviewIntent::Reload;
         }
+        if key.code == KeyCode::Char('c') {
+            self.since_review = !self.since_review;
+            self.selected = 0;
+            self.scroll = 0;
+            self.horizontal = 0;
+            return ReviewIntent::None;
+        }
         let Some(session) = self
             .current
             .as_ref()
@@ -169,25 +184,26 @@ impl ReviewUi {
         else {
             return ReviewIntent::None;
         };
+        let files = files(session, self.since_review);
         let previous = self.selected;
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
                 self.selected = self
                     .selected
                     .saturating_add(1)
-                    .min(session.diff.files.len().saturating_sub(1))
+                    .min(files.len().saturating_sub(1))
             }
             KeyCode::Char('k') | KeyCode::Up => self.selected = self.selected.saturating_sub(1),
-            KeyCode::Tab if !session.diff.files.is_empty() => {
-                if let Some(next) = (1..=session.diff.files.len())
-                    .map(|step| (self.selected + step) % session.diff.files.len())
-                    .find(|index| !session.is_reviewed(&session.diff.files[*index].path))
+            KeyCode::Tab if !files.is_empty() => {
+                if let Some(next) = (1..=files.len())
+                    .map(|step| (self.selected + step) % files.len())
+                    .find(|index| !session.is_reviewed(&files[*index].path))
                 {
                     self.selected = next;
                 }
             }
             KeyCode::Char(' ') => {
-                if let Some(file) = session.diff.files.get(self.selected) {
+                if let Some(file) = files.get(self.selected) {
                     let path = file.path.clone();
                     let reviewed = !session.is_reviewed(&path);
                     self.saving = true;
@@ -236,8 +252,23 @@ impl ReviewUi {
         .areas(frame.area());
         let id = self.current.as_deref().unwrap_or("—");
         frame.render_widget(
-            Paragraph::new(format!("AGENT WORKBENCH — REVIEW — {}", visible(id)))
-                .style(Style::default().fg(Color::Cyan)),
+            Paragraph::new(format!(
+                "AGENT WORKBENCH — {} — {}",
+                if self.since_review
+                    && self
+                        .sessions
+                        .get(id)
+                        .is_some_and(|session| !session.changes_since_review().is_empty())
+                {
+                    "RE-REVIEW REQUIRED"
+                } else if self.since_review {
+                    "SINCE REVIEW"
+                } else {
+                    "REVIEW"
+                },
+                visible(id)
+            ))
+            .style(Style::default().fg(Color::Cyan)),
             header,
         );
         frame.render_widget(
@@ -245,7 +276,7 @@ impl ReviewUi {
                 Line::from(
                     "j/k: files | Space: reviewed | Ctrl+d/u: scroll | h/l: pan | r: reload",
                 ),
-                Line::from("Tab: unreviewed | PgUp/Dn: page | Home: top | Esc: back | q: quit"),
+                Line::from("c: full/since | Tab: unreviewed | PgUp/Dn: page | Home: top | Esc: back | q: quit"),
             ]),
             footer,
         );
@@ -269,11 +300,22 @@ impl ReviewUi {
             return;
         };
         let (reviewed, total) = session.progress();
-        let (added, deleted) = session.diff.line_totals();
+        let files = files(session, self.since_review);
+        let (added, deleted) = files.iter().fold((0, 0), |(a, d), file| {
+            (
+                a + file.additions.unwrap_or(0),
+                d + file.deletions.unwrap_or(0),
+            )
+        });
         frame.render_widget(
             Paragraph::new(vec![
                 Line::from(format!(
-                    "{reviewed} / {total} reviewed • +{added} -{deleted} (text) • base {} ({})",
+                    "{reviewed} / {total} reviewed • +{added} -{deleted} {} • base {} ({})",
+                    if self.since_review {
+                        "since review (text)"
+                    } else {
+                        "(text)"
+                    },
                     visible(&session.diff.base),
                     &session.diff.base_revision[..session.diff.base_revision.len().min(12)]
                 )),
@@ -299,17 +341,18 @@ impl ReviewUi {
                 notice,
             );
         }
-        if session.diff.files.is_empty() {
+        if files.is_empty() {
             frame.render_widget(
                 Paragraph::new(
-                    "No changes against this base (including untracked files). Esc: back.",
+                    if self.since_review { "No changes since review. c: full diff (includes never-reviewed files). Esc: back." }
+                    else { "No changes against this base (including untracked files). Esc: back." },
                 ),
                 body,
             );
             return;
         }
-        self.selected = self.selected.min(session.diff.files.len() - 1);
-        let [files, patch] = if body.width < 60 {
+        self.selected = self.selected.min(files.len() - 1);
+        let [file_area, patch] = if body.width < 60 {
             Layout::vertical([
                 Constraint::Length((body.height / 3).clamp(1, 5)),
                 Constraint::Min(0),
@@ -322,9 +365,7 @@ impl ReviewUi {
             ])
             .areas(body)
         };
-        let items: Vec<_> = session
-            .diff
-            .files
+        let items: Vec<_> = files
             .iter()
             .map(|file| {
                 let mark = match session.status(&file.path) {
@@ -332,31 +373,49 @@ impl ReviewUi {
                     ReviewStatus::Unreviewed => "○",
                     ReviewStatus::ChangedAfterReview => "⚠",
                 };
-                ListItem::new(format!(
-                    "{mark} {}  {}",
-                    visible(&file.path.to_string_lossy()),
-                    file.kind
-                ))
+                let name = visible(&file.path.to_string_lossy());
+                if self.since_review {
+                    ListItem::new(vec![
+                        Line::from(format!("{mark} {name}")),
+                        Line::from(format!(
+                            "  {}",
+                            file.additions
+                                .zip(file.deletions)
+                                .map(|(a, d)| format!("{} lines (+{a} -{d})", a + d))
+                                .unwrap_or_else(|| "non-text / unavailable".into())
+                        )),
+                    ])
+                } else {
+                    ListItem::new(format!("{mark} {name}  {}", file.kind))
+                }
             })
             .collect();
         frame.render_stateful_widget(
             List::new(items)
-                .block(if files.height >= 3 {
-                    Block::bordered().title("Changed files")
+                .block(if file_area.height >= 3 {
+                    Block::bordered().title(if self.since_review {
+                        "Since review"
+                    } else {
+                        "Changed files"
+                    })
                 } else {
                     Block::default()
                 })
                 .highlight_symbol("> ")
                 .highlight_style(Style::default().fg(Color::Yellow)),
-            files,
+            file_area,
             &mut ListState::default().with_selected(Some(self.selected)),
         );
-        let file = &session.diff.files[self.selected];
+        let file = &files[self.selected];
         let title = format!(
             "{} • {}",
             visible(&file.path.to_string_lossy()),
             if file.additions.is_none() {
-                "binary; external viewer needed".into()
+                if self.since_review {
+                    "non-text / unavailable; see notice".into()
+                } else {
+                    "binary; external viewer needed".into()
+                }
             } else {
                 format!(
                     "+{} -{}",
@@ -403,6 +462,14 @@ impl ReviewUi {
             Paragraph::new(lines).scroll((self.scroll, self.horizontal)),
             inner,
         );
+    }
+}
+
+fn files(session: &ReviewSession, since_review: bool) -> &[ChangedFile] {
+    if since_review {
+        session.changes_since_review()
+    } else {
+        &session.diff.files
     }
 }
 
@@ -677,5 +744,153 @@ mod tests {
         assert!(text.contains("0 / 2 reviewed"));
         let intent = review.key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), 24);
         assert!(matches!(intent, ReviewIntent::Save { reviewed: true, .. }));
+    }
+
+    async fn reviewed_fixture() -> (tempfile::TempDir, Engine) {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        // Synthetic fixture commits use isolated config, never the user's
+        // signing key or hooks. Actual project commits remain signed.
+        for args in [
+            vec!["init", "-q"],
+            vec!["add", "--", "source.txt"],
+            vec!["commit", "-q", "-m", "fixture"],
+        ] {
+            if args[0] == "add" {
+                std::fs::write(workspace.join("source.txt"), "base\n").unwrap();
+            }
+            let result = std::process::Command::new("git")
+                .current_dir(&workspace)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .args([
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                ])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        let workspace = std::fs::canonicalize(workspace).unwrap();
+        let engine = Engine::new(directory.path().join("items.json"));
+        engine
+            .register_work_item(WorkItem {
+                id: "A".into(),
+                title: "Task".into(),
+                repository: workspace.clone(),
+                workspace: workspace.clone(),
+                branch: None,
+                kind: WorkItemKind::Implementation,
+                pane_id: "%1".into(),
+            })
+            .unwrap();
+        std::fs::write(
+            workspace.join("source.txt"),
+            "reviewed implementation\nfix this\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("reviewed-new.txt"),
+            "new reviewed implementation\n",
+        )
+        .unwrap();
+        let mut session = engine.open_review("A", None).await.unwrap();
+        for path in ["source.txt", "reviewed-new.txt"] {
+            engine
+                .set_file_reviewed(&mut session, std::path::Path::new(path), true)
+                .unwrap();
+        }
+        (directory, engine)
+    }
+
+    fn save_with_engine(ui: &mut ReviewUi, engine: &Engine) {
+        let ReviewIntent::Save {
+            ticket,
+            mut session,
+            path,
+            reviewed,
+        } = ui.key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), 24)
+        else {
+            panic!("expected save");
+        };
+        engine
+            .set_file_reviewed(&mut session, &path, reviewed)
+            .unwrap();
+        ui.finish_save(ticket, Ok(*session));
+    }
+
+    #[tokio::test]
+    async fn correction_view_filters_counts_toggles_and_saves_real_snapshots() {
+        let (directory, engine) = reviewed_fixture().await;
+        let workspace = directory.path().join("workspace");
+        std::fs::write(
+            workspace.join("source.txt"),
+            "reviewed implementation\ncorrected\n",
+        )
+        .unwrap();
+        std::fs::write(workspace.join("never-reviewed.txt"), "brand new\n").unwrap();
+        let mut ui = ReviewUi::default();
+        let ticket = ui.open("A".into()).unwrap();
+        ui.finish(ticket, Ok(engine.open_review("A", None).await.unwrap()));
+        assert!(ui.since_review);
+        let text = screen(&mut ui, 120, 24);
+        for expected in [
+            "RE-REVIEW REQUIRED",
+            "2 lines (+1 -1)",
+            "+1 -1 since review",
+            "-fix this",
+            "+corrected",
+            "c: full/since",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+        assert!(!text.contains("never-reviewed.txt"));
+        assert!(!text.contains("-base"));
+        for (w, h) in [(80, 12), (45, 12), (1, 1)] {
+            screen(&mut ui, w, h);
+        }
+        key(&mut ui, KeyCode::Char('c'));
+        assert!(!ui.since_review);
+        assert!(screen(&mut ui, 120, 24).contains("○ never-reviewed.txt"));
+        key(&mut ui, KeyCode::Char('c'));
+        assert_eq!((ui.selected, ui.scroll, ui.horizontal), (0, 0, 0));
+        save_with_engine(&mut ui, &engine);
+        assert!(screen(&mut ui, 120, 24).contains("No changes since review"));
+        key(&mut ui, KeyCode::Char('c'));
+        assert!(screen(&mut ui, 120, 24).contains("✓ source.txt"));
+        let (ticket, _) = ui.reload().unwrap();
+        ui.finish(ticket, Ok(engine.open_review("A", None).await.unwrap()));
+        assert!(!ui.since_review);
+    }
+
+    #[tokio::test]
+    async fn removed_files_remain_navigable_when_full_diff_is_empty() {
+        let (directory, engine) = reviewed_fixture().await;
+        let workspace = directory.path().join("workspace");
+        std::fs::write(workspace.join("source.txt"), "base\n").unwrap();
+        std::fs::remove_file(workspace.join("reviewed-new.txt")).unwrap();
+        let mut ui = ReviewUi::default();
+        let ticket = ui.open("A".into()).unwrap();
+        ui.finish(ticket, Ok(engine.open_review("A", None).await.unwrap()));
+        assert!(ui.sessions["A"].diff.files.is_empty());
+        assert!(screen(&mut ui, 120, 24).contains("2 changed after review"));
+        key(&mut ui, KeyCode::Char('j'));
+        assert_eq!(ui.selected, 1);
+        save_with_engine(&mut ui, &engine);
+        assert_eq!(ui.selected, 0);
+        assert_eq!(ui.sessions["A"].changed_after_review(), 1);
+        assert!(screen(&mut ui, 120, 24).contains("reviewed-new.txt"));
+        save_with_engine(&mut ui, &engine);
+        assert!(screen(&mut ui, 120, 24).contains("No changes since review"));
+        key(&mut ui, KeyCode::Char('c'));
+        assert!(screen(&mut ui, 120, 24).contains("No changes against this base"));
     }
 }

@@ -89,7 +89,11 @@ impl ReviewStore {
                     .collect()
             })
             .unwrap_or_default();
-        Ok(ReviewSession { diff, reviewed })
+        Ok(ReviewSession {
+            diff,
+            reviewed,
+            since_review: None,
+        })
     }
 
     pub(crate) fn set(

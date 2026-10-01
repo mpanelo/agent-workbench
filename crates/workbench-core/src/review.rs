@@ -21,6 +21,7 @@ pub enum ReviewStatus {
 pub struct ReviewSession {
     pub diff: WorkItemDiff,
     pub(crate) reviewed: HashMap<PathBuf, ChangedFile>,
+    pub(crate) since_review: Option<Vec<ChangedFile>>,
 }
 
 impl ReviewSession {
@@ -28,10 +29,20 @@ impl ReviewSession {
         Self {
             diff,
             reviewed: HashMap::new(),
+            since_review: None,
         }
     }
 
     pub fn status(&self, path: &Path) -> ReviewStatus {
+        if let Some(changes) = &self.since_review {
+            return if !self.reviewed.contains_key(path) {
+                ReviewStatus::Unreviewed
+            } else if changes.iter().any(|file| file.path == path) {
+                ReviewStatus::ChangedAfterReview
+            } else {
+                ReviewStatus::Reviewed
+            };
+        }
         match self.reviewed.get(path) {
             None => ReviewStatus::Unreviewed,
             Some(snapshot)
@@ -63,11 +74,20 @@ impl ReviewSession {
     }
 
     pub fn changed_after_review(&self) -> usize {
+        if let Some(changes) = &self.since_review {
+            return changes.len();
+        }
         self.diff
             .files
             .iter()
             .filter(|file| self.status(&file.path) == ReviewStatus::ChangedAfterReview)
             .count()
+    }
+
+    /// Captured file-content differences from saved review snapshots, including
+    /// reviewed paths that reverted to the base or disappeared from its diff.
+    pub fn changes_since_review(&self) -> &[ChangedFile] {
+        self.since_review.as_deref().unwrap_or(&[])
     }
 }
 
@@ -124,11 +144,18 @@ impl Engine {
     ) -> Result<ReviewSession, ReviewError> {
         let diff = self.diff(id, base).await.map_err(ReviewError::Git)?;
         let store = ReviewStore::new(self.store.review_path());
-        tokio::task::spawn_blocking(move || store.restore(diff))
+        let mut session = tokio::task::spawn_blocking(move || store.restore(diff))
             .await
             .map_err(|error| {
                 ReviewError::Invalid(format!("review-state read task stopped: {error}"))
-            })?
+            })??;
+        session.since_review = Some(
+            self.git
+                .changes_since_review(&session)
+                .await
+                .map_err(ReviewError::Git)?,
+        );
+        Ok(session)
     }
 
     /// Persist the selected file's captured diff before updating the session.
@@ -155,16 +182,50 @@ impl Engine {
                 "registered workspace changed; reopen review".into(),
             ));
         }
-        let file = session
-            .diff
-            .files
-            .iter()
-            .find(|file| file.path == path)
+        let captured = session.diff.files.iter().find(|file| file.path == path);
+        let file = captured
+            .or_else(|| {
+                session
+                    .changes_since_review()
+                    .iter()
+                    .find(|file| file.path == path)
+                    .and_then(|_| session.reviewed.get(path))
+            })
             .ok_or_else(|| {
                 ReviewError::Invalid("selected path is not in the captured diff".into())
             })?;
-        let restored =
-            ReviewStore::new(self.store.review_path()).set(&session.diff, file, reviewed)?;
+        // A reverted/removed path has no remaining base diff to snapshot. Drop
+        // its obsolete mark after the developer acknowledges the correction.
+        let restored = ReviewStore::new(self.store.review_path()).set(
+            &session.diff,
+            file,
+            reviewed && captured.is_some(),
+        )?;
+        if let Some(changes) = &mut session.since_review {
+            changes.retain(|file| {
+                file.path != path
+                    && restored.contains_key(&file.path)
+                    && !session
+                        .diff
+                        .files
+                        .iter()
+                        .any(|current| restored.get(&file.path) == Some(current))
+            });
+            for (other_path, snapshot) in &restored {
+                if other_path != path
+                    && session.reviewed.get(other_path) != Some(snapshot)
+                    && !session.diff.files.contains(snapshot)
+                {
+                    changes.retain(|file| &file.path != other_path);
+                    changes.push(ChangedFile {
+                        path: other_path.clone(), old_path: None, kind: snapshot.kind,
+                        additions: None, deletions: None,
+                        patch: "Review snapshot changed in another process. Reload (r) to compare with it.\n".into(),
+                    });
+                }
+            }
+            changes.sort_by(|a, b| a.path.cmp(&b.path));
+        }
         session.reviewed = restored;
         Ok(())
     }

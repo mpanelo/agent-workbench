@@ -226,6 +226,7 @@ SHA yourself. The screen shows the chosen base and its resolved revision.
 | `h` / `←`, `l` / `→` | Pan long diff lines horizontally. |
 | Home | Reset vertical and horizontal diff scrolling. |
 | `r` | Reload the diff, restoring unchanged marks and flagging changed snapshots. |
+| `c` | Switch between the full base diff and changes since the saved review. |
 | `Esc` | Return to the originating ATTENTION/WORK view. |
 | `q` / `Ctrl-C` | Quit Workbench. |
 
@@ -257,9 +258,9 @@ reopening, reloading, tmux navigation, and application restart:
 
 | Mark | Meaning |
 | --- | --- |
-| ✓ | Current captured diff matches the reviewed snapshot. |
+| ✓ | Captured content and mode match the reviewed snapshot. |
 | ○ | No reviewed snapshot for this file/context. |
-| ⚠ | Current diff differs from the previously reviewed snapshot. |
+| ⚠ | Captured content/mode changed since review, or comparison is unavailable. |
 
 The summary counts only unchanged reviewed files and separately counts files
 changed after review. Space on ⚠ reviews the new capture; Space on ✓ removes its
@@ -282,16 +283,48 @@ if moving registrations and review history together.
 Marks are scoped to work-item ID, canonical workspace, and resolved base commit.
 Changing the base commit starts an unreviewed context; spelling another ref that
 resolves to the same commit restores the same marks. Older contexts and snapshots
-for files no longer in the diff are retained. Exact captured diffs (including
-paths, change kind, modes/object IDs, and patch text) are compared conservatively;
-staging a previously untracked file can require re-review even with identical text.
+for files no longer in the diff are retained until explicitly acknowledged.
+M8 compares reconstructed content and modes, so staging a previously untracked
+file alone does not require re-review when its content and mode remain identical.
 Changes made after capture are **not** silently marked reviewed: the next reload
 shows ⚠. Staged/unstaged movement of otherwise identical tracked changes retains ✓.
 
 Review state is bounded to 64 MiB; oversized files/updates fail without overwriting
-history. There is no automatic pruning yet. Tracking is file-level only. REVIEW
-still displays the full diff against the chosen base: constructing a smaller
-diff containing only changes since review belongs to M8 and is not implemented.
+history. There is no automatic pruning yet. Tracking is file-level only.
+
+## Changed since review (M8)
+
+Review the initial implementation with `d` and mark files with Space. After the
+agent makes corrections, press `r` (or reopen REVIEW). When reviewed files have
+changed, **RE-REVIEW REQUIRED** opens automatically, listing only those files.
+The selected patch compares the saved review with the newly captured workspace,
+not the original Git base. Each file shows its changed-line count (`+` additions
+plus `-` deletions); the summary totals only these corrections. A replacement
+counts as one deletion plus one addition. Mode-only changes have zero text lines.
+
+- `c` switches between this view and the full base diff. Never-reviewed files
+  remain ○ in the full view; they are not silently considered reviewed or mixed
+  into since-review totals.
+- Space saves the current capture as the new review snapshot and removes that
+  file from the correction list. `r` detects subsequent agent edits.
+- Reverted files and removed untracked files remain in the correction list even
+  when absent from the full base diff. Space acknowledges them by removing their
+  obsolete snapshot; future edits start unreviewed.
+
+Existing M7 snapshots work without migration: the core reconstructs text from
+saved unified patches and immutable base blobs, then asks Git to compare private
+temporary copies. It never applies patches to the checkout, writes Git objects,
+or reads live files when saving a mark. Symlinks compare target text, not external
+file contents; submodules compare pointers only. A second rename is represented
+as removal of the reviewed path and an unreviewed destination in the full view.
+
+Binary changes show an explicit notice without a fictional line count. If a base
+blob is unavailable, exceeds the 2 MiB read limit, or a saved patch cannot be
+reconstructed, that file remains ⚠ with an explanation: inspect the full diff
+with `c` or use an external viewer. Comparisons have the same command/patch limits
+as full review and an additional 30-second overall timeout. Git base changes still
+select a different review context; use a fixed `--diff-base` commit when reviewing
+across agent commits. No hunk-level tracking or automatic refresh is included.
 
 ## Basic agent state (M4)
 
@@ -395,7 +428,7 @@ it; the sessions view remains usable while a state error is shown in WORK.
 
 - `workbench-core`: typed snapshots, work-item models, pane resolution, pure agent
   status interpretation, ephemeral attention queue and prompt previews, local Git
-  diff capture and in-memory review progress, read-only observations, tmux CLI
+  diff capture, persistent file reviews and since-review comparisons, read-only observations, tmux CLI
   adapter, and JSON persistence. Tokio handles discovery; Serde/serde_json serialize
   state; tempfile/fs2 provide atomic replacement and advisory locking. It has no
   presentation dependencies.
@@ -412,7 +445,8 @@ reported as malformed. Ordinary spaces, tabs, newlines, and Unicode are preserve
 Only the selected tmux server is discovered; multi-server aggregation is not part
 of M1–M6. Saved pane IDs refer to the selected server; tmux can reuse IDs after a
 server restart, so check mappings after restarting tmux. There is no pane remapping
-or deletion command yet. Review persistence and change tracking belong to M7/M8.
+or deletion command yet. File-level review persistence and changes since review
+are implemented in M7/M8.
 
 ## Checks
 

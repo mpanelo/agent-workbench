@@ -8,6 +8,7 @@ mod attention;
 mod git;
 mod model;
 mod registration;
+mod rereview;
 mod review;
 mod review_store;
 mod tmux;
