@@ -310,11 +310,16 @@ pub(crate) fn render_sessions(
         Constraint::Length(1),
         Constraint::Min(0),
         Constraint::Length(if interaction.message.is_some() { 2 } else { 0 }),
-        Constraint::Length(1),
+        Constraint::Length(2),
     ])
     .areas(frame.area());
     frame.render_widget(
-        Paragraph::new("AGENT WORKBENCH — SESSIONS").style(theme::header()),
+        Paragraph::new(if interaction.show_all_panes {
+            "AGENT WORKBENCH — SESSIONS (all panes)"
+        } else {
+            "AGENT WORKBENCH — SESSIONS (agents only)"
+        })
+        .style(theme::header()),
         header,
     );
     let mut lines = Vec::<Line<'static>>::new();
@@ -337,6 +342,13 @@ pub(crate) fn render_sessions(
             lines.push(Line::from("No tmux sessions found."));
         }
         Some(Ok(snapshot)) => {
+            let snapshot = interaction.sessions_snapshot(snapshot);
+            if snapshot.sessions.is_empty() {
+                lines.push(Line::from("No recognized coding-agent panes found."));
+                lines.push(Line::from(
+                    "Press f to show all panes, including wrappers and unknown agents.",
+                ));
+            }
             for session in &snapshot.sessions {
                 lines.push(Line::styled(
                     format!("{}  ({})", visible(&session.name), session.id),
@@ -431,7 +443,11 @@ pub(crate) fn render_sessions(
         );
     }
     frame.render_widget(
-        theme::footer("j/k: panes | Enter/r: register | Ctrl+d/u: scroll | a/w/s | q: quit"),
+        theme::footer(if interaction.show_all_panes {
+            "f: show agents only\nj/k: panes | Enter/r: register | Ctrl+d/u: scroll | a/w/s | q: quit"
+        } else {
+            "f: show all panes\nj/k: panes | Enter/r: register | Ctrl+d/u: scroll | a/w/s | q: quit"
+        }),
         footer,
     );
 }
@@ -486,7 +502,10 @@ mod tests {
             discovery: state,
             ..AppState::default()
         };
-        let mut interaction = Interaction::default();
+        let mut interaction = Interaction {
+            show_all_panes: true,
+            ..Interaction::default()
+        };
         if let Some(snapshot) = state.snapshot() {
             interaction.sync_panes(snapshot);
         }
@@ -524,6 +543,68 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    #[test]
+    fn sessions_defaults_to_agents_and_all_mode_recovers_hidden_panes() {
+        let mut snapshot = snapshot();
+        let mut shell = snapshot.sessions[0].windows[0].panes[0].clone();
+        shell.id = "%15".into();
+        shell.title = "Shell named codex".into();
+        shell.current_command = Some("fish".into());
+        let mut shell_window = snapshot.sessions[0].windows[0].clone();
+        shell_window.name = "hidden-shell-window".into();
+        shell_window.panes = vec![shell.clone()];
+        snapshot.sessions[0].windows.push(shell_window.clone());
+        snapshot.sessions.push(Session {
+            id: "$2".into(),
+            name: "hidden-shell-session".into(),
+            windows: vec![shell_window],
+        });
+        snapshot.sessions[0].windows[0].panes.push(shell);
+        let mut state = AppState::from_refresh(Ok(snapshot.clone()), Ok(vec![]));
+        let mut interaction = Interaction::default();
+        let draw = |state: &AppState, interaction: &mut Interaction| {
+            if let Some(snapshot) = state.snapshot() {
+                interaction.sync_panes(snapshot);
+            }
+            let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+            terminal
+                .draw(|frame| render_sessions(frame, state, &mut 0, interaction))
+                .unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        let text = draw(&state, &mut interaction);
+        assert!(text.contains("SESSIONS (agents only)"));
+        assert!(text.contains("%14"));
+        assert!(text.contains("f: show all panes"));
+        for hidden in ["%15", "hidden-shell-window", "hidden-shell-session"] {
+            assert!(!text.contains(hidden), "{text}");
+        }
+        interaction.show_all_panes = true;
+        let text = draw(&state, &mut interaction);
+        for expected in [
+            "SESSIONS (all panes)",
+            "%15",
+            "hidden-shell-window",
+            "hidden-shell-session",
+            "f: show agents only",
+        ] {
+            assert!(text.contains(expected), "{text}");
+        }
+        interaction.show_all_panes = false;
+        snapshot.sessions[0].windows[0].panes.remove(0);
+        state.discovery = Some(Ok(snapshot));
+        let text = draw(&state, &mut interaction);
+        assert!(text.contains("No recognized coding-agent panes found."));
+        assert!(text.contains("Press f to show all panes"));
+        assert!(interaction.selected_pane.is_none());
     }
 
     #[test]
@@ -1237,7 +1318,7 @@ mod tests {
     #[test]
     fn clamps_scroll_when_snapshot_shrinks_and_handles_small_terminals() {
         let mut scroll = u16::MAX;
-        let text = screen(Some(Ok(snapshot())), 100, 4, &mut scroll);
+        let text = screen(Some(Ok(snapshot())), 100, 5, &mut scroll);
         assert_eq!(scroll, 3);
         assert!(text.contains("cwd: /work/my repo"));
         screen(Some(Ok(Snapshot::default())), 10, 2, &mut scroll);

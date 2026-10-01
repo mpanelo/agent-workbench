@@ -74,7 +74,20 @@ remove its registration.
 
 The session view shows session names/IDs, window names/indices/IDs, and pane IDs, indices,
 titles, current commands, and working directories. Missing command/path metadata
-is shown as `unavailable`. Discovery refreshes in the background every two seconds;
+is shown as `unavailable` in all-pane mode. By default, SESSIONS shows only panes
+whose foreground command basename is `codex`, `claude`, `gemini`, `opencode`,
+`aider`, `goose`, or `amp`. Empty windows and sessions are hidden. Press `f` to
+toggle all panes; the header and footer show the current mode. The setting lasts
+until you exit Workbench. Selection and registration use the visible panes only.
+
+This is conservative command-name recognition, not status detection: pane titles
+are not evidence, and generic `node`/`python` processes, custom wrappers, or
+version-named executables may hide an agent. Use `f` to register those panes.
+An agent temporarily running another foreground command may also disappear from
+the filtered list. Raw discovery, registered WORK/ATTENTION items, saved mappings,
+and existing status-detection rules are unchanged.
+
+Discovery refreshes in the background every two seconds;
 errors replace the displayed snapshot and retry automatically. Each command has a
 three-second timeout. Quit with `q`, `Esc`, or `Ctrl-C` when not composing a reply.
 In ATTENTION and WORK, `j/k` or arrows move selection. `Ctrl+d`/`Ctrl+u` scroll

@@ -51,6 +51,7 @@ pub(crate) struct Interaction {
     pub reveal_selection: bool,
     pub review_requested: Option<String>,
     pub selected_pane: Option<String>,
+    pub show_all_panes: bool,
     pub reveal_pane: bool,
     pub registration_requested: Option<String>,
     pub maintenance_requested: Option<crate::maintenance::Request>,
@@ -66,7 +67,8 @@ impl Interaction {
     }
 
     pub fn sync_panes(&mut self, snapshot: &Snapshot) {
-        let ids = pane_ids(snapshot);
+        let visible = self.sessions_snapshot(snapshot);
+        let ids = pane_ids(&visible);
         if self
             .selected_pane
             .as_deref()
@@ -80,7 +82,8 @@ impl Interaction {
 
     pub fn move_pane_selection(&mut self, snapshot: &Snapshot, delta: isize) {
         self.sync_panes(snapshot);
-        let ids = pane_ids(snapshot);
+        let visible = self.sessions_snapshot(snapshot);
+        let ids = pane_ids(&visible);
         if ids.is_empty() {
             return;
         }
@@ -91,6 +94,14 @@ impl Interaction {
         self.selected_pane =
             Some(ids[position.saturating_add_signed(delta).min(ids.len() - 1)].to_owned());
         self.reveal_pane = true;
+    }
+
+    pub fn sessions_snapshot(&self, snapshot: &Snapshot) -> Snapshot {
+        if self.show_all_panes {
+            snapshot.clone()
+        } else {
+            snapshot.coding_agent_panes()
+        }
     }
 
     pub fn sync(&mut self, items: &[WorkItemState]) {
@@ -223,7 +234,7 @@ mod tests {
                             id: id.into(),
                             index: 0,
                             title: "Agent".into(),
-                            current_command: None,
+                            current_command: Some("codex".into()),
                             working_directory: None,
                         })
                         .collect(),

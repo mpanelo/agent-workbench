@@ -511,6 +511,14 @@ fn navigate(
     }
     let items = state.items_for(*view);
     match key.code {
+        KeyCode::Char('f') if *view == ui::View::Sessions => {
+            interaction.show_all_panes = !interaction.show_all_panes;
+            if let Some(snapshot) = state.snapshot() {
+                interaction.sync_panes(snapshot);
+            }
+            interaction.reveal_pane = true;
+            *scroll = 0;
+        }
         KeyCode::Down | KeyCode::Char('j') if *view == ui::View::Sessions => {
             if let Some(snapshot) = state.snapshot() {
                 interaction.move_pane_selection(snapshot, 1);
@@ -725,6 +733,146 @@ mod tests {
     }
 
     #[test]
+    fn sessions_filter_toggle_selection_and_registration_never_target_hidden_panes() {
+        use workbench_core::{Pane, Session, Window};
+        let mut state = state(&[("registered-shell", AgentStatus::Unknown)]);
+        state.discovery = Some(Ok(Snapshot {
+            sessions: vec![Session {
+                id: "$1".into(),
+                name: "main".into(),
+                windows: vec![Window {
+                    id: "@1".into(),
+                    index: 0,
+                    name: "mixed".into(),
+                    panes: [("%1", "fish"), ("%2", "claude"), ("%3", "codex")]
+                        .into_iter()
+                        .map(|(id, command)| Pane {
+                            id: id.into(),
+                            index: 0,
+                            title: "Agent".into(),
+                            current_command: Some(command.into()),
+                            working_directory: None,
+                        })
+                        .collect(),
+                }],
+            }],
+        }));
+        let mut interaction = interaction::Interaction {
+            selected_pane: Some("%1".into()),
+            ..Default::default()
+        };
+        let mut view = ui::View::Sessions;
+        let mut scroll = 25;
+        navigate(
+            KeyCode::Enter,
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert_eq!(
+            interaction.registration_requested.take().as_deref(),
+            Some("%2")
+        );
+        navigate(
+            KeyCode::Char('j'),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert_eq!(interaction.selected_pane.as_deref(), Some("%3"));
+        navigate(
+            KeyCode::Char('f'),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.show_all_panes);
+        assert_eq!(interaction.selected_pane.as_deref(), Some("%3"));
+        assert_eq!(scroll, 0);
+        navigate(
+            KeyCode::Home,
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        navigate(
+            KeyCode::Char('r'),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert_eq!(
+            interaction.registration_requested.take().as_deref(),
+            Some("%1")
+        );
+        navigate(
+            KeyCode::Char('f'),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert_eq!(interaction.selected_pane.as_deref(), Some("%2"));
+        assert_eq!(state.items().len(), 1);
+        assert_eq!(
+            state.snapshot().unwrap().sessions[0].windows[0].panes.len(),
+            3
+        );
+        if let Some(Ok(snapshot)) = &mut state.discovery {
+            for pane in &mut snapshot.sessions[0].windows[0].panes {
+                pane.current_command = Some("fish".into());
+            }
+        }
+        navigate(
+            KeyCode::Enter,
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.selected_pane.is_none());
+        assert!(interaction.registration_requested.is_none());
+        assert!(
+            interaction
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("Select a live pane")
+        );
+        navigate(
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert!(!interaction.show_all_panes);
+        view = ui::View::Work;
+        navigate(
+            KeyCode::Char('f'),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert!(!interaction.show_all_panes);
+    }
+
+    #[test]
     fn sessions_navigation_requests_registration_only_for_a_live_selected_pane() {
         use workbench_core::{Pane, Session, Window};
         let mut state = state(&[]);
@@ -742,7 +890,7 @@ mod tests {
                             id: id.into(),
                             index: 0,
                             title: "Agent".into(),
-                            current_command: None,
+                            current_command: Some("codex".into()),
                             working_directory: None,
                         })
                         .collect(),
