@@ -165,15 +165,32 @@ fn render_items(
                         ));
                     }
                 }
-                lines.push(Line::styled(
-                    format!(
-                        "  Type: {}  Pane: {} ({})",
-                        item.kind,
-                        visible(&item.pane_id),
-                        state.pane
-                    ),
-                    theme::muted(),
-                ));
+                if view == View::Work {
+                    lines.push(Line::styled(
+                        format!("  Type: {}", item.kind),
+                        theme::muted(),
+                    ));
+                    let warning = match state.pane {
+                        workbench_core::PaneAvailability::Present => None,
+                        workbench_core::PaneAvailability::Missing => Some("  Agent pane missing."),
+                        workbench_core::PaneAvailability::Unavailable => {
+                            Some("  Agent pane unavailable.")
+                        }
+                    };
+                    if let Some(warning) = warning {
+                        lines.push(Line::styled(warning, theme::notice()));
+                    }
+                } else {
+                    lines.push(Line::styled(
+                        format!(
+                            "  Type: {}  Pane: {} ({})",
+                            item.kind,
+                            visible(&item.pane_id),
+                            state.pane
+                        ),
+                        theme::muted(),
+                    ));
+                }
                 if view == View::Work {
                     lines.push(Line::styled(
                         format!("  Repository: {}", visible(&display_path(&item.repository))),
@@ -1024,14 +1041,23 @@ mod tests {
                     "WORK",
                     "ABC-123  UNKNOWN",
                     "Fix retries",
-                    "%14",
                     "/work/repo",
                     "/work/ABC-123",
                     "Branch: fix/retries",
                     &kind.to_string(),
-                    &format!("({pane})"),
                 ] {
                     assert!(text.contains(expected), "missing {expected:?} in {text}");
+                }
+                assert!(!text.contains("%14"), "{text}");
+                assert!(!text.contains("Pane:"), "{text}");
+                match pane {
+                    PaneAvailability::Present => assert!(!text.contains("Agent pane"), "{text}"),
+                    PaneAvailability::Missing => {
+                        assert!(text.contains("Agent pane missing."), "{text}")
+                    }
+                    PaneAvailability::Unavailable => {
+                        assert!(text.contains("Agent pane unavailable."), "{text}")
+                    }
                 }
             }
         }
@@ -1050,7 +1076,8 @@ mod tests {
         let text = work_screen(&state, 120, 15, &mut 0);
         assert!(text.contains("Discovery unavailable"));
         assert!(text.contains("ABC-123  UNKNOWN"));
-        assert!(text.contains("%14 (unavailable)"));
+        assert!(text.contains("Agent pane unavailable."));
+        assert!(!text.contains("%14"));
         let state = AppState {
             work_items: Some(Err("unsupported schema version 2".into())),
             ..AppState::default()

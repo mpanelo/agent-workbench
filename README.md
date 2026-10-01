@@ -64,10 +64,11 @@ switch to panes or submit input; no sessions or workspaces are created.
 The TUI opens in **ATTENTION**, showing items currently known to need input or
 whose agent turn completed. Press `a` to return there, `w` for **WORK**, or `s`
 for the session view. WORK shows all registered items with observed agent status,
-their type, repository, workspace, optional branch, and mapped pane ID. Pane
-availability is separate from agent status: `present` means the pane was found,
-`missing` means it is absent from a successful discovery, and `unavailable` means
-discovery failed. A disappeared pane does not remove its registration.
+their type, repository, workspace, and optional branch. Pane IDs stay in SESSIONS
+and are hidden in WORK. WORK shows an agent-pane warning only when the mapping
+is missing from a successful discovery or unavailable because discovery failed.
+Pane availability is separate from agent status; a disappeared pane does not
+remove its registration.
 
 The session view shows session names/IDs, window names/indices/IDs, and pane IDs, indices,
 titles, current commands, and working directories. Missing command/path metadata
