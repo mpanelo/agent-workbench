@@ -1,5 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use workbench_core::{MAX_INPUT_BYTES, Snapshot, WorkItemState};
+use workbench_core::{ActionError, MAX_INPUT_BYTES, Snapshot, WorkItemState};
 
 #[derive(Clone, Debug)]
 pub(crate) struct Draft {
@@ -56,6 +56,14 @@ pub(crate) struct Interaction {
 }
 
 impl Interaction {
+    pub fn finish_focus(&mut self, id: &str, result: Result<(), ActionError>) {
+        // Successful navigation needs no persistent notice; clear stale messages.
+        self.message = result
+            .err()
+            .map(|error| format!("Could not open {id}: {error}"));
+        self.reveal_selection = true;
+    }
+
     pub fn sync_panes(&mut self, snapshot: &Snapshot) {
         let ids = pane_ids(snapshot);
         if self
@@ -168,6 +176,34 @@ fn pane_ids(snapshot: &Snapshot) -> Vec<&str> {
 mod tests {
     use super::*;
     use workbench_core::{AgentStatus, PaneAvailability, WorkItem, WorkItemKind};
+
+    #[test]
+    fn successful_focus_clears_notices_but_failures_remain_visible() {
+        let mut interaction = Interaction {
+            selected_id: Some("ABC-123".into()),
+            message: Some("An old notice".into()),
+            ..Interaction::default()
+        };
+        interaction.finish_focus("ABC-123", Ok(()));
+        assert!(interaction.message.is_none());
+        assert!(interaction.reveal_selection);
+        assert_eq!(interaction.selected_id.as_deref(), Some("ABC-123"));
+
+        interaction.finish_focus(
+            "ABC-123",
+            Err(ActionError::MissingPane {
+                item: "ABC-123".into(),
+                pane: "%14".into(),
+            }),
+        );
+        let error = interaction.message.as_deref().unwrap();
+        assert!(error.starts_with("Could not open ABC-123:"));
+        assert!(error.contains("Pane %14"));
+        assert!(error.contains("registration is preserved"));
+
+        interaction.finish_focus("ABC-123", Ok(()));
+        assert!(interaction.message.is_none());
+    }
 
     #[test]
     fn pane_selection_survives_refresh_and_skips_linked_duplicates() {

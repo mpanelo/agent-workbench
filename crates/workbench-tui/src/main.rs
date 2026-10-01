@@ -137,13 +137,7 @@ async fn start() -> io::Result<()> {
         match result? {
             RunExit::Quit => return Ok(()),
             RunExit::Focus(id) => {
-                interaction.message = Some(match engine.focus_work_item(&id).await {
-                    Ok(()) => format!(
-                        "Opened {id}. Use tmux navigation to return, or detach when attached from outside."
-                    ),
-                    Err(error) => format!("Could not open {id}: {error}"),
-                });
-                interaction.reveal_selection = true;
+                interaction.finish_focus(&id, engine.focus_work_item(&id).await);
             }
         }
     }
