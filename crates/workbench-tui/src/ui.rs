@@ -350,11 +350,14 @@ pub(crate) fn render_sessions(
                 ));
             }
             for session in &snapshot.sessions {
-                lines.push(Line::styled(visible(&session.name), theme::accent()));
+                lines.push(Line::styled(
+                    format!(" {}", visible(&session.name)),
+                    theme::accent().fg(theme::MAUVE),
+                ));
                 for window in &session.windows {
                     lines.push(Line::styled(
-                        format!("  {}", visible(&window.name)),
-                        theme::accent(),
+                        format!("   {}", visible(window_label(&window.name))),
+                        theme::accent().fg(theme::BLUE),
                     ));
                     for pane in &window.panes {
                         let selected =
@@ -370,19 +373,21 @@ pub(crate) fn render_sessions(
                             .collect::<Vec<_>>()
                             .join(", ");
                         let command = pane.current_command.as_deref().unwrap_or("unavailable");
-                        let mut row = vec![Span::raw(format!(
-                            "{}{}",
-                            if selected { "  > " } else { "    " },
-                            visible(command),
-                        ))];
+                        let mut row = vec![
+                            Span::raw(if selected { "  > " } else { "    " }),
+                            Span::styled(" ", ratatui::style::Style::default().fg(theme::TEAL)),
+                            Span::raw(visible(command)),
+                        ];
                         if !registered.is_empty() {
                             row.push(Span::styled(
                                 format!("  [Registered: {registered}]"),
                                 ratatui::style::Style::default().fg(theme::GREEN),
                             ));
                         }
-                        if !pane.title.is_empty() && pane.title != command {
-                            row.push(Span::raw(format!(" — {}", visible(&pane.title))));
+                        let title =
+                            session_pane_title(&pane.title, command, &session.name, &window.name);
+                        if !title.is_empty() {
+                            row.push(Span::raw(format!(" — {}", visible(title))));
                         }
                         lines.push(Line::from(row).style(if selected {
                             theme::selection().fg(theme::LAVENDER)
@@ -444,6 +449,29 @@ pub(crate) fn render_sessions(
         }),
         footer,
     );
+}
+
+/// Replace a pre-existing branch glyph with our window marker, display-only.
+fn window_label(name: &str) -> &str {
+    name.trim().strip_prefix(" ").unwrap_or(name.trim()).trim()
+}
+
+/// Suppress only exact ancestor names and delimited trailing context. Do not
+/// substring-replace names inside meaningful descriptions or merge real panes.
+fn session_pane_title<'a>(title: &'a str, command: &str, session: &str, window: &str) -> &'a str {
+    let context = [session.trim(), window.trim(), window_label(window)];
+    let mut title = title.trim();
+    while let Some((description, suffix)) = title.rsplit_once(" | ") {
+        if !context.contains(&suffix.trim()) {
+            break;
+        }
+        title = description.trim();
+    }
+    if title == command || context.contains(&title) {
+        ""
+    } else {
+        title
+    }
 }
 
 /// Abbreviate metadata paths for display only; stored paths remain absolute.
@@ -602,6 +630,59 @@ mod tests {
     }
 
     #[test]
+    fn sessions_remove_repeated_ancestor_context_but_keep_meaningful_titles() {
+        let window = " nvim-v0-12";
+        for (title, expected) in [
+            (
+                "Assess Neovim migration effort | nvim-v0-12",
+                "Assess Neovim migration effort",
+            ),
+            (
+                "Assess Neovim migration effort |  nvim-v0-12",
+                "Assess Neovim migration effort",
+            ),
+            (
+                "Assess Neovim migration effort | dotfiles | nvim-v0-12",
+                "Assess Neovim migration effort",
+            ),
+            (" nvim-v0-12 ", ""),
+            (" nvim-v0-12", ""),
+            ("dotfiles", ""),
+            ("codex", ""),
+            ("", ""),
+            (
+                "Discuss nvim-v0-12 migration",
+                "Discuss nvim-v0-12 migration",
+            ),
+            ("Task | nvim-v0-12-extra", "Task | nvim-v0-12-extra"),
+            ("Task | unrelated", "Task | unrelated"),
+            (
+                "Task | nvim-v0-12 | unrelated",
+                "Task | nvim-v0-12 | unrelated",
+            ),
+        ] {
+            assert_eq!(
+                session_pane_title(title, "codex", "dotfiles", window),
+                expected,
+                "{title}"
+            );
+        }
+        let mut snapshot = snapshot();
+        snapshot.sessions[0].name = "dotfiles".into();
+        snapshot.sessions[0].windows[0].name = window.into();
+        snapshot.sessions[0].windows[0].panes[0].title =
+            "Assess Neovim migration effort | nvim-v0-12".into();
+        let original = snapshot.clone();
+        let text = screen(Some(Ok(snapshot.clone())), 100, 12, &mut 0);
+        assert_eq!(text.matches("nvim-v0-12").count(), 1, "{text}");
+        assert!(text.contains(" dotfiles"));
+        assert!(text.contains(" nvim-v0-12"));
+        assert!(text.contains(">  codex — Assess Neovim migration effort"));
+        assert!(!text.contains(""));
+        assert_eq!(snapshot, original);
+    }
+
+    #[test]
     fn compact_sessions_omit_repeated_titles_and_keep_duplicate_panes_selectable() {
         let mut snapshot = snapshot();
         let pane = &mut snapshot.sessions[0].windows[0].panes[0];
@@ -635,7 +716,7 @@ mod tests {
                     .iter()
                     .map(|cell| cell.symbol())
                     .collect();
-                assert!(text.contains("> codex"), "{text}");
+                assert!(text.contains(">  codex"), "{text}");
             }
             assert_eq!(interaction.selected_pane.as_deref(), Some("%15"));
         }
@@ -678,7 +759,7 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(text.contains("> codex — Later agent"));
+        assert!(text.contains(">  codex — Later agent"));
         assert!(text.contains("/work/my repo"));
         assert_eq!(interaction.selected_pane.as_deref(), Some("%15"));
         assert!(scroll > 0);
@@ -1010,7 +1091,10 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         theme::assert_text_style(buffer, "AGENT WORKBENCH", theme::LAVENDER, theme::MANTLE);
-        theme::assert_text_style(buffer, "> codex", theme::LAVENDER, theme::SURFACE);
+        theme::assert_text_style(buffer, "codex", theme::LAVENDER, theme::SURFACE);
+        theme::assert_text_style(buffer, " main", theme::MAUVE, theme::BASE);
+        theme::assert_text_style(buffer, " auth", theme::BLUE, theme::BASE);
+        theme::assert_text_style(buffer, "", theme::TEAL, theme::SURFACE);
         theme::assert_text_style(buffer, "/work/my repo", theme::SUBTEXT, theme::BASE);
         let failed = AppState::from_refresh(Err("test discovery error".into()), Ok(vec![]));
         terminal
@@ -1315,9 +1399,9 @@ mod tests {
         let text = screen(Some(Ok(snapshot())), 100, 12, &mut 0);
         for expected in [
             "SESSIONS",
-            "main",
-            "  auth",
-            "> codex — Agent",
+            " main",
+            "   auth",
+            ">  codex — Agent",
             "/work/my repo",
         ] {
             assert!(text.contains(expected), "missing {expected:?} in {text}");
@@ -1356,7 +1440,7 @@ mod tests {
         pane.working_directory = None;
         pane.title = "one\ntwo\tthree\x1b".into();
         let text = screen(Some(Ok(snapshot)), 100, 12, &mut 0);
-        assert!(text.contains("> unavailable"));
+        assert!(text.contains(">  unavailable"));
         assert!(text.contains("Directory unavailable"));
         assert!(text.contains("one\\ntwo\\tthree\\u{1b}"));
     }

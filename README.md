@@ -73,11 +73,18 @@ discovery failed.
 Pane availability is separate from agent status; a disappeared pane does not
 remove its registration.
 
-The session view groups agents by session and window name. Each entry shows its
-command, optional pane title, and working directory, with a compact registered-work
-badge when applicable. Tmux IDs and numeric indices are hidden; navigation and
-registration still use stable pane IDs internally. Repeated command/title text is
-omitted. Missing command/path metadata is shown as unavailable in all-pane mode.
+The session view groups agents by session and window name, using mini.icons-style
+glyphs: `` for sessions (package), `` for windows (module), and `` for panes
+(shell). These are fixed glyphs from the [mini.icons palette](https://github.com/nvim-mini/mini.icons),
+not a Lua/Neovim dependency. Configure a Nerd Font v3+ or a Nerd Fonts Symbols
+fallback in your terminal; otherwise icons may appear as missing-glyph boxes.
+Each entry shows its command, optional pane title, and working directory, with a
+compact registered-work badge when applicable. Tmux IDs and numeric indices are hidden; navigation and
+registration still use stable pane IDs internally. Titles matching a command or
+ancestor name, and trailing ` | session/window` context, are omitted rather than
+repeating the same name. Meaningful descriptions remain; separate panes are never
+merged. Existing branch glyphs before window names are replaced by the window
+marker. Missing command/path metadata is shown as unavailable in all-pane mode.
 By default, SESSIONS shows only panes whose foreground command basename is
 `codex`, `claude`, `gemini`, `opencode`, `aider`, `goose`, or `amp`.
 Empty windows and sessions are hidden. Press `f` to
