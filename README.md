@@ -285,7 +285,12 @@ and the `⚠ … warnings · f2 to view` shortcuts suffix are supported. Context
 compaction also counts as `RUNNING`, including its adjacent “Making room to
 continue” detail. A complete adjacent “Queued follow-up inputs” question block
 does not hide an active timer or imply a blocking approval. Activity lookup is
-bounded to ten nonempty rows above the composer/bottom banner. A bare activity
+bounded to 24 nonempty rows above the composer/bottom banner. Timed queued
+questions and wrapped pending-message previews are supported, along with the
+`tab to queue message` typing footer, wrapped composer drafts, and Codex's “Back
+to bottom” banner. Draft/preview text is excluded from activity detection. When
+scrolling hides the live indicator entirely, Workbench remains `UNKNOWN` rather
+than assuming the agent is idle or retaining stale status. A bare activity
 line, historical indicator followed by new output, or unfamiliar footer is not
 enough evidence; changed keybindings, localization, narrow panes, menus, and UI changes
 can produce `UNKNOWN`. Free-form questions and structured question pickers are

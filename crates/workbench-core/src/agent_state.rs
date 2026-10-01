@@ -8,7 +8,10 @@ use crate::tmux::PaneObservation;
 use crate::{AgentStatus, Engine, PaneAvailability, Snapshot, WorkItemError, WorkItemState};
 
 const MAX_CONCURRENT_CAPTURES: usize = 4;
-const MAX_ACTIVITY_ROWS: usize = 10;
+const MAX_ACTIVITY_ROWS: usize = 24;
+const MAX_COMPOSER_ROWS: usize = 20;
+const QUEUED_MESSAGES_TITLE: &str =
+    "Messages to be submitted after next tool call (press esc to interrupt and send immediately)";
 const MAX_APPROVAL_CHARS: usize = 16 * 1024;
 const APPROVAL_CLIPPED: &str =
     "\n[Approval dialog exceeded the display limit. Press Enter to inspect the full pane.]";
@@ -147,7 +150,7 @@ fn infer(observation: &PaneObservation) -> (AgentStatus, &'static str) {
     // Some active layouts hide the composer/shortcuts, but retain a rate-limit
     // footer immediately after the activity row. Require both signals: a lone
     // interrupt line (or one buried in historical output) is not enough.
-    if !shortcuts_footer(last) {
+    if !shortcuts_footer(last) && *last != "tab to queue message" {
         let tail = &lines[lines.len().saturating_sub(4)..];
         if tail
             .iter()
@@ -163,12 +166,15 @@ fn infer(observation: &PaneObservation) -> (AgentStatus, &'static str) {
             "Codex screen lacks a recognized current composer/footer or active-turn layout.",
         );
     }
-    // The ready composer is at the bottom, immediately above 1–3 footer rows.
+    // A typed composer can wrap across several rows. Keep its entire contents
+    // outside activity detection, anchored by a known bottom footer.
     // No search through scrollback or arbitrary prose for 'done'/'waiting'.
     let prompt = lines
         .iter()
         .rposition(|line| *line == "›" || line.starts_with("› "));
-    let Some(prompt) = prompt.filter(|index| (1..=3).contains(&(lines.len() - index - 1))) else {
+    let Some(prompt) =
+        prompt.filter(|index| (1..=MAX_COMPOSER_ROWS).contains(&(lines.len() - index - 1)))
+    else {
         return (Unknown, "Codex composer is not visible.");
     };
     let activity = preceding_activity(&lines[..prompt]);
@@ -182,6 +188,17 @@ fn infer(observation: &PaneObservation) -> (AgentStatus, &'static str) {
         .any(|line| line.contains("to interrupt"))
     {
         return (Unknown, "Codex activity indicator is unrecognized.");
+    }
+    if lines[..prompt]
+        .iter()
+        .rev()
+        .take(MAX_ACTIVITY_ROWS)
+        .any(|line| scroll_banner(line))
+    {
+        return (
+            Unknown,
+            "Codex is showing history without a recognizable live activity row.",
+        );
     }
     if activity.is_some_and(completion_indicator) {
         return (
@@ -212,6 +229,27 @@ fn preceding_activity<'a>(lines: &[&'a str]) -> Option<&'a str> {
     while tail.last().is_some_and(|line| ui_banner(line)) {
         tail = &tail[..tail.len() - 1];
     }
+    // The queued-message preview is arbitrary user text, including possible
+    // fake activity rows. Only inspect the real row *before* its full UI title.
+    for index in 0..tail.len() {
+        for rows in 1..=3 {
+            if index + rows > tail.len() {
+                break;
+            }
+            let title = tail[index..index + rows].join(" ");
+            if title.strip_prefix("• ").unwrap_or(&title) == QUEUED_MESSAGES_TITLE {
+                if !tail
+                    .get(index + rows)
+                    .is_some_and(|line| line.starts_with('↳'))
+                {
+                    return None;
+                }
+                let prefix = &tail[..index];
+                let activity = prefix.iter().rev().copied().find(|line| !ui_banner(line))?;
+                return running_indicator(activity).then_some(activity);
+            }
+        }
+    }
     // A queued question is not a blocking approval. Skip only the complete
     // adjacent three-row UI block, never arbitrary question/transcript text.
     if tail.len() >= 3 && queued_questions(&tail[tail.len() - 3..]) {
@@ -238,7 +276,15 @@ fn queued_questions(lines: &[&str]) -> bool {
     {
         return false;
     }
-    let Some((count, noun)) = lines[1]
+    let question = if let Some((question, elapsed)) = lines[1].split_once(" · ") {
+        if !duration(elapsed) {
+            return false;
+        }
+        question
+    } else {
+        lines[1]
+    };
+    let Some((count, noun)) = question
         .strip_prefix("? ")
         .and_then(|line| line.split_once(' '))
     else {
@@ -253,8 +299,16 @@ fn queued_questions(lines: &[&str]) -> bool {
 
 fn ui_banner(line: &str) -> bool {
     rate_limit_footer(line)
+        || scroll_banner(line)
         || line.starts_with("└ Tip: ")
         || (!line.is_empty() && line.chars().all(|ch| ch == '─'))
+}
+
+fn scroll_banner(line: &str) -> bool {
+    matches!(
+        line,
+        "↓ Back to bottom · esc" | "New activity · ↓ Back to bottom · esc"
+    )
 }
 
 fn warning_text(line: &str) -> Option<&str> {
@@ -387,6 +441,7 @@ mod tests {
     // Only the UI chrome from the reported screenshots, not conversation text.
     const COMPACTING: &str = "• Compacting context (1m 44s • esc to interrupt)\n└ Making room to continue\n└ Tip: Use /vim to toggle Vim editing in the composer.";
     const QUEUED: &str = "• Queued follow-up inputs\n? 1 question\nshift+↵ to answer";
+    const QUEUED_MESSAGES: &str = "• Messages to be submitted after next tool call (press esc to\ninterrupt and send immediately)\n↳ queued follow-up text\nwrapped preview continuation\n…";
     const WARNINGS: &str = "⚠ 2 warnings · f2 to view";
 
     fn observation(screen: &str) -> PaneObservation {
@@ -581,6 +636,74 @@ mod tests {
         assert_ne!(infer(&observation(&distant)).0, AgentStatus::Running);
         let screen = format!("Worked for 3s\n└ Making room to continue\n{FOOTER}");
         assert_ne!(infer(&observation(&screen)).0, AgentStatus::Complete);
+    }
+
+    #[test]
+    fn scrolling_typing_and_timed_or_message_queues_preserve_live_activity() {
+        for detail in [
+            "↓ Back to bottom · esc".to_owned(),
+            "New activity · ↓ Back to bottom · esc".to_owned(),
+            QUEUED.replace("1 question", "1 question · 11s"),
+            QUEUED.replace("1 question", "2 questions · 1m 5s"),
+            QUEUED_MESSAGES.to_owned(),
+            format!("• {QUEUED_MESSAGES_TITLE}\n↳ next task"),
+        ] {
+            for composer in [
+                FOOTER.to_owned(),
+                "› an unsent draft\ncontinuation of a wrapped draft\nGPT-6.1-Sol high · ~/work · Task\ntab to queue message".to_owned(),
+            ] {
+                let screen = format!("• Working (8m 33s • esc to interrupt)\n{detail}\n{composer}");
+                assert_eq!(infer(&observation(&screen)).0, AgentStatus::Running, "{screen}");
+            }
+        }
+        let draft = "› one line\ntwo\nthree\nfour\nfive\nsix\nGPT-6.1-Sol high · ~/work · Task\ntab to queue message";
+        assert_eq!(
+            infer(&observation(&format!(
+                "Working (3s • esc to interrupt)\n{draft}"
+            )))
+            .0,
+            AgentStatus::Running
+        );
+        let screen = format!("{COMPACTING}\nNew activity · ↓ Back to bottom · esc\n{FOOTER}");
+        assert_eq!(infer(&observation(&screen)).0, AgentStatus::Running);
+    }
+
+    #[test]
+    fn draft_and_queued_message_contents_never_supply_the_activity_timer() {
+        for prefix in ["New output", "Worked for 3s"] {
+            let draft = "› draft text\n• Working (3s • esc to interrupt)\nGPT-6.1-Sol high · ~/work · Task\ntab to queue message";
+            assert_ne!(
+                infer(&observation(&format!("{prefix}\n{draft}"))).0,
+                AgentStatus::Running
+            );
+            let queued = format!(
+                "• {QUEUED_MESSAGES_TITLE}\n↳ queued text\n• Working (3s • esc to interrupt)"
+            );
+            let screen = format!("{prefix}\n{queued}\n{FOOTER}");
+            assert_eq!(infer(&observation(&screen)).0, AgentStatus::Unknown);
+        }
+        for detail in [
+            QUEUED.replace("1 question", "1 question · soon"),
+            QUEUED.replace("1 question", "1 question · 11s · extra text"),
+            "New activity · ↓ Back to bottom · unknown key".to_owned(),
+            format!("• {QUEUED_MESSAGES_TITLE}\npreview without a queue marker"),
+            "• Messages to be submitted after next tool call\n↳ task".to_owned(),
+        ] {
+            let screen = format!("Working (3s • esc to interrupt)\n{detail}\n{FOOTER}");
+            assert_eq!(
+                infer(&observation(&screen)).0,
+                AgentStatus::Unknown,
+                "{screen}"
+            );
+        }
+        let scrolled = format!("Old output only\n↓ Back to bottom · esc\n{FOOTER}");
+        // Browsing history is not evidence that the live turn is idle/complete.
+        assert_eq!(infer(&observation(&scrolled)).0, AgentStatus::Unknown);
+        let historical_completion = format!("Worked for 3s\n↓ Back to bottom · esc\n{FOOTER}");
+        assert_eq!(
+            infer(&observation(&historical_completion)).0,
+            AgentStatus::Unknown
+        );
     }
 
     #[test]
@@ -836,6 +959,12 @@ cat '{}/'$5
                 format!("Working (21s • esc to interrupt)\n{QUEUED}\n{FOOTER}"),
                 AgentStatus::Running,
             ),
+            (
+                format!("Working (21s • esc to interrupt)\n{}\n{FOOTER}", QUEUED.replace("1 question", "1 question · 11s")),
+                AgentStatus::Running,
+            ),
+            (format!("Working (21s • esc to interrupt)\n{QUEUED_MESSAGES}\n{FOOTER}"), AgentStatus::Running),
+            ("Working (21s • esc to interrupt)\nNew activity · ↓ Back to bottom · esc\n› a wrapped draft\nnext draft row\nGPT-6.1-Sol high · ~/work · Task\ntab to queue message".into(), AgentStatus::Running),
             (format!("Worked for 2s\n{FOOTER}"), AgentStatus::Complete),
             (FOOTER.into(), AgentStatus::Idle),
             ("unrecognized menu".into(), AgentStatus::Unknown),
@@ -859,7 +988,7 @@ cat '{}/'$5
         }
         let calls = fs::read_to_string(&log).unwrap();
         // One capture for the shared pane and one failed capture per refresh.
-        assert_eq!(calls.lines().count(), 14);
+        assert_eq!(calls.lines().count(), 20);
         for call in calls.lines() {
             assert!(call.contains("capture-pane -p -J -t"));
             assert!(!call.contains("send-keys"));
@@ -1004,6 +1133,12 @@ cat '{}/'$5
                 format!("Working (21s • esc to interrupt)\n{QUEUED}\n{FOOTER}"),
                 AgentStatus::Running,
             ),
+            (
+                format!("Working (21s • esc to interrupt)\n{}\n{FOOTER}", QUEUED.replace("1 question", "1 question · 11s")),
+                AgentStatus::Running,
+            ),
+            (format!("Working (21s • esc to interrupt)\n{QUEUED_MESSAGES}\n{FOOTER}"), AgentStatus::Running),
+            ("Working (21s • esc to interrupt)\nNew activity · ↓ Back to bottom · esc\n› a wrapped draft\nnext draft row\nGPT-6.1-Sol high · ~/work · Task\ntab to queue message".into(), AgentStatus::Running),
             (
                 format!(
                     "Worked for 12s • 9:47 PM\n{LIMIT}\n{}",

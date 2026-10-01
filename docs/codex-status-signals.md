@@ -19,8 +19,17 @@ composer. Both active layouts now count as `RUNNING`. Only a complete adjacent
 queued block (known header, positive question count, and answer shortcut) is
 skipped; it does not itself imply running or waiting. The compaction detail is
 accepted only immediately after a valid compaction timer. The look-back remains
-bounded to ten nonempty rows, and arbitrary intervening prose, malformed blocks,
+bounded to 24 nonempty rows, and arbitrary intervening prose, malformed blocks,
 quoted activity, and missing current UI anchors do not establish running state.
+
+Additional captures confirmed the `tab to queue message` typing footer and “New
+activity · ↓ Back to bottom · esc” scroll banner. Composer drafts may wrap (up
+to 20 nonempty rows between the prompt start and footer). Queued-question counts
+can carry an elapsed-time suffix. Pending-message previews are skipped only
+after their complete known UI title and an arrow-prefixed preview; activity must
+come from before that title, never arbitrary preview/draft text. If scrolling
+hides the activity row, the detector stays `UNKNOWN`, not `IDLE` or `COMPLETE`.
+tmux copy mode still invalidates observation; Codex's own scroll UI is separate.
 
 ## Hook investigation — not implemented
 
