@@ -356,9 +356,9 @@ stay `UNKNOWN` and remain fully navigable/replyable.
 
 | State | Evidence |
 | --- | --- |
-| `RUNNING` | Current Codex activity line with elapsed time and `esc to interrupt`, anchored by a composer/shortcuts footer or a recognized bottom rate-limit banner. |
+| `RUNNING` | Current Codex activity line with elapsed time and `esc to interrupt`, anchored by a composer and recognized footer or a recognized bottom rate-limit banner. |
 | `WAITING_FOR_INPUT` | Current command/edit/permission/terminal-input approval dialog: known title, selected Yes/No option, and confirmation footer. |
-| `IDLE` | Bottom-of-screen Codex composer and shortcuts footer, without an active indicator or explicit completion marker. |
+| `IDLE` | Bottom-of-screen Codex composer and recognized ready footer, without an active indicator or explicit completion marker. |
 | `COMPLETE` | Ready composer immediately following Codex's `Worked for …` marker. **The turn finished; the overall task may not be done.** |
 | `UNKNOWN` | Unsupported agent, missing/unavailable/dead pane, copy/view mode, failed capture, unrecognized menu, or inconclusive/truncated UI. |
 
@@ -377,13 +377,17 @@ English Codex UI patterns (including legacy context footers and current model/pa
 footers, with or without activity bullets). Known `5h`/weekly rate-limit banners
 and the `⚠ … warnings · f2 to view` shortcuts suffix are supported. Context
 compaction also counts as `RUNNING`, including its adjacent “Making room to
-continue” detail. A complete adjacent “Queued follow-up inputs” question block
-does not hide an active timer or imply a blocking approval. Activity lookup is
+continue” detail with or without a final period. A complete adjacent “Queued
+follow-up inputs” question block does not hide an active timer or imply a blocking
+approval. Activity lookup is
 bounded to 24 nonempty rows above the composer/bottom banner. Timed queued
 questions and wrapped pending-message previews are supported, along with the
 `tab to queue message` typing footer, wrapped composer drafts, and Codex's “Back
-to bottom” banner. Draft/preview text is excluded from activity detection. When
-scrolling hides the live indicator entirely, Workbench remains `UNKNOWN` rather
+to bottom” banner. Expanded multiline input can hide the shortcuts row; the
+remaining `GPT-… effort · workspace · task` metadata row (task optional) is accepted
+when a current composer is visible. Draft/preview text is excluded from activity
+detection, including indented typed prompt markers. When scrolling hides the live
+indicator entirely, Workbench remains `UNKNOWN` rather
 than assuming the agent is idle or retaining stale status. A bare activity
 line, historical indicator followed by new output, or unfamiliar footer is not
 enough evidence; changed keybindings, localization, narrow panes, menus, and UI changes

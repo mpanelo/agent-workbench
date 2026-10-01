@@ -119,12 +119,13 @@ fn infer(observation: &PaneObservation) -> (AgentStatus, &'static str) {
     {
         return (Unknown, "Pane contains unexpected control characters.");
     }
-    let lines: Vec<_> = observation
+    let raw_lines: Vec<_> = observation
         .screen
         .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
+        .map(str::trim_end)
+        .filter(|line| !line.trim().is_empty())
         .collect();
+    let lines: Vec<_> = raw_lines.iter().map(|line| line.trim()).collect();
     let Some(last) = lines.last() else {
         return (Unknown, "Pane has no recognizable agent UI.");
     };
@@ -154,7 +155,11 @@ fn infer(observation: &PaneObservation) -> (AgentStatus, &'static str) {
     // footer immediately after the activity row. Require both signals: a lone
     // interrupt line (or one buried in historical output) is not enough.
     let viewing_history = history_footer(last);
-    if !shortcuts_footer(last) && *last != "tab to queue message" && !viewing_history {
+    if !shortcuts_footer(last)
+        && *last != "tab to queue message"
+        && !viewing_history
+        && !model_workspace_footer(last)
+    {
         let tail = &lines[lines.len().saturating_sub(4)..];
         if tail
             .iter()
@@ -173,7 +178,10 @@ fn infer(observation: &PaneObservation) -> (AgentStatus, &'static str) {
     // A typed composer can wrap across several rows. Keep its entire contents
     // outside activity detection, anchored by a known bottom footer.
     // No search through scrollback or arbitrary prose for 'done'/'waiting'.
-    let prompt = lines
+    // The actual prompt marker is in the first column. Continuation rows keep
+    // a composer margin; trimming it would mistake a typed '›' for a new prompt
+    // and expose earlier draft contents to activity detection.
+    let prompt = raw_lines
         .iter()
         .rposition(|line| *line == "›" || line.starts_with("› "));
     let Some(prompt) =
@@ -270,7 +278,12 @@ fn preceding_activity<'a>(lines: &[&'a str]) -> Option<&'a str> {
     }
     // This detail belongs only to an active compaction row; a matching sentence
     // in ordinary output must not uncover an older Working/completion marker.
-    if tail.last() == Some(&"└ Making room to continue") {
+    if tail.last().is_some_and(|line| {
+        matches!(
+            *line,
+            "└ Making room to continue" | "└ Making room to continue."
+        )
+    }) {
         tail = &tail[..tail.len() - 1];
         let activity = *tail.last()?;
         let label = activity.strip_prefix("• ").unwrap_or(activity);
@@ -360,6 +373,39 @@ fn shortcuts_footer(line: &str) -> bool {
     matches!(parts.as_slice(), [count, "warning" | "warnings", "·", "f2", "to", "view"]
         if !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit())
             && count.parse::<usize>().is_ok_and(|count| count > 0))
+}
+
+fn model_workspace_footer(line: &str) -> bool {
+    // Expanded composers can hide shortcuts, leaving only this metadata row.
+    // Require the observed model/effort and path structure, not a GPT mention
+    // anywhere in output. The optional task label may be truncated by the pane.
+    let mut parts = line.split('·').map(str::trim);
+    let Some(label) = parts.next() else {
+        return false;
+    };
+    let mut label = label.split_whitespace();
+    let Some(model) = label.next() else {
+        return false;
+    };
+    if !model.starts_with("GPT-")
+        || !model.bytes().any(|byte| byte.is_ascii_digit())
+        || !model
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.'))
+        || !matches!(
+            label.next(),
+            Some("none" | "minimal" | "low" | "medium" | "high" | "xhigh")
+        )
+        || label.next().is_some()
+    {
+        return false;
+    }
+    let Some(path) = parts.next() else {
+        return false;
+    };
+    (path.starts_with('/') || path == "~" || path.starts_with("~/"))
+        && parts.next().is_none_or(|task| !task.trim().is_empty())
+        && parts.next().is_none()
 }
 
 fn approval_title(line: &str) -> bool {
@@ -483,6 +529,9 @@ mod tests {
     const QUEUED_MESSAGES: &str = "• Messages to be submitted after next tool call (press esc to\ninterrupt and send immediately)\n↳ queued follow-up text\nwrapped preview continuation\n…";
     const WARNINGS: &str = "⚠ 2 warnings · f2 to view";
     const HISTORY_FOOTER: &str = "New activity · Earlier messages available.  enter/esc latest";
+    const MULTILINE_COMPOSER: &str = "› unsent draft\n  wrapped continuation\n\n  another line\n\n\n  GPT-6.1-Sol high · ~/work · Create missing tests\n";
+    // UI-only reconstruction of the Oct 1 1:24 scrolling screenshot.
+    const SCROLLING_SCREEN: &str = "• Working (7m 41s • esc to interrupt)\n\n  New activity · ↓ Back to bottom · esc\n\n› Ask Codex to do anything\n\n  GPT-6.1-Sol high · ~/work · Create missing tests\n  New activity · Earlier messages available.  enter/esc latest\n";
 
     fn observation(screen: &str) -> PaneObservation {
         PaneObservation {
@@ -622,6 +671,123 @@ mod tests {
         // A real approval dialog still wins over any older active/queued rows.
         let screen = format!("{COMPACTING}\n{QUEUED}\n{APPROVAL}");
         assert_eq!(infer(&observation(&screen)).0, AgentStatus::WaitingForInput);
+    }
+
+    #[test]
+    fn punctuated_compaction_detail_preserves_the_live_timer() {
+        let compacting =
+            "• Compacting context (31s • esc to interrupt)\n└ Making room to continue.";
+        for footer in [
+            FOOTER.to_owned(),
+            LIMIT.to_owned(),
+            MULTILINE_COMPOSER.to_owned(),
+        ] {
+            let screen = format!("{compacting}\n{LIMIT}\n{footer}");
+            assert_eq!(
+                infer(&observation(&screen)).0,
+                AgentStatus::Running,
+                "{screen}"
+            );
+        }
+        for activity in [
+            "• Working (31s • esc to interrupt)",
+            "Compacting context (soon • esc to interrupt)",
+            "Worked for 31s",
+            "> • Compacting context (31s • esc to interrupt)",
+        ] {
+            let screen = format!("{activity}\n└ Making room to continue.\n{FOOTER}");
+            let status = infer(&observation(&screen)).0;
+            assert!(
+                !matches!(status, AgentStatus::Running | AgentStatus::Complete),
+                "{screen}"
+            );
+        }
+    }
+
+    #[test]
+    fn expanded_composer_uses_model_workspace_footer_without_shortcuts() {
+        for (activity, expected) in [
+            ("• Working (8s • esc to interrupt)", AgentStatus::Running),
+            ("Worked for 9s • 1:15 PM", AgentStatus::Complete),
+            ("New output", AgentStatus::Idle),
+        ] {
+            let screen = format!("{activity}\n{MULTILINE_COMPOSER}");
+            assert_eq!(infer(&observation(&screen)).0, expected, "{screen}");
+        }
+        for footer in [
+            "GPT-6.1-Sol high · ~/work",
+            "GPT-6.1-Sol medium · /Users/example/work · Task",
+        ] {
+            let screen = format!("Working (8s • esc to interrupt)\n› draft\n  next line\n{footer}");
+            assert_eq!(infer(&observation(&screen)).0, AgentStatus::Running);
+        }
+        // Continuations carry the composer margin, even if their text looks
+        // like a new prompt or an activity/completion row.
+        for draft in [
+            "  • Working (3s • esc to interrupt)\n  › quoted prompt",
+            "  Worked for 3s\n  › quoted prompt",
+        ] {
+            for footer in [
+                "GPT-6.1-Sol high · ~/work · Task",
+                "? for shortcuts",
+                "tab to queue message",
+            ] {
+                let screen = format!("New output\n› draft text\n{draft}\n{footer}");
+                assert_eq!(
+                    infer(&observation(&screen)).0,
+                    AgentStatus::Idle,
+                    "{screen}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn model_footer_requires_composer_and_recognizable_chrome() {
+        for footer in [
+            "GPT-6.1-Sol high",
+            "GPT-6.1-Sol high · Task",
+            "GPT-6.1-Sol high · ~/work ·",
+            "GPT-6.1-Sol high · ~/work · Task · unexpected menu",
+            "GPT-6.1-Sol soon · ~/work · Task",
+            "> GPT-6.1-Sol high · ~/work · Task",
+        ] {
+            let screen = format!("Working (8s • esc to interrupt)\n› draft\n{footer}");
+            assert_eq!(
+                infer(&observation(&screen)).0,
+                AgentStatus::Unknown,
+                "{screen}"
+            );
+        }
+        for body in [
+            "Working (8s • esc to interrupt)",
+            "Working (8s • esc to interrupt)\n  › quoted prompt",
+            "› draft\nWorking (8s • esc to interrupt)",
+        ] {
+            let screen = format!("{body}\nGPT-6.1-Sol high · ~/work · Task");
+            assert_ne!(
+                infer(&observation(&screen)).0,
+                AgentStatus::Running,
+                "{screen}"
+            );
+        }
+        let distant = format!(
+            "Working (8s • esc to interrupt)\n› draft\n{}GPT-6.1-Sol high · ~/work · Task",
+            "  next row\n".repeat(MAX_COMPOSER_ROWS)
+        );
+        assert_eq!(infer(&observation(&distant)).0, AgentStatus::Unknown);
+        let screen = format!("Working (8s • esc to interrupt)\n{MULTILINE_COMPOSER}");
+        for (command, dead, in_mode) in [
+            ("codex", true, false),
+            ("codex", false, true),
+            ("fish", false, false),
+        ] {
+            let mut pane = observation(&screen);
+            pane.command = command.into();
+            pane.dead = dead;
+            pane.in_mode = in_mode;
+            assert_eq!(infer(&pane).0, AgentStatus::Unknown);
+        }
     }
 
     #[test]
@@ -961,6 +1127,10 @@ mod tests {
 
     #[test]
     fn codex_history_footer_preserves_visible_live_activity_from_scrolling_screenshot() {
+        assert_eq!(
+            infer(&observation(SCROLLING_SCREEN)).0,
+            AgentStatus::Running
+        );
         // UI chrome only from the Oct 1 11:53 screenshot, not transcript text.
         for footer in [
             HISTORY_FOOTER,
@@ -1107,6 +1277,9 @@ cat '{}/'$5
                 AgentStatus::Running,
             ),
             (format!("{COMPACTING}\n{FOOTER}"), AgentStatus::Running),
+            (format!("• Compacting context (31s • esc to interrupt)\n└ Making room to continue.\n{LIMIT}\n{FOOTER}"), AgentStatus::Running),
+            (format!("Worked for 9s • 1:15 PM\n{MULTILINE_COMPOSER}"), AgentStatus::Complete),
+            (SCROLLING_SCREEN.into(), AgentStatus::Running),
             (
                 format!("Working (21s • esc to interrupt)\n{QUEUED}\n{FOOTER}"),
                 AgentStatus::Running,
@@ -1140,7 +1313,7 @@ cat '{}/'$5
         }
         let calls = fs::read_to_string(&log).unwrap();
         // One capture for the shared pane and one failed capture per refresh.
-        assert_eq!(calls.lines().count(), 20);
+        assert_eq!(calls.lines().count(), 26);
         for call in calls.lines() {
             assert!(call.contains("capture-pane -p -J -t"));
             assert!(!call.contains("send-keys"));
@@ -1281,6 +1454,9 @@ cat '{}/'$5
                 AgentStatus::Running,
             ),
             (format!("{COMPACTING}\n{FOOTER}"), AgentStatus::Running),
+            (format!("• Compacting context (31s • esc to interrupt)\n└ Making room to continue.\n{LIMIT}\n{FOOTER}"), AgentStatus::Running),
+            (format!("Worked for 9s • 1:15 PM\n{MULTILINE_COMPOSER}"), AgentStatus::Complete),
+            (SCROLLING_SCREEN.into(), AgentStatus::Running),
             (
                 format!("Working (21s • esc to interrupt)\n{QUEUED}\n{FOOTER}"),
                 AgentStatus::Running,

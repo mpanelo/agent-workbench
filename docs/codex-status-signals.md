@@ -39,6 +39,19 @@ reporting `RUNNING`. Hidden timers, old completion markers, unrelated output,
 quoted/malformed chrome, dead panes and tmux copy mode remain `UNKNOWN`; merely
 scrolling never establishes activity or completion.
 
+The October 1 1:15 and 1:19 screenshots exposed two more variants: expanding
+multiline input hides the shortcut footer, leaving the model/effort/workspace row,
+and the compaction detail can end with a period. Both are now recognized. The
+metadata-only footer requires an observed `GPT-…` model and known effort label,
+an absolute or home-relative workspace path, and a visible first-column composer
+marker within the same bounded composer window. Draft continuations retain their
+indentation so a typed `›` cannot expose draft text as activity evidence. A live
+timer still establishes `RUNNING`; without it, a ready composer is `IDLE` or
+`COMPLETE` only when immediately following a recognized completion marker.
+The punctuated compaction detail still requires an adjacent valid compaction
+timer. Missing composers, malformed footers/timers, history without live
+activity, unsupported processes, dead panes and copy mode remain inconclusive.
+
 ## Hook investigation — not implemented
 
 Local verification: `codex-cli 0.159.3`; `codex features list` reports `hooks`
