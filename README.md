@@ -67,9 +67,9 @@ The TUI opens in **ATTENTION**, showing items currently known to need input or
 whose agent turn completed. Press `a` to return there, `w` for **WORK**, or `s`
 for the session view. WORK shows all registered items with observed agent status,
 their type, repository, workspace, and optional branch. Tmux IDs are kept internally
-and hidden in the WORK and SESSIONS lists. WORK shows an agent-pane warning only
-when the mapping is missing from a successful discovery or unavailable because
-discovery failed.
+and hidden in the WORK, ATTENTION, and SESSIONS lists. WORK shows an agent-pane
+warning only when the mapping is missing from a successful discovery or
+unavailable because discovery failed.
 Pane availability is separate from agent status; a disappeared pane does not
 remove its registration.
 

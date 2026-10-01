@@ -186,12 +186,7 @@ fn render_items(
                     }
                 } else {
                     lines.push(Line::styled(
-                        format!(
-                            "  Type: {}  Pane: {} ({})",
-                            item.kind,
-                            visible(&item.pane_id),
-                            state.pane
-                        ),
+                        format!("  Type: {}", item.kind),
                         theme::muted(),
                     ));
                 }
@@ -921,6 +916,9 @@ mod tests {
             "PR #1842  COMPLETE",
             "Agent turn completed.",
             "Overall task completion is unverified.",
+            "Type: Implementation",
+            "Type: External Review",
+            "Workspace: /work/ABC-123",
             "1 UNKNOWN item(s)",
             "Enter: open",
             "r: reply",
@@ -930,6 +928,15 @@ mod tests {
         }
         assert!(!text.contains("HIDDEN_UNKNOWN"));
         assert!(!text.contains("HIDDEN_RUNNING"));
+        assert!(!text.contains("Pane:"), "{text}");
+        assert!(!text.contains("%14"), "{text}");
+        assert!(!text.contains("(present)"), "{text}");
+        assert!(
+            state
+                .attention
+                .iter()
+                .all(|item| item.item.pane_id == "%14")
+        );
         let work = work_screen(&state, 120, 35, &mut 0);
         assert!(work.contains("attention: 2 (a)"));
         assert!(work.contains("Options:"));
