@@ -220,7 +220,7 @@ fn render_items(
         Paragraph::new(if interaction.draft.is_some() {
             "Enter: send | Esc/Ctrl-C: cancel | Backspace: edit | Ctrl-u: clear"
         } else {
-            "j/k: select | Enter: open | r: reply | Ctrl+d/u: scroll | a/w/s: views | q: quit"
+            "j/k | Enter: open | r: reply | d: review | Ctrl+d/u: scroll | a/w/s | q: quit"
         }),
         footer,
     );
@@ -348,7 +348,7 @@ fn abbreviate_home(path: &Path, home: Option<&Path>) -> String {
 }
 
 // Make control characters visible without letting names/titles distort the layout.
-fn visible(text: &str) -> String {
+pub(crate) fn visible(text: &str) -> String {
     text.chars()
         .flat_map(|ch| {
             if ch.is_control() {
@@ -496,7 +496,7 @@ mod tests {
             let text = item_screen(&state, 80, 10, &mut 0, view);
             assert_eq!(
                 text.lines().last().unwrap().trim_end(),
-                "j/k: select | Enter: open | r: reply | Ctrl+d/u: scroll | a/w/s: views | q: quit"
+                "j/k | Enter: open | r: reply | d: review | Ctrl+d/u: scroll | a/w/s | q: quit"
             );
         }
         let text = screen(None, 80, 10, &mut 0);

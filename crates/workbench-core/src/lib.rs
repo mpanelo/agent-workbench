@@ -5,13 +5,17 @@ use std::path::PathBuf;
 mod actions;
 mod agent_state;
 mod attention;
+mod git;
 mod model;
+mod review;
 mod tmux;
 mod work_items;
 
 pub use actions::{ActionError, MAX_INPUT_BYTES, validate_agent_input};
 pub use attention::attention_items;
+pub use git::{ChangeKind, ChangedFile, GitError, WorkItemDiff};
 pub use model::{Pane, Session, Snapshot, Window};
+pub use review::ReviewSession;
 pub use tmux::DiscoveryError;
 use work_items::WorkItemStore;
 pub use work_items::{
@@ -24,6 +28,7 @@ pub use work_items::{
 pub struct Engine {
     store: WorkItemStore,
     tmux: tmux::TmuxClient,
+    git: git::GitClient,
 }
 
 impl Engine {
@@ -32,6 +37,7 @@ impl Engine {
         Self {
             store: WorkItemStore::new(state_file.into()),
             tmux: tmux::TmuxClient::default(),
+            git: git::GitClient::default(),
         }
     }
 

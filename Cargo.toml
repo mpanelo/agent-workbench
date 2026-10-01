@@ -9,7 +9,7 @@ rust-version = "1.88"
 license = "MIT"
 
 [workspace.dependencies]
-tokio = { version = "1", features = ["macros", "rt", "process", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "rt", "process", "sync", "time", "io-util"] }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 crossterm = "0.29"
 workbench-core = { path = "crates/workbench-core" }

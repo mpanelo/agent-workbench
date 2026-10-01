@@ -10,6 +10,7 @@ use workbench_core::{Engine, Snapshot, WorkItemState, attention_items, validate_
 
 mod cli;
 mod interaction;
+mod review;
 mod ui;
 
 type DiscoveryState = Option<Result<Snapshot, String>>;
@@ -115,6 +116,7 @@ async fn start() -> io::Result<()> {
     }
     let mut interaction = interaction::Interaction::default();
     let mut view = ui::View::default();
+    let mut reviews = review::ReviewUi::new(options.diff_base);
     loop {
         let mut terminal = init_terminal()?;
         let result = run(
@@ -122,6 +124,7 @@ async fn start() -> io::Result<()> {
             Arc::clone(&engine),
             &mut interaction,
             &mut view,
+            &mut reviews,
         )
         .await;
         restore_terminal()?;
@@ -166,6 +169,7 @@ async fn run(
     engine: Arc<Engine>,
     interaction: &mut interaction::Interaction,
     view: &mut ui::View,
+    reviews: &mut review::ReviewUi,
 ) -> io::Result<RunExit> {
     let (sender, mut receiver) = watch::channel::<AppState>(AppState::default());
     let discovery_engine = Arc::clone(&engine);
@@ -190,7 +194,7 @@ async fn run(
             }
         }
     });
-    let result = event_loop(terminal, &mut receiver, engine, interaction, view).await;
+    let result = event_loop(terminal, &mut receiver, engine, interaction, view, reviews).await;
     discovery.abort();
     // Wait for cancellation so an in-flight command is dropped and killed.
     let _ = discovery.await;
@@ -203,25 +207,41 @@ async fn event_loop(
     engine: Arc<Engine>,
     interaction: &mut interaction::Interaction,
     view: &mut ui::View,
+    reviews: &mut review::ReviewUi,
 ) -> io::Result<RunExit> {
     let mut state = AppState::default();
     let mut scroll = 0_u16;
     let mut redraw = true;
     let mut sends = JoinSet::new();
+    let mut diffs = JoinSet::new();
     let mut input_tick = time::interval(Duration::from_millis(100));
     input_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         if redraw {
-            terminal.draw(|frame| match *view {
-                ui::View::Work => ui::render_work(frame, &state, &mut scroll, interaction),
-                ui::View::Attention => {
-                    ui::render_attention(frame, &state, &mut scroll, interaction)
+            terminal.draw(|frame| {
+                if reviews.is_open() {
+                    reviews.render(frame);
+                } else {
+                    match *view {
+                        ui::View::Work => ui::render_work(frame, &state, &mut scroll, interaction),
+                        ui::View::Attention => {
+                            ui::render_attention(frame, &state, &mut scroll, interaction)
+                        }
+                        ui::View::Sessions => ui::render(frame, &state.discovery, &mut scroll),
+                    }
                 }
-                ui::View::Sessions => ui::render(frame, &state.discovery, &mut scroll),
             })?;
             redraw = false;
         }
         tokio::select! {
+            completed = diffs.join_next(), if !diffs.is_empty() => {
+                match completed {
+                    Some(Ok((ticket, result))) => reviews.finish(ticket, result),
+                    Some(Err(error)) if !error.is_cancelled() => reviews.fail_loading("Git capture task stopped unexpectedly; reload the diff.".into()),
+                    _ => {},
+                }
+                redraw = true;
+            }
             changed = receiver.changed() => {
                 changed.map_err(|_| io::Error::other("Discovery task stopped unexpectedly"))?;
                 let previous_position = state.items_for(*view).iter().position(|item| Some(&item.item.id) == interaction.selected_id.as_ref());
@@ -260,6 +280,20 @@ async fn event_loop(
                         if key.kind == KeyEventKind::Release {
                             continue;
                         }
+                        if reviews.is_open() {
+                            if key.code == KeyCode::Char('q') || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)) {
+                                return Ok(RunExit::Quit);
+                            }
+                            if reviews.key(key, terminal.size()?.height) == review::ReviewIntent::Reload {
+                                diffs.abort_all();
+                                let (ticket, id) = reviews.reload().expect("review is open");
+                                let engine = Arc::clone(&engine);
+                                let base = reviews.base.clone();
+                                diffs.spawn(async move { (ticket, engine.diff(&id, base.as_deref()).await.map_err(|error| error.to_string())) });
+                            }
+                            if !reviews.is_open() { diffs.abort_all(); }
+                            continue;
+                        }
                         if let Some(draft) = &mut interaction.draft {
                             match key.code {
                                 KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -286,7 +320,16 @@ async fn event_loop(
                         match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => return Ok(RunExit::Quit),
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(RunExit::Quit),
-                            _ => if let Some(id) = navigate(key, &state, view, &mut scroll, interaction, terminal.size()?.height) { return Ok(RunExit::Focus(id)); },
+                            _ => {
+                                if let Some(id) = navigate(key, &state, view, &mut scroll, interaction, terminal.size()?.height) { return Ok(RunExit::Focus(id)); }
+                                if let Some(id) = interaction.review_requested.take()
+                                    && let Some(ticket) = reviews.open(id.clone()) {
+                                        diffs.abort_all();
+                                        let engine = Arc::clone(&engine);
+                                        let base = reviews.base.clone();
+                                        diffs.spawn(async move { (ticket, engine.diff(&id, base.as_deref()).await.map_err(|error| error.to_string())) });
+                                }
+                            },
                         }
                     }
                 }
@@ -341,13 +384,14 @@ fn navigate(
         KeyCode::Char('r') if view.is_item_view() => interaction.begin_reply(items),
         KeyCode::Tab if view.is_item_view() => interaction.next_attention(items),
         KeyCode::Char('d') if view.is_item_view() => {
-            interaction.message = Some(match interaction.selected(items) {
-                Some(selected) => format!(
-                    "Diff review for {} is not available until M6. Press Enter to inspect the full pane.",
-                    selected.item.id
-                ),
-                None => "Select an item in the current view first.".into(),
-            });
+            interaction.review_requested = interaction
+                .selected(items)
+                .map(|selected| selected.item.id.clone());
+            interaction.message = if interaction.review_requested.is_none() {
+                Some("Select an item in the current view first.".into())
+            } else {
+                None
+            };
         }
         KeyCode::Down => *scroll = scroll.saturating_add(1),
         KeyCode::Up => *scroll = scroll.saturating_sub(1),
@@ -578,8 +622,7 @@ mod tests {
             &mut interaction,
             24,
         );
-        assert!(interaction.message.as_ref().unwrap().contains("M6"));
-        assert!(interaction.message.as_ref().unwrap().contains("B"));
+        assert_eq!(interaction.review_requested.as_deref(), Some("B"));
         navigate(
             KeyCode::Char('w'),
             &state,
@@ -684,6 +727,15 @@ mod tests {
             );
             assert!(interaction.draft.is_none());
             assert!(state.attention.is_empty());
+            navigate(
+                KeyCode::Char('d'),
+                &state,
+                &mut view,
+                &mut scroll,
+                &mut interaction,
+                24,
+            );
+            assert!(interaction.review_requested.is_none());
         }
     }
 }

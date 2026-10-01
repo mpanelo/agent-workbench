@@ -1,7 +1,7 @@
 # Agent Workbench
 
-M1–M5: persistent work items mapped to tmux panes, navigation, reply submission,
-conservative agent-state detection, and a dedicated attention queue, alongside a read-only terminal
+M1–M6: persistent work items mapped to tmux panes, navigation, reply submission,
+conservative agent-state detection, an attention queue, and local Git diff review, alongside a read-only terminal
 view of your sessions, windows, and panes. Requires Rust 1.88+ and tmux on `PATH`
 for live discovery. Registration and listing also work without tmux.
 
@@ -95,7 +95,7 @@ In ATTENTION and WORK, the selected item is highlighted with `>`:
 | `a`, `w`, `s` | Switch to attention, all work items, or sessions. |
 | `Ctrl+d`, `Ctrl+u` | Scroll down/up half a page without changing selection (outside the reply editor). |
 | Page Down, Page Up | Scroll down/up a full page. |
-| `d` | Explain that built-in diff review is deferred to M6; no Git operation is performed yet. |
+| `d` | Review the selected item's local Git diff, even if its pane is missing or its agent is unknown. |
 
 Opening from inside tmux switches its current client to the target session/window/
 pane; Workbench stays running in its original pane. Use your tmux navigation keys
@@ -151,9 +151,75 @@ WORK items. Switching views or returning from a focused pane preserves the chose
 view. Completed turns remain queued while their visible completion marker remains;
 there is no dismiss/acknowledge action yet.
 
-M5 does not implement Git diffs, changed-file counts, workspace-change detection,
-or review state. The `d` key explains the M6 boundary; `Enter` still opens the full
-terminal session for manual inspection. Unknown agents retain M4's limitations.
+The attention queue itself does not poll Git or infer workspace changes. Use `d`
+to open M6's on-demand review screen; `Enter` still opens the full terminal session.
+Unknown agents retain M4's limitations and can be reviewed from WORK.
+
+## Local Git diff review (M6)
+
+Select an item in ATTENTION or WORK and press `d`. REVIEW lists changed files,
+shows a colored unified diff for the selected file, totals text additions/deletions,
+and displays file-level review progress. Git operations run in the background;
+`Esc` cancels loading or returns to the previous view. No live tmux pane is required.
+
+Review uses the registered **workspace**, not the `repository` label or tmux's
+current directory. The workspace must be the root of a Git checkout or linked
+worktree, with a valid base commit and no unresolved merge conflicts. Missing
+workspaces, unavailable Git, invalid refs, and capture failures show useful errors
+without deleting work items or showing an old diff as a successful new capture.
+
+By default, the baseline is `HEAD`. The screen combines staged and unstaged
+tracked changes against that commit, plus non-ignored untracked files. Changes
+already committed to HEAD are not shown by default. To review committed branch
+changes too, choose a local base when launching:
+
+```sh
+workbench --diff-base origin/main
+# Or from a checkout:
+cargo run -p workbench-tui --bin workbench -- --diff-base main
+```
+
+The chosen ref is resolved to a commit in each selected workspace. Comparison is
+directly from that commit to the working tree, **not** an inferred merge-base or
+three-dot branch diff. No refs are fetched and the saved work-item `branch` is not
+used as a baseline. For an exact branch-point review, supply the merge-base commit
+SHA yourself. The screen shows the chosen base and its resolved revision.
+
+| Review key | Action |
+| --- | --- |
+| `j` / `↓`, `k` / `↑` | Select the next/previous changed file. |
+| Space | Toggle the selected file reviewed/unreviewed. |
+| `Tab` | Select the next unreviewed file, wrapping around. |
+| `Ctrl+d`, `Ctrl+u` | Scroll the diff down/up half a page. |
+| Page Down, Page Up | Scroll the diff down/up a page. |
+| `h` / `←`, `l` / `→` | Pan long diff lines horizontally. |
+| Home | Reset vertical and horizontal diff scrolling. |
+| `r` | Reload the diff and clear every review mark for that item. |
+| `Esc` | Return to the originating ATTENTION/WORK view. |
+| `q` / `Ctrl-C` | Quit Workbench. |
+
+Review marks and diff text are **in memory only**. Reopening an item during the
+same application session retains its captured diff and progress, including after
+tmux navigation. `r` discards the old capture/marks before loading again. Agent
+edits are not automatically refreshed or detected as changed-after-review; use
+`r` to inspect new changes. Persistent review state and re-review tracking remain
+M7/M8, not part of M6. Captures are bounded, on-demand Git reads, not an atomic
+filesystem snapshot; reload if the agent is actively editing during capture.
+
+Added, modified, deleted, renamed, type-changed, untracked, and binary files are
+listed. Binary content requires an external viewer and is excluded from line
+totals. Submodules show only their Gitlink/pointer diff, not nested file changes.
+UTF-8 paths and text are supported; terminal control characters are escaped.
+Symlink diffs show link targets, not the linked file's contents. Review is read-only:
+it never stages, commits, applies patches, fetches, or changes branches. External
+diff/textconv helpers and filesystem-monitor hooks are disabled for these reads.
+
+To keep large repositories responsive, capture is limited to 512 changed files,
+2 MiB of stdout per command, 16 MiB of total patches, 60,000 patch lines per file,
+and 8 KiB per line. Commands time out after five seconds, with a 30-second overall
+capture limit. Oversized/undecodable diffs fail explicitly rather than silently
+loading a partial review; use an external viewer in those cases. No AI review,
+GitHub integration, inline PR comments, or review-state persistence is included.
 
 ## Basic agent state (M4)
 
@@ -238,7 +304,8 @@ it; the sessions view remains usable while a state error is shown in WORK.
 ## Structure
 
 - `workbench-core`: typed snapshots, work-item models, pane resolution, pure agent
-  status interpretation, ephemeral attention queue and prompt previews, read-only observations, tmux CLI
+  status interpretation, ephemeral attention queue and prompt previews, local Git
+  diff capture and in-memory review progress, read-only observations, tmux CLI
   adapter, and JSON persistence. Tokio handles discovery; Serde/serde_json serialize
   state; tempfile/fs2 provide atomic replacement and advisory locking. It has no
   presentation dependencies.
@@ -253,9 +320,9 @@ Metadata must be UTF-8. ASCII unit/record separators (`U+001F`/`U+001E`) are
 reserved for the discovery format; metadata containing those rare characters is
 reported as malformed. Ordinary spaces, tabs, newlines, and Unicode are preserved.
 Only the selected tmux server is discovered; multi-server aggregation is not part
-of M1–M5. Saved pane IDs refer to the selected server; tmux can reuse IDs after a
+of M1–M6. Saved pane IDs refer to the selected server; tmux can reuse IDs after a
 server restart, so check mappings after restarting tmux. There is no pane remapping
-or deletion command yet. Git/review functionality belongs to later milestones.
+or deletion command yet. Review persistence and change tracking belong to M7/M8.
 
 ## Checks
 
@@ -265,8 +332,10 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 ```
 
-Unit tests do not require tmux or a running server. An additional opt-in read-only
-smoke test checks the real adapter against an existing tmux server:
+Unit tests do not require tmux or a running server. Git must be installed: review
+tests use isolated temporary repositories and synthetic commits, not your signing
+keys, index, or working files. An additional opt-in read-only smoke test checks
+the real adapter against an existing tmux server:
 
 ```sh
 cargo test -p workbench-core discovers_live_tmux -- --ignored

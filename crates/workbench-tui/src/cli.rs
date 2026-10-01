@@ -2,10 +2,10 @@ use std::{collections::BTreeMap, ffi::OsString, path::PathBuf};
 
 use workbench_core::{WorkItem, WorkItemKind, default_state_file};
 
-pub(crate) const HELP: &str = "Agent Workbench — M5 attention queue
+pub(crate) const HELP: &str = "Agent Workbench — M6 local diff review
 
 Usage:
-  workbench [--state-file PATH]
+  workbench [--state-file PATH] [--diff-base REV]
   workbench register --id ID --kind implementation|external-review
       --repository PATH --workspace PATH --pane %ID [--title TITLE] [--branch NAME]
       [--state-file PATH]
@@ -17,7 +17,11 @@ j/k or arrows select; Enter opens the pane; r composes a single-line reply.
 Ctrl+d/Ctrl+u scroll down/up half a page; Page Down/Page Up scroll a full page.
 Enter submits a reply and Esc cancels. Tab selects known waiting/completed items.
 While composing a reply, Ctrl+u clears the draft instead of scrolling.
-d explains that diff review is not available until M6; no Git operations yet.
+d opens local diff review; j/k select files, Space toggles reviewed, Esc returns.
+Review defaults to HEAD (staged, unstaged, and untracked changes). --diff-base REV
+compares the working tree directly to that local commit/ref, including committed
+changes. No fetching or inferred merge-base. Review marks are in-memory only.
+In review, r reloads and clears marks; h/l pan long lines; Ctrl+d/u scroll.
 Registration does not require a running tmux server. Relative repository/workspace
 paths are resolved from the current directory; expand ~ using your shell.
 State: --state-file, then AGENT_WORKBENCH_STATE_FILE, then
@@ -36,6 +40,7 @@ pub(crate) enum Command {
 #[derive(Debug)]
 pub(crate) struct Options {
     pub state_file: Option<PathBuf>,
+    pub diff_base: Option<String>,
     pub command: Command,
 }
 
@@ -73,6 +78,7 @@ pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Options,
         if matches!(flag, "--help" | "-h") {
             return Ok(Options {
                 state_file: None,
+                diff_base: None,
                 command: Command::Help,
             });
         }
@@ -83,6 +89,7 @@ pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Options,
         if !matches!(
             flag,
             "--state-file"
+                | "--diff-base"
                 | "--id"
                 | "--title"
                 | "--kind"
@@ -131,11 +138,25 @@ pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Options,
         None => Command::Run,
         _ => unreachable!("command was checked while parsing"),
     };
+    let diff_base = if command == Command::Run {
+        optional_string(&mut flags, "--diff-base")?
+    } else {
+        None
+    };
+    if diff_base
+        .as_ref()
+        .is_some_and(|base| base.chars().any(char::is_control))
+    {
+        return Err("--diff-base must not contain control characters.".into());
+    }
     if let Some(flag) = flags.keys().next() {
-        return Err(format!("{flag} is only valid with register."));
+        return Err(format!(
+            "{flag} is not valid with this command. See --help."
+        ));
     }
     Ok(Options {
         state_file,
+        diff_base,
         command,
     })
 }
@@ -206,6 +227,28 @@ mod tests {
             assert!(item.repository.is_absolute());
             assert!(item.workspace.ends_with("workspace with spaces"));
             assert_eq!(item.branch.as_deref(), Some("fix/retry"));
+        }
+    }
+
+    #[test]
+    fn diff_base_is_optional_and_only_applies_to_the_tui() {
+        assert_eq!(parse(args(&[])).unwrap().diff_base, None);
+        let options = parse(args(&[
+            "--diff-base",
+            "origin/main",
+            "--state-file",
+            "items.json",
+        ]))
+        .unwrap();
+        assert_eq!(options.diff_base.as_deref(), Some("origin/main"));
+        assert_eq!(options.command, Command::Run);
+        for argv in [
+            args(&["--diff-base"]),
+            args(&["--diff-base", "a", "--diff-base", "b"]),
+            args(&["list", "--diff-base", "HEAD"]),
+            args(&["--diff-base", "bad\nref"]),
+        ] {
+            assert!(parse(argv).is_err());
         }
     }
 

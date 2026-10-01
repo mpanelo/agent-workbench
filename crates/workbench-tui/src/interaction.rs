@@ -49,6 +49,7 @@ pub(crate) struct Interaction {
     pub message: Option<String>,
     pub sending: bool,
     pub reveal_selection: bool,
+    pub review_requested: Option<String>,
 }
 
 impl Interaction {
