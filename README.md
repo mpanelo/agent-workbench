@@ -76,11 +76,42 @@ errors replace the displayed snapshot and retry automatically. Each command has 
 three-second timeout. Quit with `q`, `Esc`, or `Ctrl-C` when not composing a reply.
 In ATTENTION and WORK, `j/k` or arrows move selection. `Ctrl+d`/`Ctrl+u` scroll
 down/up half a page in all views; Page Down/Page Up still scroll a full page. Home
-selects the first item. The sessions view still uses arrows to scroll. Resize is handled automatically.
+selects the first item or pane. In SESSIONS, `j/k` or arrows select panes and
+`Enter`/`r` opens registration. Resize is handled automatically.
 Long metadata lines are clipped to terminal width; control characters are displayed
 as escapes. Repository, workspace, and session working-directory paths under the
 current `$HOME` are displayed with `~` (also in `workbench list`). Stored paths and
 approval command text are unchanged; paths outside `$HOME` remain absolute.
+
+## Register from SESSIONS
+
+Press `s`, select an agent pane with `j/k` or arrows, then press `r` (or Enter).
+Workbench fills in the pane ID automatically. In a Git checkout it also detects
+the workspace root, main repository, and current branch—even when the pane is in
+a subdirectory or linked worktree. The branch suggests an ID/title, falling back
+to the window name; ID collisions get a numeric suffix. The default kind is
+Implementation.
+
+Press Enter to accept the defaults, or Tab/Shift-Tab/↑/↓ to select a field and edit
+it. Space toggles the kind between Implementation and External Review; Backspace
+edits and `Ctrl+u` clears the current field. Single-line Unicode paste is supported.
+Repository/workspace fields accept absolute paths or `~/…`; paths are stored as
+absolute paths. The pane binding cannot be edited accidentally. `Esc`/`Ctrl-C`
+cancels without saving, and ordinary letters—including `q`—type into text fields.
+
+Preparation is read-only and runs in the background. Only Enter on the prepared
+form saves; input/cancellation are disabled briefly during saving to avoid an
+ambiguous cancelled write. A successful save switches to WORK with the new item
+selected. Validation, state-file, or disappearing-pane errors leave the form and
+edits intact. The pane's original directory is rechecked before saving; if it
+changed, cancel and reopen the form. SESSIONS highlights selection and labels
+already-registered panes; the form won't duplicate an existing pane mapping.
+
+Without Git metadata, paths default to the pane directory and a notice asks you
+to check them. If tmux provides no directory, fill in repository/workspace paths
+yourself. Detached HEAD leaves the optional branch blank. No tmux sessions,
+workspaces, or worktrees are created. The CLI remains available for scripting,
+offline registration, or deliberately mapping multiple items to one pane.
 
 ## Navigation and replies
 
@@ -288,7 +319,8 @@ before the arguments). For example:
 ./target/debug/workbench list
 ```
 
-Use pane IDs from the sessions view. IDs and titles are free-form labels: no Jira
+For scripted registration, use pane IDs from the sessions view (interactive
+registration above fills them in automatically). IDs and titles are free-form labels: no Jira
 or GitHub account is involved. `--title` defaults to the ID; `--branch` is optional.
 Repository/workspace paths are resolved from your current directory and saved as
 absolute paths. Expand `~` with your shell. Registration does not require the paths

@@ -10,6 +10,7 @@ use workbench_core::{Engine, Snapshot, WorkItemState, attention_items, validate_
 
 mod cli;
 mod interaction;
+mod registration;
 mod review;
 mod ui;
 
@@ -23,6 +24,11 @@ struct AppState {
 }
 
 impl AppState {
+    fn snapshot(&self) -> Option<&Snapshot> {
+        self.discovery
+            .as_ref()
+            .and_then(|state| state.as_ref().ok())
+    }
     fn from_refresh(
         discovery: Result<Snapshot, String>,
         work_items: Result<Vec<WorkItemState>, String>,
@@ -214,12 +220,17 @@ async fn event_loop(
     let mut redraw = true;
     let mut sends = JoinSet::new();
     let mut diffs = JoinSet::new();
+    let mut preparations = JoinSet::new();
+    let mut registrations = JoinSet::<Result<workbench_core::WorkItem, String>>::new();
+    let mut registration = registration::RegistrationUi::default();
     let mut input_tick = time::interval(Duration::from_millis(100));
     input_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         if redraw {
             terminal.draw(|frame| {
-                if reviews.is_open() {
+                if registration.pane.is_some() {
+                    registration.render(frame);
+                } else if reviews.is_open() {
                     reviews.render(frame);
                 } else {
                     match *view {
@@ -227,13 +238,49 @@ async fn event_loop(
                         ui::View::Attention => {
                             ui::render_attention(frame, &state, &mut scroll, interaction)
                         }
-                        ui::View::Sessions => ui::render(frame, &state.discovery, &mut scroll),
+                        ui::View::Sessions => {
+                            ui::render_sessions(frame, &state, &mut scroll, interaction)
+                        }
                     }
                 }
             })?;
             redraw = false;
         }
         tokio::select! {
+            completed = preparations.join_next(), if !preparations.is_empty() => {
+                match completed {
+                    Some(Ok((ticket, result))) => registration.finish(ticket, result),
+                    Some(Err(error)) if !error.is_cancelled() => registration.finish(registration.generation, Err("Pane discovery task stopped; cancel and retry.".into())),
+                    _ => {},
+                }
+                redraw = true;
+            }
+            completed = registrations.join_next(), if !registrations.is_empty() => {
+                registration.saving = false;
+                match completed {
+                    Some(Ok(Ok(item))) => {
+                        registration.close();
+                        // Make the saved item immediately visible. Retain observations
+                        // for unchanged existing items until the next normal refresh.
+                        let previous = state.items().to_vec();
+                        state.work_items = Some(engine.work_item_states(state.snapshot()).map(|mut items| {
+                            for current in &mut items {
+                                if let Some(old) = previous.iter().find(|old| old.item == current.item) { *current = old.clone(); }
+                            }
+                            items
+                        }).map_err(|error| error.to_string()));
+                        state.attention = attention_items(state.items());
+                        *view = ui::View::Work;
+                        scroll = 0;
+                        interaction.selected_id = Some(item.id.clone());
+                        interaction.reveal_selection = true;
+                        interaction.message = Some(format!("Registered {} from pane {}.", item.id, item.pane_id));
+                    }
+                    Some(Ok(Err(error))) => registration.error = Some(error),
+                    _ => registration.error = Some("Registration task stopped unexpectedly; inspect WORK before retrying.".into()),
+                }
+                redraw = true;
+            }
             completed = diffs.join_next(), if !diffs.is_empty() => {
                 match completed {
                     Some(Ok((ticket, result))) => reviews.finish(ticket, result),
@@ -248,6 +295,7 @@ async fn event_loop(
                 let updated = receiver.borrow_and_update().clone();
                 let attention_changed = state.attention != updated.attention;
                 state = updated;
+                if let Some(snapshot) = state.snapshot() { interaction.sync_panes(snapshot); }
                 interaction.sync(state.items_for(*view));
                 let position = state.items_for(*view).iter().position(|item| Some(&item.item.id) == interaction.selected_id.as_ref());
                 interaction.reveal_selection |= position != previous_position || (*view == ui::View::Attention && attention_changed);
@@ -268,7 +316,24 @@ async fn event_loop(
                 while event::poll(Duration::ZERO)? {
                     redraw = true;
                     let event = event::read()?;
-                    if matches!(event, Event::Resize(_, _)) { interaction.reveal_selection = true; }
+                    if matches!(event, Event::Resize(_, _)) { interaction.reveal_selection = true; interaction.reveal_pane = true; }
+                    if registration.pane.is_some() {
+                        match event {
+                            Event::Paste(text) => registration.paste(&text),
+                            Event::Key(key) if key.kind != KeyEventKind::Release => {
+                                match registration.key(key) {
+                                    registration::RegistrationIntent::Cancel => preparations.abort_all(),
+                                    registration::RegistrationIntent::Save(draft) => {
+                                        let engine = Arc::clone(&engine);
+                                        registrations.spawn(async move { engine.register_discovered_work_item(*draft).await.map_err(|error| error.to_string()) });
+                                    }
+                                    registration::RegistrationIntent::None => {},
+                                }
+                            }
+                            _ => {},
+                        }
+                        continue;
+                    }
                     if let Event::Paste(text) = &event
                         && !interaction.sending
                         && let Some(draft) = &mut interaction.draft
@@ -329,6 +394,12 @@ async fn event_loop(
                                         let base = reviews.base.clone();
                                         diffs.spawn(async move { (ticket, engine.diff(&id, base.as_deref()).await.map_err(|error| error.to_string())) });
                                 }
+                                if let Some(pane) = interaction.registration_requested.take() {
+                                    let ticket = registration.open(pane.clone());
+                                    let engine = Arc::clone(&engine);
+                                    preparations.abort_all();
+                                    preparations.spawn(async move { (ticket, engine.prepare_pane_registration(&pane).await.map_err(|error| error.to_string())) });
+                                }
                             },
                         }
                     }
@@ -359,6 +430,7 @@ fn navigate(
             _ => return None,
         }
         interaction.reveal_selection = false;
+        interaction.reveal_pane = false;
         return None;
     }
     if key
@@ -369,6 +441,25 @@ fn navigate(
     }
     let items = state.items_for(*view);
     match key.code {
+        KeyCode::Down | KeyCode::Char('j') if *view == ui::View::Sessions => {
+            if let Some(snapshot) = state.snapshot() {
+                interaction.move_pane_selection(snapshot, 1);
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') if *view == ui::View::Sessions => {
+            if let Some(snapshot) = state.snapshot() {
+                interaction.move_pane_selection(snapshot, -1);
+            }
+        }
+        KeyCode::Enter | KeyCode::Char('r') if *view == ui::View::Sessions => {
+            interaction.registration_requested = state.snapshot().and_then(|snapshot| {
+                interaction.sync_panes(snapshot);
+                interaction.selected_pane.clone()
+            });
+            interaction.message = interaction.registration_requested.is_none().then(|| {
+                "Select a live pane in SESSIONS first; discovery may be unavailable.".into()
+            });
+        }
         KeyCode::Down | KeyCode::Char('j') if view.is_item_view() => {
             interaction.move_selection(items, 1)
         }
@@ -402,6 +493,9 @@ fn navigate(
             if view.is_item_view() {
                 interaction.selected_id = None;
                 interaction.sync(items);
+            } else if let Some(snapshot) = state.snapshot() {
+                interaction.selected_pane = None;
+                interaction.sync_panes(snapshot);
             }
         }
         KeyCode::Char('a' | 'w' | 's') => {
@@ -413,6 +507,12 @@ fn navigate(
             *scroll = 0;
             interaction.sync(state.items_for(*view));
             interaction.reveal_selection = true;
+            if *view == ui::View::Sessions {
+                if let Some(snapshot) = state.snapshot() {
+                    interaction.sync_panes(snapshot);
+                }
+                interaction.reveal_pane = true;
+            }
         }
         _ => {}
     }
@@ -423,6 +523,88 @@ fn navigate(
 mod tests {
     use super::*;
     use workbench_core::{AgentStatus, PaneAvailability, WorkItem, WorkItemKind};
+
+    #[test]
+    fn sessions_navigation_requests_registration_only_for_a_live_selected_pane() {
+        use workbench_core::{Pane, Session, Window};
+        let mut state = state(&[]);
+        state.discovery = Some(Ok(Snapshot {
+            sessions: vec![Session {
+                id: "$1".into(),
+                name: "main".into(),
+                windows: vec![Window {
+                    id: "@1".into(),
+                    index: 0,
+                    name: "task".into(),
+                    panes: ["%1", "%2"]
+                        .into_iter()
+                        .map(|id| Pane {
+                            id: id.into(),
+                            index: 0,
+                            title: "Agent".into(),
+                            current_command: None,
+                            working_directory: None,
+                        })
+                        .collect(),
+                }],
+            }],
+        }));
+        let mut view = ui::View::Sessions;
+        let mut scroll = 0;
+        let mut interaction = interaction::Interaction::default();
+        navigate(
+            KeyCode::Char('j'),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert_eq!(interaction.selected_pane.as_deref(), Some("%2"));
+        navigate(
+            KeyCode::Enter,
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert_eq!(
+            interaction.registration_requested.take().as_deref(),
+            Some("%2")
+        );
+        navigate(
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.registration_requested.is_none());
+        assert!(interaction.draft.is_none());
+        state.discovery = Some(Err("Server unavailable".into()));
+        navigate(
+            KeyCode::Char('r'),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.registration_requested.is_none());
+        assert!(interaction.message.as_ref().unwrap().contains("live pane"));
+        state.discovery = Some(Ok(Snapshot::default()));
+        navigate(
+            KeyCode::Enter,
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.registration_requested.is_none());
+    }
 
     fn state(items: &[(&str, AgentStatus)]) -> AppState {
         AppState::from_refresh(

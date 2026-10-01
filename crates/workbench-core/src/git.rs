@@ -159,6 +159,50 @@ impl Engine {
 }
 
 impl GitClient {
+    /// Registration needs checkout metadata, not a valid diff base or clean index.
+    pub(crate) async fn registration_metadata(
+        &self,
+        directory: &Path,
+    ) -> Result<(PathBuf, PathBuf, Option<String>), GitError> {
+        let root = self
+            .run(directory, &args(&["rev-parse", "--show-toplevel"]), false)
+            .await?;
+        let workspace = PathBuf::from(text(&root)?.strip_suffix('\n').unwrap_or(text(&root)?));
+        if !workspace.is_absolute() {
+            return Err(GitError::Invalid(
+                "Git returned a relative workspace".into(),
+            ));
+        }
+        // The first porcelain worktree record is the main checkout (or bare
+        // repository). NUL delimiting preserves spaces/newlines in its path.
+        let worktrees = self
+            .run(
+                directory,
+                &args(&["worktree", "list", "--porcelain", "-z"]),
+                false,
+            )
+            .await?;
+        let repository = nul_fields(&worktrees)?
+            .first()
+            .and_then(|line| line.strip_prefix("worktree "))
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .ok_or_else(|| GitError::Invalid("Git returned no main repository path".into()))?;
+        let branch = self
+            .run(
+                directory,
+                &args(&["symbolic-ref", "--quiet", "--short", "HEAD"]),
+                true,
+            )
+            .await?;
+        let branch = text(&branch)?.strip_suffix('\n').unwrap_or(text(&branch)?);
+        Ok((
+            repository,
+            workspace,
+            (!branch.is_empty()).then(|| branch.to_owned()),
+        ))
+    }
+
     fn command(&self, workspace: &Path) -> Command {
         let mut command = Command::new(&self.executable);
         command

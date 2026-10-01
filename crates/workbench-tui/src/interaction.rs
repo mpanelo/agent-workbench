@@ -1,5 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use workbench_core::{MAX_INPUT_BYTES, WorkItemState};
+use workbench_core::{MAX_INPUT_BYTES, Snapshot, WorkItemState};
 
 #[derive(Clone, Debug)]
 pub(crate) struct Draft {
@@ -50,9 +50,40 @@ pub(crate) struct Interaction {
     pub sending: bool,
     pub reveal_selection: bool,
     pub review_requested: Option<String>,
+    pub selected_pane: Option<String>,
+    pub reveal_pane: bool,
+    pub registration_requested: Option<String>,
 }
 
 impl Interaction {
+    pub fn sync_panes(&mut self, snapshot: &Snapshot) {
+        let ids = pane_ids(snapshot);
+        if self
+            .selected_pane
+            .as_deref()
+            .is_some_and(|id| ids.contains(&id))
+        {
+            return;
+        }
+        self.selected_pane = ids.first().map(|id| (*id).to_owned());
+        self.reveal_pane = true;
+    }
+
+    pub fn move_pane_selection(&mut self, snapshot: &Snapshot, delta: isize) {
+        self.sync_panes(snapshot);
+        let ids = pane_ids(snapshot);
+        if ids.is_empty() {
+            return;
+        }
+        let position = ids
+            .iter()
+            .position(|id| Some(*id) == self.selected_pane.as_deref())
+            .unwrap_or(0);
+        self.selected_pane =
+            Some(ids[position.saturating_add_signed(delta).min(ids.len() - 1)].to_owned());
+        self.reveal_pane = true;
+    }
+
     pub fn sync(&mut self, items: &[WorkItemState]) {
         if self
             .selected_id
@@ -118,10 +149,65 @@ impl Interaction {
     }
 }
 
+fn pane_ids(snapshot: &Snapshot) -> Vec<&str> {
+    let mut ids = Vec::new();
+    for pane in snapshot
+        .sessions
+        .iter()
+        .flat_map(|session| &session.windows)
+        .flat_map(|window| &window.panes)
+    {
+        if !ids.contains(&pane.id.as_str()) {
+            ids.push(pane.id.as_str());
+        }
+    }
+    ids
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use workbench_core::{AgentStatus, PaneAvailability, WorkItem, WorkItemKind};
+
+    #[test]
+    fn pane_selection_survives_refresh_and_skips_linked_duplicates() {
+        use workbench_core::{Pane, Session, Window};
+        let mut snapshot = Snapshot {
+            sessions: vec![Session {
+                id: "$1".into(),
+                name: "main".into(),
+                windows: vec![Window {
+                    id: "@1".into(),
+                    index: 0,
+                    name: "task".into(),
+                    panes: ["%1", "%2", "%3"]
+                        .into_iter()
+                        .map(|id| Pane {
+                            id: id.into(),
+                            index: 0,
+                            title: "Agent".into(),
+                            current_command: None,
+                            working_directory: None,
+                        })
+                        .collect(),
+                }],
+            }],
+        };
+        snapshot.sessions.push(snapshot.sessions[0].clone());
+        let mut interaction = Interaction::default();
+        interaction.sync_panes(&snapshot);
+        assert_eq!(interaction.selected_pane.as_deref(), Some("%1"));
+        interaction.move_pane_selection(&snapshot, 1);
+        assert_eq!(interaction.selected_pane.as_deref(), Some("%2"));
+        snapshot.sessions[0].windows[0].panes.reverse();
+        interaction.sync_panes(&snapshot);
+        assert_eq!(interaction.selected_pane.as_deref(), Some("%2"));
+        interaction.move_pane_selection(&snapshot, 20);
+        assert_eq!(interaction.selected_pane.as_deref(), Some("%1"));
+        interaction.sync_panes(&Snapshot::default());
+        assert!(interaction.selected_pane.is_none());
+        interaction.move_pane_selection(&Snapshot::default(), 1);
+    }
 
     fn items(ids: &[&str]) -> Vec<WorkItemState> {
         ids.iter()

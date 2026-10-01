@@ -215,6 +215,16 @@ pub(crate) struct WorkItemStore {
     path: PathBuf,
 }
 
+/// Explicitly unlock on every return path. Merely closing our descriptor may
+/// leave the lock briefly held by a concurrently forked command before exec.
+struct StateLock(fs::File);
+
+impl Drop for StateLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
+
 impl WorkItemStore {
     pub(crate) fn new(path: PathBuf) -> Self {
         Self { path }
@@ -281,6 +291,7 @@ impl WorkItemStore {
                 self.io_error(error)
             }
         })?;
+        let _lock = StateLock(lock);
         // Reload under the lock so independent engine instances cannot lose updates.
         let mut work_items = self.load()?;
         if work_items.iter().any(|existing| existing.id == item.id) {
@@ -307,8 +318,7 @@ impl WorkItemStore {
         temporary
             .persist(&self.path)
             .map_err(|error| self.io_error(error.error))?;
-        // Dropping the file releases the advisory lock, including on any error above.
-        drop(lock);
+        // StateLock releases the advisory lock, including on any error above.
         Ok(())
     }
 }
@@ -432,6 +442,7 @@ mod tests {
             .open(directory.path().join("items.json.lock"))
             .unwrap();
         fs2::FileExt::try_lock_exclusive(&lock).unwrap();
+        let lock = StateLock(lock);
         let engine = Engine::new(&path);
         assert!(matches!(
             engine.register_work_item(item("ABC-123", WorkItemKind::Implementation)),

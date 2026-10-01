@@ -8,8 +8,8 @@ use ratatui::{
     widgets::{Block, Paragraph, Wrap},
 };
 
+use crate::AppState;
 use crate::interaction::Interaction;
-use crate::{AppState, DiscoveryState};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum View {
@@ -98,7 +98,7 @@ fn render_items(
         Some(Ok(items)) if items.is_empty() => {
             lines.push(Line::from("No work items registered."));
             lines.push(Line::from(
-                "Register from another terminal with `workbench register` (see --help).",
+                "Press s, select a pane with j/k, then r to register it here.",
             ));
         }
         Some(Ok(items)) => {
@@ -247,10 +247,16 @@ fn push_prompt(lines: &mut Vec<Line<'static>>, text: &str, width: u16) {
     }
 }
 
-pub(crate) fn render(frame: &mut Frame<'_>, state: &DiscoveryState, scroll: &mut u16) {
-    let [header, body, footer] = Layout::vertical([
+pub(crate) fn render_sessions(
+    frame: &mut Frame<'_>,
+    state: &AppState,
+    scroll: &mut u16,
+    interaction: &mut Interaction,
+) {
+    let [header, body, notice, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
+        Constraint::Length(if interaction.message.is_some() { 2 } else { 0 }),
         Constraint::Length(1),
     ])
     .areas(frame.area());
@@ -259,7 +265,8 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &DiscoveryState, scroll: &mut
         header,
     );
     let mut lines = Vec::<Line<'static>>::new();
-    match state {
+    let mut selected_row = None;
+    match &state.discovery {
         None => lines.push(Line::from("Discovering sessions…")),
         Some(Err(error)) => {
             *scroll = 0;
@@ -290,13 +297,38 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &DiscoveryState, scroll: &mut
                         window.id
                     )));
                     for pane in &window.panes {
-                        lines.push(Line::from(format!(
-                            "    {}  pane {}  command: {}  title: {}",
-                            pane.id,
-                            pane.index,
-                            visible(pane.current_command.as_deref().unwrap_or("unavailable")),
-                            visible(&pane.title),
-                        )));
+                        let selected =
+                            interaction.selected_pane.as_deref() == Some(pane.id.as_str());
+                        if selected && selected_row.is_none() {
+                            selected_row = Some(lines.len());
+                        }
+                        let registered = state
+                            .items()
+                            .iter()
+                            .filter(|item| item.item.pane_id == pane.id)
+                            .map(|item| visible(&item.item.id))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        lines.push(Line::styled(
+                            format!(
+                                "{}{}  pane {}  command: {}  title: {}",
+                                if selected { "  > " } else { "    " },
+                                pane.id,
+                                pane.index,
+                                visible(pane.current_command.as_deref().unwrap_or("unavailable")),
+                                visible(&pane.title),
+                            ),
+                            Style::default().fg(if selected {
+                                Color::Yellow
+                            } else {
+                                Color::Reset
+                            }),
+                        ));
+                        if !registered.is_empty() {
+                            lines.push(Line::from(format!(
+                                "      Registered: {registered} (w: work items)"
+                            )));
+                        }
                         lines.push(Line::styled(
                             format!(
                                 "      cwd: {}",
@@ -313,16 +345,34 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &DiscoveryState, scroll: &mut
             }
         }
     }
-    if !matches!(state, Some(Err(_))) {
+    if !matches!(state.discovery, Some(Err(_))) {
         let max_scroll = lines
             .len()
             .saturating_sub(body.height as usize)
             .min(u16::MAX as usize) as u16;
+        if interaction.reveal_pane {
+            if let Some(row) = selected_row {
+                let row = row.min(u16::MAX as usize) as u16;
+                if row < *scroll {
+                    *scroll = row;
+                }
+                if row >= scroll.saturating_add(body.height) {
+                    *scroll = row.saturating_sub(body.height.saturating_sub(1));
+                }
+            }
+            interaction.reveal_pane = false;
+        }
         *scroll = (*scroll).min(max_scroll);
         frame.render_widget(Paragraph::new(lines).scroll((*scroll, 0)), body);
     }
+    if let Some(message) = &interaction.message {
+        frame.render_widget(
+            Paragraph::new(visible(message)).wrap(Wrap { trim: false }),
+            notice,
+        );
+    }
     frame.render_widget(
-        Paragraph::new("a/w/s: views | ↑/↓: scroll | Ctrl+d/u: half-page | q: quit • refresh: 2s"),
+        Paragraph::new("j/k: panes | Enter/r: register | Ctrl+d/u: scroll | a/w/s | q: quit"),
         footer,
     );
 }
@@ -362,6 +412,7 @@ pub(crate) fn visible(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::DiscoveryState;
     use ratatui::{Terminal, backend::TestBackend};
     use workbench_core::{
         AgentStatus, Pane, PaneAvailability, Session, Snapshot, Window, WorkItem, WorkItemKind,
@@ -372,8 +423,18 @@ mod tests {
 
     fn screen(state: DiscoveryState, width: u16, height: u16, scroll: &mut u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let state = AppState {
+            discovery: state,
+            ..AppState::default()
+        };
+        let mut interaction = Interaction::default();
+        if let Some(snapshot) = state.snapshot() {
+            interaction.sync_panes(snapshot);
+        }
+        // This helper tests explicit scroll clamping, not selection navigation.
+        interaction.reveal_pane = false;
         terminal
-            .draw(|frame| render(frame, &state, scroll))
+            .draw(|frame| render_sessions(frame, &state, scroll, &mut interaction))
             .unwrap();
         terminal
             .backend()
@@ -404,6 +465,61 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    #[test]
+    fn sessions_show_registration_and_keep_selected_panes_visible() {
+        let mut snapshot = snapshot();
+        let mut later = snapshot.sessions[0].windows[0].panes[0].clone();
+        later.id = "%15".into();
+        later.title = "Later agent".into();
+        for index in 0..8 {
+            let mut middle = later.clone();
+            middle.id = format!("%{}", index + 100);
+            snapshot.sessions[0].windows[0].panes.push(middle);
+        }
+        snapshot.sessions[0].windows[0].panes.push(later);
+        let state = AppState::from_refresh(
+            Ok(snapshot),
+            Ok(vec![registered(
+                PaneAvailability::Present,
+                WorkItemKind::Implementation,
+            )]),
+        );
+        let mut interaction = Interaction {
+            selected_pane: Some("%15".into()),
+            reveal_pane: true,
+            ..Interaction::default()
+        };
+        let mut scroll = 0;
+        let mut terminal = Terminal::new(TestBackend::new(100, 8)).unwrap();
+        terminal
+            .draw(|frame| render_sessions(frame, &state, &mut scroll, &mut interaction))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("> %15"));
+        assert!(scroll > 0);
+        let mut terminal = Terminal::new(TestBackend::new(100, 32)).unwrap();
+        interaction.selected_pane = Some("%14".into());
+        interaction.reveal_pane = true;
+        terminal
+            .draw(|frame| render_sessions(frame, &state, &mut scroll, &mut interaction))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Registered: ABC-123"));
+        assert!(text.contains("Enter/r: register"));
     }
 
     fn work_screen(state: &AppState, width: u16, height: u16, scroll: &mut u16) -> String {
@@ -502,7 +618,7 @@ mod tests {
         let text = screen(None, 80, 10, &mut 0);
         assert_eq!(
             text.lines().last().unwrap().trim_end(),
-            "a/w/s: views | ↑/↓: scroll | Ctrl+d/u: half-page | q: quit • refresh: 2s"
+            "j/k: panes | Enter/r: register | Ctrl+d/u: scroll | a/w/s | q: quit"
         );
     }
 
@@ -797,7 +913,7 @@ mod tests {
         let mut scroll = 100;
         let text = work_screen(&state, 100, 10, &mut scroll);
         assert!(text.contains("No work items registered"));
-        assert!(text.contains("workbench register"));
+        assert!(text.contains("r to register"));
         assert_eq!(scroll, 0);
         work_screen(&state, 1, 1, &mut scroll);
     }
