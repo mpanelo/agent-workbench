@@ -8,6 +8,7 @@ use crate::tmux::PaneObservation;
 use crate::{AgentStatus, Engine, PaneAvailability, Snapshot, WorkItemError, WorkItemState};
 
 const MAX_CONCURRENT_CAPTURES: usize = 4;
+const MAX_ACTIVITY_ROWS: usize = 10;
 const MAX_APPROVAL_CHARS: usize = 16 * 1024;
 const APPROVAL_CLIPPED: &str =
     "\n[Approval dialog exceeded the display limit. Press Enter to inspect the full pane.]";
@@ -177,7 +178,7 @@ fn infer(observation: &PaneObservation) -> (AgentStatus, &'static str) {
     if lines[..prompt]
         .iter()
         .rev()
-        .take(5)
+        .take(MAX_ACTIVITY_ROWS)
         .any(|line| line.contains("to interrupt"))
     {
         return (Unknown, "Codex activity indicator is unrecognized.");
@@ -200,19 +201,54 @@ fn running_indicator(line: &str) -> bool {
     };
     matches!(
         label.strip_prefix("• ").unwrap_or(label),
-        "Working" | "Thinking" | "Running" | "Searching"
+        "Working" | "Thinking" | "Running" | "Searching" | "Compacting context"
     ) && rest
         .strip_suffix(" • esc to interrupt)")
         .is_some_and(duration)
 }
 
 fn preceding_activity<'a>(lines: &[&'a str]) -> Option<&'a str> {
-    lines
-        .iter()
-        .rev()
-        .take(5)
-        .copied()
-        .find(|line| !ui_banner(line))
+    let mut tail = &lines[lines.len().saturating_sub(MAX_ACTIVITY_ROWS)..];
+    while tail.last().is_some_and(|line| ui_banner(line)) {
+        tail = &tail[..tail.len() - 1];
+    }
+    // A queued question is not a blocking approval. Skip only the complete
+    // adjacent three-row UI block, never arbitrary question/transcript text.
+    if tail.len() >= 3 && queued_questions(&tail[tail.len() - 3..]) {
+        tail = &tail[..tail.len() - 3];
+        while tail.last().is_some_and(|line| ui_banner(line)) {
+            tail = &tail[..tail.len() - 1];
+        }
+    }
+    // This detail belongs only to an active compaction row; a matching sentence
+    // in ordinary output must not uncover an older Working/completion marker.
+    if tail.last() == Some(&"└ Making room to continue") {
+        tail = &tail[..tail.len() - 1];
+        let activity = *tail.last()?;
+        let label = activity.strip_prefix("• ").unwrap_or(activity);
+        return (label.starts_with("Compacting context (") && running_indicator(activity))
+            .then_some(activity);
+    }
+    tail.last().copied()
+}
+
+fn queued_questions(lines: &[&str]) -> bool {
+    if !matches!(lines, [_, _, "shift+↵ to answer" | "shift+← to answer"])
+        || lines[0].strip_prefix("• ").unwrap_or(lines[0]) != "Queued follow-up inputs"
+    {
+        return false;
+    }
+    let Some((count, noun)) = lines[1]
+        .strip_prefix("? ")
+        .and_then(|line| line.split_once(' '))
+    else {
+        return false;
+    };
+    !count.is_empty()
+        && count.bytes().all(|byte| byte.is_ascii_digit())
+        && count.parse::<usize>().is_ok_and(|count| {
+            count > 0 && noun == if count == 1 { "question" } else { "questions" }
+        })
 }
 
 fn ui_banner(line: &str) -> bool {
@@ -348,6 +384,9 @@ mod tests {
     const FOOTER: &str = "\n› Ask Codex to do anything\n\n  GPT-6.1-Sol high · ~/work · Task\n  ← for agents · ? for shortcuts\n";
     const APPROVAL: &str = "Would you like to run the following command?\n\n$ cargo test\n\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)\n\nPress enter to confirm or esc to cancel\n";
     const LIMIT: &str = "⚠ 5h limit: 16% left · /status";
+    // Only the UI chrome from the reported screenshots, not conversation text.
+    const COMPACTING: &str = "• Compacting context (1m 44s • esc to interrupt)\n└ Making room to continue\n└ Tip: Use /vim to toggle Vim editing in the composer.";
+    const QUEUED: &str = "• Queued follow-up inputs\n? 1 question\nshift+↵ to answer";
     const WARNINGS: &str = "⚠ 2 warnings · f2 to view";
 
     fn observation(screen: &str) -> PaneObservation {
@@ -452,6 +491,96 @@ mod tests {
             "← for agents · ? for shortcuts  ⚠️ 2 warnings · f2 to view"
         ));
         assert!(rate_limit_footer("5h limit: 100% left · /status"));
+    }
+
+    #[test]
+    fn compaction_and_adjacent_queued_questions_are_active_not_waiting() {
+        for screen in [
+            format!("{COMPACTING}\n{FOOTER}"),
+            format!("{COMPACTING}\n{LIMIT}"),
+            format!("Compacting context (2s • esc to interrupt)\n{FOOTER}"),
+            format!("• Working (21s • esc to interrupt)\n{QUEUED}\n{FOOTER}"),
+            format!("{COMPACTING}\n{QUEUED}\n{LIMIT}\n{FOOTER}"),
+            format!("Working (21s • esc to interrupt)\n{QUEUED}\n{LIMIT}"),
+            format!("Worked for 3s\nNew assistant output\n{COMPACTING}\n{FOOTER}"),
+        ] {
+            let observed = observation(&screen);
+            let (status, _) = infer(&observed);
+            assert_eq!(status, AgentStatus::Running, "{screen}");
+            assert!(!status.needs_attention());
+            assert!(approval_prompt(&observed, status).is_none());
+            for in_mode in [false, true] {
+                let mut inactive = observation(&screen);
+                inactive.in_mode = in_mode;
+                inactive.dead = !in_mode;
+                assert_eq!(infer(&inactive).0, AgentStatus::Unknown);
+            }
+        }
+        for count in [1, 2, 12] {
+            for answer in ["shift+↵ to answer", "shift+← to answer"] {
+                let noun = if count == 1 { "question" } else { "questions" };
+                let block = format!("Queued follow-up inputs\n? {count} {noun}\n{answer}");
+                let screen = format!("Thinking (5s • esc to interrupt)\n{block}\n{FOOTER}");
+                assert_eq!(infer(&observation(&screen)).0, AgentStatus::Running);
+            }
+        }
+        // A real approval dialog still wins over any older active/queued rows.
+        let screen = format!("{COMPACTING}\n{QUEUED}\n{APPROVAL}");
+        assert_eq!(infer(&observation(&screen)).0, AgentStatus::WaitingForInput);
+    }
+
+    #[test]
+    fn activity_details_cannot_uncover_historical_or_malformed_timers() {
+        let working = "• Working (21s • esc to interrupt)";
+        for middle in [
+            "• Queued follow-up inputs\n? 0 questions\nshift+↵ to answer",
+            "• Queued follow-up inputs\n? 1 questions\nshift+↵ to answer",
+            "• Queued follow-up inputs\n? 2 question\nshift+↵ to answer",
+            "• Queued follow-up inputs\n? many questions\nshift+↵ to answer",
+            "• Queued follow-up inputs\n? 999999999999999999999999 questions\nshift+↵ to answer",
+            "• Queued follow-up inputs\n? 1 question",
+            "? 1 question\nshift+↵ to answer",
+            "• Queued follow-up inputs\n? 1 question\nenter to answer",
+            "> • Queued follow-up inputs\n? 1 question\nshift+↵ to answer",
+            "• Queued follow-up inputs\n? 1 question\nextra output\nshift+↵ to answer",
+            "└ Making room to continue",
+            "• New output",
+        ] {
+            let screen = format!("{working}\n{middle}\n{FOOTER}");
+            assert_eq!(
+                infer(&observation(&screen)).0,
+                AgentStatus::Unknown,
+                "{screen}"
+            );
+        }
+        for screen in [
+            format!("› {COMPACTING}\n{FOOTER}"),
+            format!("{COMPACTING}\nNew output\n{FOOTER}"),
+            format!(
+                "Compacting context (soon • esc to interrupt)\n└ Making room to continue\n{FOOTER}"
+            ),
+            format!("{COMPACTING}\n{QUEUED}\nChoose a menu item"),
+            format!("{COMPACTING}\n{QUEUED}"),
+            format!("{working}\nNew output\n{QUEUED}\n{FOOTER}"),
+        ] {
+            assert_eq!(
+                infer(&observation(&screen)).0,
+                AgentStatus::Unknown,
+                "{screen}"
+            );
+        }
+        // Queued UI by itself is not sufficient running/waiting evidence.
+        assert_eq!(
+            infer(&observation(&format!("{QUEUED}\n{FOOTER}"))).0,
+            AgentStatus::Idle
+        );
+        let distant = format!(
+            "{working}\n{}{FOOTER}",
+            "└ Tip: UI hint\n".repeat(MAX_ACTIVITY_ROWS)
+        );
+        assert_ne!(infer(&observation(&distant)).0, AgentStatus::Running);
+        let screen = format!("Worked for 3s\n└ Making room to continue\n{FOOTER}");
+        assert_ne!(infer(&observation(&screen)).0, AgentStatus::Complete);
     }
 
     #[test]
@@ -702,6 +831,11 @@ cat '{}/'$5
                 format!("• Working (2s • esc to interrupt)\n{FOOTER}"),
                 AgentStatus::Running,
             ),
+            (format!("{COMPACTING}\n{FOOTER}"), AgentStatus::Running),
+            (
+                format!("Working (21s • esc to interrupt)\n{QUEUED}\n{FOOTER}"),
+                AgentStatus::Running,
+            ),
             (format!("Worked for 2s\n{FOOTER}"), AgentStatus::Complete),
             (FOOTER.into(), AgentStatus::Idle),
             ("unrecognized menu".into(), AgentStatus::Unknown),
@@ -725,7 +859,7 @@ cat '{}/'$5
         }
         let calls = fs::read_to_string(&log).unwrap();
         // One capture for the shared pane and one failed capture per refresh.
-        assert_eq!(calls.lines().count(), 10);
+        assert_eq!(calls.lines().count(), 14);
         for call in calls.lines() {
             assert!(call.contains("capture-pane -p -J -t"));
             assert!(!call.contains("send-keys"));
@@ -863,6 +997,11 @@ cat '{}/'$5
             ),
             (
                 format!("Working (55s • esc to interrupt)\n{LIMIT}"),
+                AgentStatus::Running,
+            ),
+            (format!("{COMPACTING}\n{FOOTER}"), AgentStatus::Running),
+            (
+                format!("Working (21s • esc to interrupt)\n{QUEUED}\n{FOOTER}"),
                 AgentStatus::Running,
             ),
             (

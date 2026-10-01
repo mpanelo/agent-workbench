@@ -281,7 +281,11 @@ a stale waiting/completed status or remove registrations. `list` falls back to
 These are terminal heuristics, not an agent protocol. They recognize observed
 English Codex UI patterns (including legacy context footers and current model/path
 footers, with or without activity bullets). Known `5h`/weekly rate-limit banners
-and the `⚠ … warnings · f2 to view` shortcuts suffix are supported. A bare activity
+and the `⚠ … warnings · f2 to view` shortcuts suffix are supported. Context
+compaction also counts as `RUNNING`, including its adjacent “Making room to
+continue” detail. A complete adjacent “Queued follow-up inputs” question block
+does not hide an active timer or imply a blocking approval. Activity lookup is
+bounded to ten nonempty rows above the composer/bottom banner. A bare activity
 line, historical indicator followed by new output, or unfamiliar footer is not
 enough evidence; changed keybindings, localization, narrow panes, menus, and UI changes
 can produce `UNKNOWN`. Free-form questions and structured question pickers are

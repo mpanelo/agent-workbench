@@ -13,6 +13,15 @@ banner. It skips only recognized adjacent UI banners, with a bounded look-back.
 Approval dialogs take precedence; historical/quoted activity, malformed timers,
 unknown footers, unsupported processes, dead panes, and copy mode remain guarded.
 
+The October 1 screenshots added `Compacting context` with its “Making room to
+continue” detail, and a three-row queued-question block between `Working` and the
+composer. Both active layouts now count as `RUNNING`. Only a complete adjacent
+queued block (known header, positive question count, and answer shortcut) is
+skipped; it does not itself imply running or waiting. The compaction detail is
+accepted only immediately after a valid compaction timer. The look-back remains
+bounded to ten nonempty rows, and arbitrary intervening prose, malformed blocks,
+quoted activity, and missing current UI anchors do not establish running state.
+
 ## Hook investigation — not implemented
 
 Local verification: `codex-cli 0.159.3`; `codex features list` reports `hooks`
