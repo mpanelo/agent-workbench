@@ -100,3 +100,53 @@ fn corrupt_state_and_invalid_registration_exit_with_errors_without_losing_data()
     assert!(!output.status.success());
     assert_eq!(fs::read_to_string(&path).unwrap(), "{broken");
 }
+
+#[test]
+fn short_description_limit_and_alias_work_through_the_cli_without_data_loss() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("items.json");
+    let attempt = |id: &str, flag: &str, description: &str| {
+        Command::new(env!("CARGO_BIN_EXE_workbench"))
+            .args([
+                "register",
+                "--id",
+                id,
+                "--kind",
+                "implementation",
+                "--repository",
+                "/work",
+                "--workspace",
+                "/work",
+                "--pane",
+                "%1",
+                flag,
+                description,
+                "--state-file",
+            ])
+            .arg(&path)
+            .output()
+            .unwrap()
+    };
+    let limit = workbench_core::MAX_SHORT_DESCRIPTION_CHARS;
+    let too_long = "🙂".repeat(limit + 1);
+    let failed = attempt("long", "--short-description", &too_long);
+    assert!(!failed.status.success());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("at most 120 characters"));
+    assert!(!path.exists());
+    for (id, flag) in [("new", "--short-description"), ("legacy", "--title")] {
+        let output = attempt(id, flag, &"🙂".repeat(limit));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let stored = fs::read(&path).unwrap();
+    for flag in ["--short-description", "--title"] {
+        assert!(!attempt("long", flag, &too_long).status.success());
+        assert_eq!(fs::read(&path).unwrap(), stored);
+    }
+    let items = workbench_core::Engine::new(&path).work_items().unwrap();
+    assert_eq!(items.len(), 2);
+    assert!(items.iter().all(|item| item.title.chars().count() == limit));
+}

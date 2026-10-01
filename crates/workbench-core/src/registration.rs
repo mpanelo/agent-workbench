@@ -2,7 +2,10 @@
 
 use std::{error::Error, fmt, path::PathBuf};
 
-use crate::{DiscoveryError, Engine, Pane, Snapshot, WorkItem, WorkItemError, WorkItemKind};
+use crate::{
+    DiscoveryError, Engine, MAX_SHORT_DESCRIPTION_CHARS, Pane, Snapshot, WorkItem, WorkItemError,
+    WorkItemKind,
+};
 
 #[derive(Clone, Debug)]
 pub struct RegistrationDraft {
@@ -76,7 +79,7 @@ impl Engine {
         let mut workspace = directory.clone().unwrap_or_default();
         let mut repository = workspace.clone();
         let mut branch = None;
-        let notice = if let Some(directory) = directory.as_ref() {
+        let mut notice = if let Some(directory) = directory.as_ref() {
             match self.git.registration_metadata(directory).await {
                 Ok((repo, root, detected_branch)) => {
                     repository = repo;
@@ -116,10 +119,24 @@ impl Engine {
             id = format!("{stem}-{suffix}");
             suffix += 1;
         }
+        if title.chars().count() > MAX_SHORT_DESCRIPTION_CHARS {
+            let shortened = format!(
+                "Suggested Short Description shortened to {MAX_SHORT_DESCRIPTION_CHARS} characters; edit it before saving if needed."
+            );
+            notice = Some(match notice {
+                Some(existing) => format!("{existing} {shortened}"),
+                None => shortened,
+            });
+        }
         Ok(RegistrationDraft {
             item: WorkItem {
                 id,
-                title: title.into(),
+                title: title
+                    .chars()
+                    .take(MAX_SHORT_DESCRIPTION_CHARS)
+                    .collect::<String>()
+                    .trim_end()
+                    .into(),
                 repository,
                 workspace,
                 branch,
@@ -213,6 +230,34 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    #[tokio::test]
+    async fn suggested_short_descriptions_are_bounded_without_changing_branch() {
+        let (dir, _) = fixture();
+        let root = dir.path().join("workspace");
+        let branch = "a".repeat(MAX_SHORT_DESCRIPTION_CHARS + 10);
+        git(&root, &["checkout", "-b", &branch]);
+        let engine = Engine::new(dir.path().join("new-items.json"));
+        let draft = engine
+            .registration_from_snapshot(&snapshot(Some(root)), "%1")
+            .await
+            .unwrap();
+        assert_eq!(draft.item.title, "a".repeat(MAX_SHORT_DESCRIPTION_CHARS));
+        assert_eq!(draft.item.branch.as_deref(), Some(branch.as_str()));
+        assert!(draft.notice.as_ref().unwrap().contains("shortened to 120"));
+        let mut fallback = snapshot(None);
+        fallback.sessions[0].windows[0].name = "🙂".repeat(MAX_SHORT_DESCRIPTION_CHARS + 1);
+        let fallback = engine
+            .registration_from_snapshot(&fallback, "%1")
+            .await
+            .unwrap();
+        assert_eq!(
+            fallback.item.title,
+            "🙂".repeat(MAX_SHORT_DESCRIPTION_CHARS)
+        );
+        assert!(fallback.notice.unwrap().contains("shortened to 120"));
+        engine.register_work_item(draft.item).unwrap();
     }
 
     #[tokio::test]

@@ -106,13 +106,17 @@ single built-in theme for now; no theme-selection setting is included.
 Press `s`, select an agent pane with `j/k` or arrows, then press `r` (or Enter).
 Workbench fills in the pane ID automatically. In a Git checkout it also detects
 the workspace root, main repository, and current branch—even when the pane is in
-a subdirectory or linked worktree. The branch suggests an ID/title, falling back
-to the window name; ID collisions get a numeric suffix. The default kind is
-Implementation.
+a subdirectory or linked worktree. The branch suggests an ID and Short Description,
+falling back to the window name; ID collisions get a numeric suffix. Suggested
+descriptions are shortened to fit the 120-character limit, with a notice when
+shortened. The default kind is Implementation.
 
 Press Enter to accept the defaults, or Tab/Shift-Tab/↑/↓ to select a field and edit
 it. Space toggles the kind between Implementation and External Review; Backspace
 edits and `Ctrl+u` clears the current field. Single-line Unicode paste is supported.
+Short Description shows a character counter and accepts at most 120 Unicode
+characters (counted as Unicode scalar values, not UTF-8 bytes). Extra typing or
+an over-limit paste is rejected without partially changing the field.
 Repository/workspace fields accept absolute paths or `~/…`; paths are stored as
 absolute paths. The pane binding cannot be edited accidentally. `Esc`/`Ctrl-C`
 cancels without saving, and ordinary letters—including `q`—type into text fields.
@@ -420,13 +424,13 @@ before the arguments). For example:
 
 ```sh
 ./target/debug/workbench register \
-  --id ABC-123 --title "Fix telemetry retry handling" \
+  --id ABC-123 --short-description "Fix telemetry retry handling" \
   --kind implementation \
   --repository "$PWD" --workspace "$PWD" \
   --pane '%14' --branch fix/retries
 
 ./target/debug/workbench register \
-  --id 'PR #1842' --title "Review authentication refactor" \
+  --id 'PR #1842' --short-description "Review authentication refactor" \
   --kind external-review \
   --repository /path/to/auth-service --workspace /path/to/reviews/1842 \
   --pane '%21'
@@ -435,8 +439,13 @@ before the arguments). For example:
 ```
 
 For scripted registration, use pane IDs from the sessions view (interactive
-registration above fills them in automatically). IDs and titles are free-form labels: no Jira
-or GitHub account is involved. `--title` defaults to the ID; `--branch` is optional.
+registration above fills them in automatically). IDs uniquely identify work items;
+Short Description is a human-readable summary. Neither requires a Jira or GitHub
+account. `--short-description` defaults to the ID and is limited to 120 Unicode
+characters for new registrations; a longer ID requires an explicit shorter
+description. `--title` remains a compatible alias (do not supply both).
+`--branch` is optional. Saved data still uses the `title` key; existing longer
+descriptions remain readable and are not automatically rewritten or shortened.
 Repository/workspace paths are resolved from your current directory and saved as
 absolute paths. Expand `~` with your shell. Registration does not require the paths
 or pane to exist. Duplicate work-item IDs are rejected without changing the state.

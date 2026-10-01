@@ -5,7 +5,9 @@ use ratatui::{
     text::Line,
     widgets::{Block, Paragraph, Wrap},
 };
-use workbench_core::{RegistrationDraft, WorkItemKind};
+use workbench_core::{
+    MAX_SHORT_DESCRIPTION_CHARS, RegistrationDraft, WorkItemKind, validate_short_description,
+};
 
 use crate::{
     interaction::Draft,
@@ -15,7 +17,7 @@ use crate::{
 
 const LABELS: [&str; 6] = [
     "ID",
-    "Title",
+    "Short Description",
     "Kind",
     "Repository",
     "Workspace",
@@ -106,6 +108,10 @@ impl RegistrationUi {
                 self.selected = (self.selected + LABELS.len() - 1) % LABELS.len()
             }
             KeyCode::Enter => {
+                if let Err(error) = validate_short_description(&self.fields[1]) {
+                    self.error = Some(error.to_string());
+                    return RegistrationIntent::None;
+                }
                 let draft = self.draft.as_ref().expect("draft is present");
                 let mut edited = draft.clone();
                 edited.item.id = self.fields[0].clone();
@@ -148,8 +154,7 @@ impl RegistrationUi {
                 };
                 match editor.edit(key) {
                     Ok(()) => {
-                        self.fields[self.selected] = editor.text;
-                        self.error = None;
+                        self.apply_edit(editor.text);
                     }
                     Err(error) => self.error = Some(error.replace("Replies", "Fields")),
                 }
@@ -169,10 +174,20 @@ impl RegistrationUi {
         };
         match editor.append(text) {
             Ok(()) => {
-                self.fields[self.selected] = editor.text;
-                self.error = None;
+                self.apply_edit(editor.text);
             }
             Err(error) => self.error = Some(error.replace("Replies", "Fields")),
+        }
+    }
+
+    fn apply_edit(&mut self, text: String) {
+        if self.selected == 1 && text.chars().count() > MAX_SHORT_DESCRIPTION_CHARS {
+            self.error = Some(format!(
+                "Short Description is limited to {MAX_SHORT_DESCRIPTION_CHARS} characters; input was not added."
+            ));
+        } else {
+            self.fields[self.selected] = text;
+            self.error = None;
         }
     }
 
@@ -255,11 +270,20 @@ impl RegistrationUi {
 
     fn render_field(&self, frame: &mut Frame<'_>, area: ratatui::layout::Rect, index: usize) {
         let selected = index == self.selected;
+        let count = if index == 1 {
+            format!(
+                " ({}/{MAX_SHORT_DESCRIPTION_CHARS})",
+                self.fields[index].chars().count()
+            )
+        } else {
+            String::new()
+        };
         let block = Block::bordered()
             .title(format!(
-                "{} / 6 — {}{}",
+                "{} / 6 — {}{}{}",
                 index + 1,
                 LABELS[index],
+                count,
                 if selected { " (editing)" } else { "" }
             ))
             .style(if selected {
@@ -359,6 +383,65 @@ mod tests {
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn short_description_caps_typing_and_paste_without_partial_changes() {
+        let mut form = ready();
+        form.selected = 1;
+        form.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        form.paste(&"🙂".repeat(MAX_SHORT_DESCRIPTION_CHARS - 1));
+        key(&mut form, KeyCode::Char('λ'));
+        let boundary = form.fields[1].clone();
+        assert_eq!(boundary.chars().count(), MAX_SHORT_DESCRIPTION_CHARS);
+        key(&mut form, KeyCode::Char('q'));
+        assert_eq!(form.fields[1], boundary);
+        assert!(form.error.as_ref().unwrap().contains("120 characters"));
+        key(&mut form, KeyCode::Backspace);
+        assert!(form.error.is_none());
+        let before_paste = form.fields[1].clone();
+        form.paste("two");
+        assert_eq!(form.fields[1], before_paste);
+        assert!(form.error.is_some());
+        key(&mut form, KeyCode::Char('a'));
+        let RegistrationIntent::Save(saved) = key(&mut form, KeyCode::Enter) else {
+            panic!("expected boundary save")
+        };
+        assert_eq!(
+            saved.item.title.chars().count(),
+            MAX_SHORT_DESCRIPTION_CHARS
+        );
+        // The new limit applies only to the short description, not the ID.
+        let mut form = ready();
+        form.paste(&"a".repeat(MAX_SHORT_DESCRIPTION_CHARS + 1));
+        assert!(form.error.is_none());
+    }
+
+    #[test]
+    fn short_description_label_counter_and_save_validation_are_visible() {
+        let mut form = ready();
+        form.selected = 1;
+        for (width, height) in [(120, 24), (80, 12)] {
+            let text = screen(&form, width, height);
+            assert!(text.contains("Short Description (6/120)"), "{text}");
+            assert!(!text.contains("Title"), "{text}");
+        }
+        for invalid in [String::new(), "λ".repeat(MAX_SHORT_DESCRIPTION_CHARS + 1)] {
+            form.fields[1] = invalid.clone();
+            assert!(matches!(
+                key(&mut form, KeyCode::Enter),
+                RegistrationIntent::None
+            ));
+            assert!(!form.saving);
+            assert!(form.error.is_some());
+            assert_eq!(form.fields[1], invalid);
+        }
+        form.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        form.paste("Ready");
+        assert!(matches!(
+            key(&mut form, KeyCode::Enter),
+            RegistrationIntent::Save(_)
+        ));
     }
 
     #[test]

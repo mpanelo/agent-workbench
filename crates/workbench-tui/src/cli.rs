@@ -7,7 +7,7 @@ pub(crate) const HELP: &str = "Agent Workbench — M6 local diff review
 Usage:
   workbench [--state-file PATH] [--diff-base REV]
   workbench register --id ID --kind implementation|external-review
-      --repository PATH --workspace PATH --pane %ID [--title TITLE] [--branch NAME]
+      --repository PATH --workspace PATH --pane %ID [--short-description TEXT] [--branch NAME]
       [--state-file PATH]
   workbench list [--state-file PATH]
   workbench --help
@@ -17,6 +17,8 @@ In REVIEW, Space saves file marks; r reloads while restoring unchanged marks.
 Marks persist across restarts; changed captured diffs require re-review.
 In SESSIONS, j/k or arrows select a pane; Enter or r opens registration with
 pane/Git metadata filled in. Enter confirms; Tab changes fields; Esc cancels.
+Short descriptions are limited to 120 Unicode characters; --title is a legacy
+alias for --short-description. When omitted, the description defaults to the ID.
 j/k or arrows select; Enter opens the pane; r composes a single-line reply.
 Ctrl+d/Ctrl+u scroll down/up half a page; Page Down/Page Up scroll a full page.
 Enter submits a reply and Esc cancels. Tab selects known waiting/completed items.
@@ -96,6 +98,7 @@ pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Options,
                 | "--diff-base"
                 | "--id"
                 | "--title"
+                | "--short-description"
                 | "--kind"
                 | "--repository"
                 | "--workspace"
@@ -126,7 +129,12 @@ pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Options,
             let repository = absolute(PathBuf::from(required(&mut flags, "--repository")?))?;
             let workspace = absolute(PathBuf::from(required(&mut flags, "--workspace")?))?;
             let pane_id = string_flag(&mut flags, "--pane")?;
-            let title = optional_string(&mut flags, "--title")?.unwrap_or_else(|| id.clone());
+            let description = optional_string(&mut flags, "--short-description")?;
+            let legacy_title = optional_string(&mut flags, "--title")?;
+            if description.is_some() && legacy_title.is_some() {
+                return Err("Use --short-description or --title, not both.".into());
+            }
+            let title = description.or(legacy_title).unwrap_or_else(|| id.clone());
             let branch = optional_string(&mut flags, "--branch")?;
             Command::Register(WorkItem {
                 id,
@@ -197,6 +205,43 @@ mod tests {
 
     fn args(text: &[&str]) -> Vec<OsString> {
         text.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn short_description_flag_and_legacy_alias_are_mutually_exclusive() {
+        let base = args(&[
+            "register",
+            "--id",
+            "ABC",
+            "--kind",
+            "implementation",
+            "--repository",
+            "/work",
+            "--workspace",
+            "/work",
+            "--pane",
+            "%1",
+        ]);
+        for flag in ["--short-description", "--title"] {
+            let mut argv = base.clone();
+            argv.extend(args(&[flag, "Fix retries"]));
+            let Command::Register(item) = parse(argv).unwrap().command else {
+                panic!("expected registration")
+            };
+            assert_eq!(item.title, "Fix retries");
+        }
+        let mut both = base.clone();
+        both.extend(args(&["--short-description", "First", "--title", "Second"]));
+        assert!(parse(both).unwrap_err().contains("not both"));
+        assert!(parse(args(&["list", "--short-description", "unused"])).is_err());
+        let mut duplicate = base;
+        duplicate.extend(args(&[
+            "--short-description",
+            "First",
+            "--short-description",
+            "Second",
+        ]));
+        assert!(parse(duplicate).unwrap_err().contains("Duplicate flag"));
     }
 
     #[test]

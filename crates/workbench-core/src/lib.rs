@@ -23,8 +23,8 @@ pub use review::{ReviewError, ReviewSession, ReviewStatus};
 pub use tmux::DiscoveryError;
 use work_items::WorkItemStore;
 pub use work_items::{
-    AgentStatus, PaneAvailability, WorkItem, WorkItemError, WorkItemKind, WorkItemState,
-    default_state_file,
+    AgentStatus, MAX_SHORT_DESCRIPTION_CHARS, PaneAvailability, WorkItem, WorkItemError,
+    WorkItemKind, WorkItemState, default_state_file, validate_short_description,
 };
 
 /// Discovery and work-item operations, without shell or rendering code in the API.

@@ -10,10 +10,14 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+/// Maximum Unicode scalar values in a newly registered short description.
+pub const MAX_SHORT_DESCRIPTION_CHARS: usize = 120;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkItem {
     pub id: String,
+    /// User-facing short description; keep the legacy storage key compatible.
     pub title: String,
     pub repository: PathBuf,
     pub workspace: PathBuf,
@@ -169,8 +173,27 @@ fn state_file_from(
     Ok(directory.join("agent-workbench/work-items.json"))
 }
 
+/// Validate a user-supplied short description before registration.
+/// Existing saved descriptions remain readable without applying the new limit.
+pub fn validate_short_description(value: &str) -> Result<(), WorkItemError> {
+    if value.trim().is_empty() || value != value.trim() || value.chars().any(char::is_control) {
+        return Err(WorkItemError::Invalid(
+            "short description must be nonempty, with no control characters or surrounding whitespace".into(),
+        ));
+    }
+    if value.chars().count() > MAX_SHORT_DESCRIPTION_CHARS {
+        return Err(WorkItemError::Invalid(format!(
+            "short description must be at most {MAX_SHORT_DESCRIPTION_CHARS} characters"
+        )));
+    }
+    Ok(())
+}
+
 fn validate(item: &WorkItem) -> Result<(), WorkItemError> {
-    for (name, value) in [("ID", item.id.as_str()), ("title", item.title.as_str())] {
+    for (name, value) in [
+        ("ID", item.id.as_str()),
+        ("short description", item.title.as_str()),
+    ] {
         if value.trim().is_empty() || value != value.trim() || value.chars().any(char::is_control) {
             return Err(WorkItemError::Invalid(format!(
                 "{name} must be nonempty, with no control characters or surrounding whitespace"
@@ -274,6 +297,7 @@ impl WorkItemStore {
 
     pub(crate) fn register(&self, item: WorkItem) -> Result<(), WorkItemError> {
         validate(&item)?;
+        validate_short_description(&item.title)?;
         let parent = self
             .path
             .parent()
@@ -403,6 +427,58 @@ mod tests {
         invalid.workspace = "relative/path".into();
         assert!(engine.register_work_item(invalid).is_err());
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn short_description_limit_counts_characters_and_rejects_without_writes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("nested/items.json");
+        let engine = Engine::new(&path);
+        let mut too_long = item("long", WorkItemKind::Implementation);
+        too_long.title = "🙂".repeat(MAX_SHORT_DESCRIPTION_CHARS + 1);
+        let error = engine.register_work_item(too_long.clone()).unwrap_err();
+        assert!(error.to_string().contains("at most 120 characters"));
+        assert!(!path.parent().unwrap().exists());
+        for (id, character) in [("ascii", "a"), ("unicode", "🙂")] {
+            let mut boundary = item(id, WorkItemKind::Implementation);
+            boundary.title = character.repeat(MAX_SHORT_DESCRIPTION_CHARS);
+            engine.register_work_item(boundary.clone()).unwrap();
+            assert!(engine.work_items().unwrap().contains(&boundary));
+        }
+        let stored = fs::read(&path).unwrap();
+        assert!(engine.register_work_item(too_long).is_err());
+        assert_eq!(fs::read(&path).unwrap(), stored);
+        for invalid in ["", " ", " surrounding ", "multiple\nlines"] {
+            assert!(validate_short_description(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn legacy_long_descriptions_remain_readable_and_preserved() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("items.json");
+        let mut legacy = item("legacy", WorkItemKind::Implementation);
+        legacy.title = "λ".repeat(MAX_SHORT_DESCRIPTION_CHARS + 20);
+        fs::write(
+            &path,
+            serde_json::to_vec(&StoredState {
+                version: 1,
+                work_items: vec![legacy.clone()],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let stored = fs::read(&path).unwrap();
+        let engine = Engine::new(&path);
+        assert_eq!(engine.work_items().unwrap(), [legacy.clone()]);
+        assert_eq!(fs::read(&path).unwrap(), stored);
+        engine
+            .register_work_item(item("new", WorkItemKind::Implementation))
+            .unwrap();
+        assert_eq!(engine.work_items().unwrap()[0], legacy);
+        let json: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(json["work_items"][0].get("title").is_some());
+        assert_eq!(json["version"], 1);
     }
 
     #[test]
