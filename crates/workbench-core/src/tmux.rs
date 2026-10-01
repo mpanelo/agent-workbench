@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     error::Error,
+    ffi::OsString,
     fmt, io,
     process::{Output, Stdio},
     time::Duration,
@@ -43,12 +44,12 @@ impl fmt::Display for DiscoveryError {
             Self::CommandFailed { code, message } => {
                 write!(
                     f,
-                    "Tmux discovery failed (exit {code:?}): {message}. Check that a tmux server with a session is running."
+                    "Tmux command failed (exit {code:?}): {message}. Check that a tmux server with a session is running."
                 )
             }
             Self::TimedOut => write!(
                 f,
-                "Tmux discovery timed out after 3 seconds. Check that the tmux server is responding."
+                "Tmux command timed out after 3 seconds. Check that the tmux server is responding."
             ),
             Self::InvalidOutput { record, reason } => {
                 write!(
@@ -69,10 +70,42 @@ impl Error for DiscoveryError {
     }
 }
 
-pub(crate) async fn discover() -> Result<Snapshot, DiscoveryError> {
-    let mut command = Command::new("tmux");
-    command.args(["list-panes", "-a", "-F", PANE_FORMAT]);
-    interpret_output(run_command(&mut command, COMMAND_TIMEOUT).await?)
+#[derive(Debug)]
+pub(crate) struct TmuxClient {
+    pub(crate) executable: OsString,
+    pub(crate) socket: Option<std::path::PathBuf>,
+}
+
+impl Default for TmuxClient {
+    fn default() -> Self {
+        Self {
+            executable: "tmux".into(),
+            socket: None,
+        }
+    }
+}
+
+impl TmuxClient {
+    pub(crate) fn command(&self) -> Command {
+        let mut command = Command::new(&self.executable);
+        // Actions must never implicitly start a new server.
+        command.arg("-N");
+        if let Some(socket) = &self.socket {
+            command.arg("-S").arg(socket);
+        }
+        command
+    }
+
+    pub(crate) async fn discover(&self) -> Result<Snapshot, DiscoveryError> {
+        let mut command = self.command();
+        command.args(["list-panes", "-a", "-F", PANE_FORMAT]);
+        interpret_output(run_command(&mut command, COMMAND_TIMEOUT).await?)
+    }
+
+    pub(crate) async fn execute(&self, args: &[String]) -> Result<(), DiscoveryError> {
+        let output = run_command(self.command().args(args), COMMAND_TIMEOUT).await?;
+        ensure_success(&output)
+    }
 }
 
 async fn run_command(command: &mut Command, limit: Duration) -> Result<Output, DiscoveryError> {
@@ -83,7 +116,7 @@ async fn run_command(command: &mut Command, limit: Duration) -> Result<Output, D
         .map_err(DiscoveryError::Unavailable)
 }
 
-fn interpret_output(output: Output) -> Result<Snapshot, DiscoveryError> {
+pub(crate) fn ensure_success(output: &Output) -> Result<(), DiscoveryError> {
     if !output.status.success() {
         let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         return Err(DiscoveryError::CommandFailed {
@@ -95,6 +128,11 @@ fn interpret_output(output: Output) -> Result<Snapshot, DiscoveryError> {
             },
         });
     }
+    Ok(())
+}
+
+fn interpret_output(output: Output) -> Result<Snapshot, DiscoveryError> {
+    ensure_success(&output)?;
     let text = std::str::from_utf8(&output.stdout)
         .map_err(|error| invalid_output(0, format!("metadata is not UTF-8: {error}")))?;
     parse_snapshot(text)

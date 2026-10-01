@@ -2,10 +2,12 @@
 
 use std::path::PathBuf;
 
+mod actions;
 mod model;
 mod tmux;
 mod work_items;
 
+pub use actions::{ActionError, MAX_INPUT_BYTES, validate_agent_input};
 pub use model::{Pane, Session, Snapshot, Window};
 pub use tmux::DiscoveryError;
 use work_items::WorkItemStore;
@@ -18,6 +20,7 @@ pub use work_items::{
 #[derive(Debug)]
 pub struct Engine {
     store: WorkItemStore,
+    tmux: tmux::TmuxClient,
 }
 
 impl Engine {
@@ -25,6 +28,7 @@ impl Engine {
     pub fn new(state_file: impl Into<PathBuf>) -> Self {
         Self {
             store: WorkItemStore::new(state_file.into()),
+            tmux: tmux::TmuxClient::default(),
         }
     }
 
@@ -76,6 +80,6 @@ impl Engine {
     /// environment). Missing tmux, an unreachable server, malformed metadata,
     /// and command timeouts are returned as errors rather than panics.
     pub async fn discover(&self) -> Result<Snapshot, DiscoveryError> {
-        tmux::discover().await
+        self.tmux.discover().await
     }
 }

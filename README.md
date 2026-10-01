@@ -1,6 +1,7 @@
 # Agent Workbench
 
-M1–M2: persistent work items mapped to tmux panes, alongside a read-only terminal
+M1–M3: persistent work items mapped to tmux panes, navigation and reply submission,
+alongside a read-only terminal
 view of your sessions, windows, and panes. Requires Rust 1.88+ and tmux on `PATH`
 for live discovery. Registration and listing also work without tmux.
 
@@ -10,7 +11,8 @@ cargo run -p workbench-tui --bin workbench
 
 Run in an interactive terminal, inside or outside tmux. Discovery uses tmux's
 normal server selection: the inherited `TMUX` environment when present, otherwise
-the default socket. It does not create sessions, switch panes, or send input.
+the default socket. Discovery is read-only. Only explicit open/reply actions
+switch to panes or submit input; no sessions or workspaces are created.
 
 The TUI opens in **WORK**, showing registered items with `UNKNOWN` agent status,
 their type, repository, workspace, optional branch, and mapped pane ID. Pane
@@ -23,10 +25,49 @@ The session view shows session names/IDs, window names/indices/IDs, and pane IDs
 titles, current commands, and working directories. Missing command/path metadata
 is shown as `unavailable`. Discovery refreshes in the background every two seconds;
 errors replace the displayed snapshot and retry automatically. Each command has a
-three-second timeout. Quit with `q`, `Esc`, or `Ctrl-C`; scroll with arrow keys or
-Page Up/Page Down, and return to the top with Home. Resize is handled automatically.
+three-second timeout. Quit with `q`, `Esc`, or `Ctrl-C` when not composing a reply.
+In WORK, `j/k` or arrows move selection. Page Up/Page Down scroll details; Home
+selects the first item. The sessions view still uses arrows to scroll. Resize is handled automatically.
 Long metadata lines are clipped to terminal width; control characters are displayed
 as escapes.
+
+## Navigation and replies
+
+In WORK, the selected item is highlighted with `>`:
+
+| Key | Action |
+| --- | --- |
+| `j` / `↓`, `k` / `↑` | Select the next/previous work item. |
+| `Enter` | Open/focus the selected item's mapped pane. |
+| `r` | Compose a reply to the selected item. |
+| `Tab` | Select the next item known to need attention; currently reports none because all statuses are `UNKNOWN`. |
+| `s`, `w` | Switch to sessions or work items. |
+
+Opening from inside tmux switches its current client to the target session/window/
+pane; Workbench stays running in its original pane. Use your tmux navigation keys
+to return. Opening from outside tmux temporarily attaches this terminal to the
+target; detach with your tmux binding (normally `Ctrl-b d`) to return to Workbench.
+Workbench restores terminal mode before opening and reinitializes it afterward.
+It never detaches other clients. tmux resolves the current client when more than
+one is attached; client selection is not configurable yet.
+
+In the reply editor, type or paste a single line, use Backspace to edit or `Ctrl-u`
+to clear it, and press `Enter` to submit. `Esc`/`Ctrl-C` cancels before submission.
+Replies are limited to 4096 UTF-8 bytes; multiline and control-character pastes are
+rejected without changing the draft. The editor captures the work-item ID, so a
+refresh or selection change cannot redirect the draft to another item. Replies
+are temporary and are not persisted.
+
+The core reloads the registration and rediscovers the pane before every action.
+Text is encoded as literal UTF-8 bytes using `send-keys -H`, followed by one Enter;
+key names, tmux formats, flags, and semicolons in the reply remain literal text.
+Reply submission does not switch panes. Sending occurs in the background and is
+never retried automatically. A failed send retains the draft: inspect the target
+before manually resending, because a command can fail after partial delivery.
+Once submission starts, cancellation is unavailable until it completes. Missing
+panes and command failures are shown in WORK without deleting the registration.
+Input is sent to whatever program is running in the mapped pane; agent detection
+is not implemented yet. Exit tmux copy mode before sending a reply.
 
 ## Manual registration
 
@@ -88,10 +129,10 @@ Metadata must be UTF-8. ASCII unit/record separators (`U+001F`/`U+001E`) are
 reserved for the discovery format; metadata containing those rare characters is
 reported as malformed. Ordinary spaces, tabs, newlines, and Unicode are preserved.
 Only the selected tmux server is discovered; multi-server aggregation is not part
-of M1–M2. Saved pane IDs refer to the selected server; tmux can reuse IDs after a
+of M1–M3. Saved pane IDs refer to the selected server; tmux can reuse IDs after a
 server restart, so check mappings after restarting tmux. There is no pane remapping
-or deletion command yet. There is no agent classification, navigation to panes,
-input forwarding, or Git/review functionality; those belong to later milestones.
+or deletion command yet. There is no agent classification or Git/review
+functionality; those belong to later milestones.
 
 ## Checks
 
@@ -106,4 +147,12 @@ smoke test checks the real adapter against an existing tmux server:
 
 ```sh
 cargo test -p workbench-core discovers_live_tmux -- --ignored
+```
+
+An opt-in action test creates its own isolated tmux server, delivers literal
+Unicode input to a `cat` pane, checks disappearing-pane errors, and cleans up only
+that server:
+
+```sh
+cargo test -p workbench-core isolated_tmux_input_is_literal_and_missing_panes_are_safe -- --ignored
 ```

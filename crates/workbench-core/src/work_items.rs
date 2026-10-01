@@ -44,6 +44,13 @@ pub enum AgentStatus {
     Unknown,
 }
 
+impl AgentStatus {
+    /// UNKNOWN does not imply that an agent needs input.
+    pub fn needs_attention(self) -> bool {
+        false
+    }
+}
+
 impl fmt::Display for AgentStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("UNKNOWN")

@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, ffi::OsString, path::PathBuf};
 
 use workbench_core::{WorkItem, WorkItemKind, default_state_file};
 
-pub(crate) const HELP: &str = "Agent Workbench — M2 work items
+pub(crate) const HELP: &str = "Agent Workbench — M3 navigation and input
 
 Usage:
   workbench [--state-file PATH]
@@ -13,6 +13,8 @@ Usage:
   workbench --help
 
 The TUI defaults to WORK; press s for sessions and w for work items.
+j/k or arrows select; Enter opens the pane; r composes a single-line reply.
+Enter submits a reply and Esc cancels. Tab reports known attention items (none yet).
 Registration does not require a running tmux server. Relative repository/workspace
 paths are resolved from the current directory; expand ~ using your shell.
 State: --state-file, then AGENT_WORKBENCH_STATE_FILE, then
