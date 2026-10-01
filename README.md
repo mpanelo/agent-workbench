@@ -162,12 +162,17 @@ status, in registration order. Running, idle, and unknown items remain in WORK;
 unknowns are explicitly reported as unclassified, not assumed idle. WORK's header
 also shows the attention count. Store/discovery errors and empty queues are visible.
 
-Waiting cards show the full visible approval question, environment, reason, and
-command, when available. Only the current dialog is retained, excluding prior
-conversation and approval choices. Blank lines and relative command indentation
+Waiting cards show the full visible approval question, environment, reason,
+command, and an **Options** section when choices are available. Option numbers,
+shortcut labels, the agent's selected marker, and wrapped descriptions are
+preserved. The selected waiting item in WORK shows the same prompt and options.
+Only the current dialog is retained, excluding prior conversation and the agent's
+confirmation footer. Blank lines and relative command indentation
 are preserved; reasons and commands are not cut off after a fixed number of lines.
-Dialog text is bounded at 16,384 Unicode characters, with an explicit warning if
-that limit is exceeded. Text wraps to terminal width; use Page Up/Page Down to
+Dialog text is bounded at 16,384 Unicode characters and options have a separate
+4,096-character budget so a long reason cannot hide all choices. Both have an
+explicit warning if clipped. Options are displayed, not automatically selected;
+use `r` to reply or `Enter` to open the pane. Text wraps to terminal width; use Page Up/Page Down to
 scroll long dialogs, or `Enter` for the full pane. Content already clipped by the
 agent's own screen cannot be recovered from a viewport capture. Completion cards say the **turn**
 finished, without claiming the whole task is done or inventing changed-file counts.

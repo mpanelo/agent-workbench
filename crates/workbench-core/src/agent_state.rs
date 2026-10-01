@@ -13,8 +13,11 @@ const MAX_COMPOSER_ROWS: usize = 20;
 const QUEUED_MESSAGES_TITLE: &str =
     "Messages to be submitted after next tool call (press esc to interrupt and send immediately)";
 const MAX_APPROVAL_CHARS: usize = 16 * 1024;
+const MAX_APPROVAL_OPTIONS_CHARS: usize = 4 * 1024;
 const APPROVAL_CLIPPED: &str =
     "\n[Approval dialog exceeded the display limit. Press Enter to inspect the full pane.]";
+const OPTIONS_CLIPPED: &str =
+    "\n[Options exceeded the display limit. Press Enter to inspect the full pane.]";
 
 impl Engine {
     /// Resolve registrations and infer status from live, read-only pane observations.
@@ -383,9 +386,14 @@ fn approval_prompt(observation: &PaneObservation, status: AgentStatus) -> Option
     let start = lines.iter().rposition(|line| approval_title(line.trim()))?;
     let context: Vec<_> = lines[start..]
         .iter()
-        .take_while(|line| !approval_option(line.trim()) && !approval_footer(line.trim()))
+        .take_while(|line| !approval_footer(line.trim()))
         .copied()
         .collect();
+    let option_start = context
+        .iter()
+        .position(|line| approval_option(line.trim()))
+        .unwrap_or(context.len());
+    let (context, options) = context.split_at(option_start);
     // Strip only the common UI margin, preserving command indentation, blank
     // lines and wrapped reason continuations. The whole visible dialog matters:
     // metadata/reasons can otherwise consume the budget before the command.
@@ -401,11 +409,29 @@ fn approval_prompt(observation: &PaneObservation, status: AgentStatus) -> Option
         .collect::<Vec<_>>()
         .join("\n");
     let text = text.trim_end();
-    let mut preview: String = text.chars().take(MAX_APPROVAL_CHARS).collect();
-    if text.chars().count() > MAX_APPROVAL_CHARS {
-        preview.push_str(APPROVAL_CLIPPED);
+    let mut preview = bounded_preview(text, MAX_APPROVAL_CHARS, APPROVAL_CLIPPED);
+    if !options.is_empty() {
+        // Keep the menu separate from the body budget: a long command/reason
+        // must not hide all choices. Preserve selected markers, shortcut labels,
+        // indentation and wrapped descriptions exactly as captured.
+        let options = options.join("\n");
+        preview.push_str("\n\nOptions:\n");
+        preview.push_str(&bounded_preview(
+            options.trim_end(),
+            MAX_APPROVAL_OPTIONS_CHARS,
+            OPTIONS_CLIPPED,
+        ));
     }
     Some(preview)
+}
+
+fn bounded_preview(text: &str, limit: usize, clipped: &str) -> String {
+    let mut chars = text.chars();
+    let mut preview: String = chars.by_ref().take(limit).collect();
+    if chars.next().is_some() {
+        preview.push_str(clipped);
+    }
+    preview
 }
 
 fn completion_indicator(line: &str) -> bool {
@@ -819,21 +845,24 @@ mod tests {
         let preview = approval_prompt(&pane, infer(&pane).0).unwrap();
         assert_eq!(
             preview,
-            "Would you like to run the following command?\n\n$ cargo test"
+            "Would you like to run the following command?\n\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)"
         );
         assert!(!preview.contains("Private earlier"));
-        assert!(!preview.contains("Yes, proceed"));
+        assert!(preview.contains("Yes, proceed"));
+        assert!(!preview.contains("Press enter to confirm"));
         let long = APPROVAL.replace(
             "$ cargo test",
             &format!("$ {}", "λ🙂".repeat(MAX_APPROVAL_CHARS)),
         );
         let long_pane = observation(&long);
         let preview = approval_prompt(&long_pane, infer(&long_pane).0).unwrap();
+        let body = preview.split("\n\nOptions:\n").next().unwrap();
         assert_eq!(
-            preview.chars().count(),
+            body.chars().count(),
             MAX_APPROVAL_CHARS + APPROVAL_CLIPPED.chars().count()
         );
-        assert!(preview.ends_with(APPROVAL_CLIPPED));
+        assert!(body.ends_with(APPROVAL_CLIPPED));
+        assert!(preview.contains("2. No, and tell Codex what to do differently (esc)"));
         assert!(preview.contains("λ🙂"));
         let multi_line = APPROVAL.replace("$ cargo test", "First\nSecond\nThird\nFourth\nFifth");
         let multi_pane = observation(&multi_line);
@@ -861,7 +890,9 @@ mod tests {
             "$ git -c commit.gpgsign=false commit -m \"Remove obsolete Packer\ninstallation\""
         ));
         assert!(!prompt.contains("Earlier unrelated"));
-        assert!(!prompt.contains("Yes, proceed"));
+        assert!(prompt.contains("Options:\n› 1. Yes, proceed (y)"));
+        assert!(prompt.contains("2. Yes, and don't ask again for this command (p)"));
+        assert!(prompt.contains("3. No, and tell Codex what to do differently (esc)"));
         assert!(!prompt.contains('…'));
     }
 
@@ -872,7 +903,46 @@ mod tests {
         let prompt = approval_prompt(&pane, infer(&pane).0).unwrap();
         assert!(prompt.contains("1. Read-only inspection\n2. Preserve all existing files"));
         assert!(prompt.contains("$ printf '%s\\n' \\\n    'λ🙂 value'"));
-        assert!(!prompt.contains("No, and tell"));
+        assert!(prompt.contains("No, and tell"));
+    }
+
+    #[test]
+    fn approval_options_preserve_wrapping_selection_and_shortcuts_only_for_current_dialog() {
+        let screen = format!(
+            "{APPROVAL}\nPrior output to exclude\n  Would you like to grant these permissions?\n\n  Reason: Access λ🙂 files\n\n  1. Yes, allow once (y)\n› 2. Yes, allow access to these folders (a)\n     Preserve the existing permissions and\n     include the λ🙂 workspace.\n  3. No, and tell Codex what to do differently (esc)\n\n  Press Enter to confirm or Esc to cancel\n"
+        );
+        let pane = observation(&screen);
+        let prompt = approval_prompt(&pane, infer(&pane).0).unwrap();
+        assert!(prompt.starts_with("Would you like to grant these permissions?\n\nReason:"));
+        assert!(prompt.contains("Options:\n  1. Yes, allow once (y)\n› 2. Yes, allow access to these folders (a)\n     Preserve the existing permissions and\n     include the λ🙂 workspace."));
+        assert!(prompt.contains("3. No, and tell Codex what to do differently (esc)"));
+        assert!(!prompt.contains("Prior output"));
+        assert!(!prompt.contains("cargo test"));
+        assert!(!prompt.contains("Press Enter to confirm"));
+    }
+
+    #[test]
+    fn approval_option_budget_is_unicode_safe_and_missing_options_are_not_invented() {
+        let screen = APPROVAL.replace(
+            "Yes, proceed (y)",
+            &format!("Yes, {} (y)", "λ🙂".repeat(MAX_APPROVAL_OPTIONS_CHARS)),
+        );
+        let pane = observation(&screen);
+        let prompt = approval_prompt(&pane, infer(&pane).0).unwrap();
+        let options = prompt.split_once("\n\nOptions:\n").unwrap().1;
+        assert_eq!(
+            options.chars().count(),
+            MAX_APPROVAL_OPTIONS_CHARS + OPTIONS_CLIPPED.chars().count()
+        );
+        assert!(options.ends_with(OPTIONS_CLIPPED));
+        assert!(prompt.contains("$ cargo test"));
+        let no_menu = observation(
+            "Would you like to run the following command?\n$ cargo test\nPress enter to confirm or esc to cancel\n",
+        );
+        assert_eq!(infer(&no_menu).0, AgentStatus::Unknown);
+        assert!(approval_prompt(&no_menu, infer(&no_menu).0).is_none());
+        let context = approval_prompt(&no_menu, AgentStatus::WaitingForInput).unwrap();
+        assert!(!context.contains("Options:"));
     }
 
     #[cfg(unix)]

@@ -133,7 +133,13 @@ fn render_items(
                     Style::default().fg(if selected { Color::Yellow } else { Color::Cyan }),
                 ));
                 lines.push(Line::from(format!("  {}", visible(&item.title))));
-                if view == View::Attention {
+                if view == View::Work {
+                    lines.push(Line::from(format!(
+                        "  Status: {}",
+                        visible(&state.status_detail)
+                    )));
+                }
+                if view == View::Attention || selected {
                     if state.status == workbench_core::AgentStatus::WaitingForInput {
                         lines.push(Line::from("  Agent requests input:"));
                         if let Some(prompt) = &state.attention_prompt {
@@ -141,15 +147,10 @@ fn render_items(
                         } else {
                             lines.push(Line::from(format!("  {}", visible(&state.status_detail))));
                         }
-                    } else {
+                    } else if view == View::Attention {
                         lines.push(Line::from("  Agent turn completed."));
                         lines.push(Line::from("  Overall task completion is unverified."));
                     }
-                } else {
-                    lines.push(Line::from(format!(
-                        "  Status: {}",
-                        visible(&state.status_detail)
-                    )));
                 }
                 lines.push(Line::from(format!(
                     "  Type: {}  Pane: {} ({})",
@@ -626,8 +627,7 @@ mod tests {
     fn attention_shows_only_queue_items_with_prompt_context_and_completion_caveat() {
         let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         waiting.status = AgentStatus::WaitingForInput;
-        waiting.attention_prompt =
-            Some("Would you like to run the following command?\n$ cargo test -- λ🙂".into());
+        waiting.attention_prompt = Some("Would you like to run the following command?\n$ cargo test -- λ🙂\n\nOptions:\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n  3. No, and tell Codex what to do differently (esc)".into());
         let mut complete = registered(PaneAvailability::Present, WorkItemKind::ExternalReview);
         complete.item.id = "PR #1842".into();
         complete.status = AgentStatus::Complete;
@@ -644,6 +644,10 @@ mod tests {
             "ABC-123  WAITING_FOR_INPUT",
             "Agent requests input:",
             "$ cargo test -- λ🙂",
+            "Options:",
+            "› 1. Yes, proceed (y)",
+            "2. Yes, and don't ask again (p)",
+            "3. No, and tell Codex what to do differently (esc)",
             "PR #1842  COMPLETE",
             "Agent turn completed.",
             "Overall task completion is unverified.",
@@ -656,7 +660,10 @@ mod tests {
         }
         assert!(!text.contains("HIDDEN_UNKNOWN"));
         assert!(!text.contains("HIDDEN_RUNNING"));
-        assert!(work_screen(&state, 120, 30, &mut 0).contains("attention: 2 (a)"));
+        let work = work_screen(&state, 120, 35, &mut 0);
+        assert!(work.contains("attention: 2 (a)"));
+        assert!(work.contains("Options:"));
+        assert!(work.contains("› 1. Yes, proceed (y)"));
         assert!(attention_screen(&state, 80, 24, &mut 0).contains("q: quit"));
     }
 
@@ -665,7 +672,7 @@ mod tests {
         let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         waiting.status = AgentStatus::WaitingForInput;
         waiting.attention_prompt = Some(format!(
-            "Would you like to run the following command?\n\nEnvironment: local\n\nReason: {}Shared metadata requires write access. END-OF-REASON\n\n$ git -c commit.gpgsign=false commit -m \"Remove obsolete Packer installation\"",
+            "Would you like to run the following command?\n\nEnvironment: local\n\nReason: {}Shared metadata requires write access. END-OF-REASON\n\n$ git -c commit.gpgsign=false commit -m \"Remove obsolete Packer installation\"\n\nOptions:\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n     Permission applies only to this command prefix.\n  3. No, and tell Codex what to do differently (esc)",
             "Preserve signing settings for future commits. λ🙂 ".repeat(20)
         ));
         let state = AppState::from_refresh(Ok(snapshot()), Ok(vec![waiting]));
@@ -710,7 +717,59 @@ mod tests {
         assert!(pages.contains("END-OF-REASON"));
         assert!(pages.contains("git -c commit.gpgsign=false"));
         assert!(pages.contains("Packer installation"));
+        assert!(pages.contains("Options:"));
+        assert!(pages.contains("› 1. Yes, proceed (y)"));
+        assert!(pages.contains("3. No, and tell Codex what to do differently (esc)"));
+        assert!(pages.contains("Permission applies only to this command prefix."));
         assert_eq!(interaction.selected_id.as_deref(), Some("ABC-123"));
+    }
+
+    #[test]
+    fn work_shows_options_only_for_the_selected_waiting_item_and_keeps_reply_editor() {
+        let states = ["A", "B"].into_iter().map(|id| {
+            let mut state = registered(PaneAvailability::Present, WorkItemKind::Implementation);
+            state.item.id = id.into();
+            state.status = AgentStatus::WaitingForInput;
+            state.attention_prompt = Some(format!("Question for {id}\n\nOptions:\n› 1. Yes, approve {id} (y)\n  2. No, reject {id} (esc)"));
+            state
+        }).collect();
+        let state = AppState::from_refresh(Ok(snapshot()), Ok(states));
+        let mut interaction = Interaction::default();
+        interaction.sync(state.items_for(View::Work));
+        interaction.move_selection(state.items_for(View::Work), 1);
+        interaction.begin_reply(state.items_for(View::Work));
+        interaction.draft.as_mut().unwrap().append("y").unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        for expected in [
+            "> B  WAITING_FOR_INPUT",
+            "Question for B",
+            "Options:",
+            "Yes, approve B (y)",
+            "No, reject B (esc)",
+            "Reply to B",
+            "Enter: send",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+        assert!(!text.contains("Question for A"));
+        assert!(!text.contains("approve A"));
+        assert_eq!(interaction.draft.as_ref().unwrap().text, "y");
+        for (width, height) in [(45, 12), (1, 1)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+                .unwrap();
+        }
     }
 
     #[test]
