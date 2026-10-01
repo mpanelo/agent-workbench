@@ -66,17 +66,21 @@ switch to panes or submit input; no sessions or workspaces are created.
 The TUI opens in **ATTENTION**, showing items currently known to need input or
 whose agent turn completed. Press `a` to return there, `w` for **WORK**, or `s`
 for the session view. WORK shows all registered items with observed agent status,
-their type, repository, workspace, and optional branch. Pane IDs stay in SESSIONS
-and are hidden in WORK. WORK shows an agent-pane warning only when the mapping
-is missing from a successful discovery or unavailable because discovery failed.
+their type, repository, workspace, and optional branch. Tmux IDs are kept internally
+and hidden in the WORK and SESSIONS lists. WORK shows an agent-pane warning only
+when the mapping is missing from a successful discovery or unavailable because
+discovery failed.
 Pane availability is separate from agent status; a disappeared pane does not
 remove its registration.
 
-The session view shows session names/IDs, window names/indices/IDs, and pane IDs, indices,
-titles, current commands, and working directories. Missing command/path metadata
-is shown as `unavailable` in all-pane mode. By default, SESSIONS shows only panes
-whose foreground command basename is `codex`, `claude`, `gemini`, `opencode`,
-`aider`, `goose`, or `amp`. Empty windows and sessions are hidden. Press `f` to
+The session view groups agents by session and window name. Each entry shows its
+command, optional pane title, and working directory, with a compact registered-work
+badge when applicable. Tmux IDs and numeric indices are hidden; navigation and
+registration still use stable pane IDs internally. Repeated command/title text is
+omitted. Missing command/path metadata is shown as unavailable in all-pane mode.
+By default, SESSIONS shows only panes whose foreground command basename is
+`codex`, `claude`, `gemini`, `opencode`, `aider`, `goose`, or `amp`.
+Empty windows and sessions are hidden. Press `f` to
 toggle all panes; the header and footer show the current mode. The setting lasts
 until you exit Workbench. Selection and registration use the visible panes only.
 
@@ -475,9 +479,10 @@ before the arguments). For example:
 ./target/debug/workbench list
 ```
 
-For scripted registration, use pane IDs from the sessions view (interactive
-registration above fills them in automatically). IDs uniquely identify work items;
-Short Description is a human-readable summary. Neither requires a Jira or GitHub
+For scripted registration, obtain pane IDs with `tmux list-panes -a -F '#{pane_id} #{pane_current_command} #{pane_current_path}'`
+(interactive registration above fills them in automatically). IDs uniquely
+identify work items; Short Description is a human-readable summary.
+Neither requires a Jira or GitHub
 account. `--short-description` defaults to the ID and is limited to 120 Unicode
 characters for new registrations; a longer ID requires an explicit shorter
 description. `--title` remains a compatible alias (do not supply both).

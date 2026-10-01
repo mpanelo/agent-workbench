@@ -350,18 +350,10 @@ pub(crate) fn render_sessions(
                 ));
             }
             for session in &snapshot.sessions {
-                lines.push(Line::styled(
-                    format!("{}  ({})", visible(&session.name), session.id),
-                    theme::accent(),
-                ));
+                lines.push(Line::styled(visible(&session.name), theme::accent()));
                 for window in &session.windows {
                     lines.push(Line::styled(
-                        format!(
-                            "  {}  {}  ({})",
-                            window.index,
-                            visible(&window.name),
-                            window.id
-                        ),
+                        format!("  {}", visible(&window.name)),
                         theme::accent(),
                     ));
                     for pane in &window.panes {
@@ -377,34 +369,33 @@ pub(crate) fn render_sessions(
                             .map(|item| visible(&item.item.id))
                             .collect::<Vec<_>>()
                             .join(", ");
-                        lines.push(Line::styled(
-                            format!(
-                                "{}{}  pane {}  command: {}  title: {}",
-                                if selected { "  > " } else { "    " },
-                                pane.id,
-                                pane.index,
-                                visible(pane.current_command.as_deref().unwrap_or("unavailable")),
-                                visible(&pane.title),
-                            ),
-                            if selected {
-                                theme::selection().fg(theme::LAVENDER)
-                            } else {
-                                theme::text()
-                            },
-                        ));
+                        let command = pane.current_command.as_deref().unwrap_or("unavailable");
+                        let mut row = vec![Span::raw(format!(
+                            "{}{}",
+                            if selected { "  > " } else { "    " },
+                            visible(command),
+                        ))];
                         if !registered.is_empty() {
-                            lines.push(Line::styled(
-                                format!("      Registered: {registered} (w: work items)"),
-                                theme::status(workbench_core::AgentStatus::Complete),
+                            row.push(Span::styled(
+                                format!("  [Registered: {registered}]"),
+                                ratatui::style::Style::default().fg(theme::GREEN),
                             ));
                         }
+                        if !pane.title.is_empty() && pane.title != command {
+                            row.push(Span::raw(format!(" — {}", visible(&pane.title))));
+                        }
+                        lines.push(Line::from(row).style(if selected {
+                            theme::selection().fg(theme::LAVENDER)
+                        } else {
+                            theme::text()
+                        }));
                         lines.push(Line::styled(
                             format!(
-                                "      cwd: {}",
+                                "      {}",
                                 pane.working_directory
                                     .as_ref()
                                     .map(|path| visible(&display_path(path)))
-                                    .unwrap_or_else(|| "unavailable".to_owned())
+                                    .unwrap_or_else(|| "Directory unavailable".to_owned())
                             ),
                             theme::muted(),
                         ));
@@ -425,8 +416,11 @@ pub(crate) fn render_sessions(
                 if row < *scroll {
                     *scroll = row;
                 }
-                if row >= scroll.saturating_add(body.height) {
-                    *scroll = row.saturating_sub(body.height.saturating_sub(1));
+                let end = row.saturating_add(1);
+                if end >= scroll.saturating_add(body.height) {
+                    *scroll = end.saturating_sub(body.height.saturating_sub(1));
+                    // With a one-row viewport, keep the selectable row visible.
+                    *scroll = (*scroll).min(row);
                 }
             }
             interaction.reveal_pane = false;
@@ -582,16 +576,16 @@ mod tests {
         };
         let text = draw(&state, &mut interaction);
         assert!(text.contains("SESSIONS (agents only)"));
-        assert!(text.contains("%14"));
+        assert!(text.contains("codex — Agent"));
         assert!(text.contains("f: show all panes"));
-        for hidden in ["%15", "hidden-shell-window", "hidden-shell-session"] {
+        for hidden in ["fish", "hidden-shell-window", "hidden-shell-session"] {
             assert!(!text.contains(hidden), "{text}");
         }
         interaction.show_all_panes = true;
         let text = draw(&state, &mut interaction);
         for expected in [
             "SESSIONS (all panes)",
-            "%15",
+            "fish — Shell named codex",
             "hidden-shell-window",
             "hidden-shell-session",
             "f: show agents only",
@@ -608,6 +602,46 @@ mod tests {
     }
 
     #[test]
+    fn compact_sessions_omit_repeated_titles_and_keep_duplicate_panes_selectable() {
+        let mut snapshot = snapshot();
+        let pane = &mut snapshot.sessions[0].windows[0].panes[0];
+        pane.title = "codex".into();
+        let mut second = pane.clone();
+        second.id = "%15".into();
+        second.title.clear();
+        snapshot.sessions[0].windows[0].panes.push(second);
+        let text = screen(Some(Ok(snapshot.clone())), 80, 16, &mut 0);
+        assert_eq!(text.matches("codex").count(), 2);
+        assert!(!text.contains("codex —"));
+        assert!(!text.contains("%14"));
+        assert!(!text.contains("%15"));
+
+        let state = AppState::from_refresh(Ok(snapshot.clone()), Ok(vec![]));
+        let mut interaction = Interaction::default();
+        interaction.sync_panes(&snapshot);
+        interaction.move_pane_selection(&snapshot, 1);
+        assert_eq!(interaction.selected_pane.as_deref(), Some("%15"));
+        for (width, height) in [(40, 4), (1, 1), (0, 1)] {
+            interaction.reveal_pane = true;
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| render_sessions(frame, &state, &mut 0, &mut interaction))
+                .unwrap();
+            if width == 40 {
+                let text: String = terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect();
+                assert!(text.contains("> codex"), "{text}");
+            }
+            assert_eq!(interaction.selected_pane.as_deref(), Some("%15"));
+        }
+    }
+
+    #[test]
     fn sessions_show_registration_and_keep_selected_panes_visible() {
         let mut snapshot = snapshot();
         let mut later = snapshot.sessions[0].windows[0].panes[0].clone();
@@ -616,6 +650,7 @@ mod tests {
         for index in 0..8 {
             let mut middle = later.clone();
             middle.id = format!("%{}", index + 100);
+            middle.title = format!("Middle agent {index}");
             snapshot.sessions[0].windows[0].panes.push(middle);
         }
         snapshot.sessions[0].windows[0].panes.push(later);
@@ -643,7 +678,9 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(text.contains("> %15"));
+        assert!(text.contains("> codex — Later agent"));
+        assert!(text.contains("/work/my repo"));
+        assert_eq!(interaction.selected_pane.as_deref(), Some("%15"));
         assert!(scroll > 0);
         let mut terminal = Terminal::new(TestBackend::new(100, 32)).unwrap();
         interaction.selected_pane = Some("%14".into());
@@ -659,6 +696,13 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(text.contains("Registered: ABC-123"));
+        assert!(!text.contains("w: work items"));
+        theme::assert_text_style(
+            terminal.backend().buffer(),
+            "[Registered: ABC-123]",
+            theme::GREEN,
+            theme::SURFACE,
+        );
         assert!(text.contains("Enter/r: register"));
     }
 
@@ -966,8 +1010,8 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         theme::assert_text_style(buffer, "AGENT WORKBENCH", theme::LAVENDER, theme::MANTLE);
-        theme::assert_text_style(buffer, "pane 0", theme::LAVENDER, theme::SURFACE);
-        theme::assert_text_style(buffer, "cwd:", theme::SUBTEXT, theme::BASE);
+        theme::assert_text_style(buffer, "> codex", theme::LAVENDER, theme::SURFACE);
+        theme::assert_text_style(buffer, "/work/my repo", theme::SUBTEXT, theme::BASE);
         let failed = AppState::from_refresh(Err("test discovery error".into()), Ok(vec![]));
         terminal
             .draw(|frame| render_sessions(frame, &failed, &mut 0, &mut interaction))
@@ -1267,19 +1311,21 @@ mod tests {
     }
 
     #[test]
-    fn displays_hierarchy_and_all_pane_metadata() {
+    fn displays_human_context_without_tmux_ids_indices_or_metadata_labels() {
         let text = screen(Some(Ok(snapshot())), 100, 12, &mut 0);
         for expected in [
             "SESSIONS",
-            "main  ($1)",
-            "2  auth  (@2)",
-            "%14",
-            "pane 0",
-            "command: codex",
-            "title: Agent",
-            "cwd: /work/my repo",
+            "main",
+            "  auth",
+            "> codex — Agent",
+            "/work/my repo",
         ] {
             assert!(text.contains(expected), "missing {expected:?} in {text}");
+        }
+        for hidden in [
+            "$1", "@2", "%14", "pane 0", "2  auth", "command:", "title:", "cwd:",
+        ] {
+            assert!(!text.contains(hidden), "unexpected {hidden:?} in {text}");
         }
     }
 
@@ -1310,8 +1356,8 @@ mod tests {
         pane.working_directory = None;
         pane.title = "one\ntwo\tthree\x1b".into();
         let text = screen(Some(Ok(snapshot)), 100, 12, &mut 0);
-        assert!(text.contains("command: unavailable"));
-        assert!(text.contains("cwd: unavailable"));
+        assert!(text.contains("> unavailable"));
+        assert!(text.contains("Directory unavailable"));
         assert!(text.contains("one\\ntwo\\tthree\\u{1b}"));
     }
 
@@ -1320,7 +1366,7 @@ mod tests {
         let mut scroll = u16::MAX;
         let text = screen(Some(Ok(snapshot())), 100, 5, &mut scroll);
         assert_eq!(scroll, 3);
-        assert!(text.contains("cwd: /work/my repo"));
+        assert!(text.contains("/work/my repo"));
         screen(Some(Ok(Snapshot::default())), 10, 2, &mut scroll);
         assert_eq!(scroll, 1);
         screen(Some(Ok(snapshot())), 1, 1, &mut scroll);
