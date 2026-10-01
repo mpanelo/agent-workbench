@@ -130,7 +130,7 @@ impl fmt::Display for WorkItemError {
             ),
             Self::Busy(path) => write!(
                 f,
-                "Work-item state {} is being updated by another process; retry registration.",
+                "Work-item state {} is being updated by another process; retry the operation.",
                 path.display()
             ),
         }

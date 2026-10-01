@@ -135,6 +135,30 @@ yourself. Detached HEAD leaves the optional branch blank. No tmux sessions,
 workspaces, or worktrees are created. The CLI remains available for scripting,
 offline registration, or deliberately mapping multiple items to one pane.
 
+## Edit or unregister work items
+
+In WORK, select a registered item with `j/k` or arrows:
+
+- `e` edits its Short Description. Enter saves; Esc/Ctrl-C cancels. The editor
+  shows the 120-character counter, supports Unicode paste, Backspace and Ctrl+u,
+  and leaves the ID, kind, repository, workspace, branch and pane mapping unchanged.
+- `u` opens an unregister confirmation. Enter removes only the Workbench entry;
+  Esc/Ctrl-C cancels. The tmux pane, branch, worktree, files and review history are
+  kept. This is not task completion, archiving, or workspace cleanup.
+
+Both actions work with missing panes or unavailable tmux. The dialog stays bound
+to the captured item even when the list refreshes. Writes use the registration
+lock and atomic-save path; an externally changed or removed item is rejected
+instead of overwriting another process's work. Errors keep the dialog/draft open
+for retry; cancel and reopen after a stale-item error. Controls are disabled while
+saving to prevent duplicate writes. Existing longer descriptions can be shortened
+or cleared, but must fit the limit before saving.
+
+Unregistered items disappear immediately from WORK and ATTENTION. To undo,
+register the same item again; using the same ID, workspace and review base lets
+its retained review snapshots be reused. There is no automatic review-history
+pruning or worktree deletion.
+
 ## Navigation and replies
 
 In ATTENTION and WORK, the selected item is highlighted with `>`:
@@ -485,9 +509,10 @@ reserved for the discovery format; metadata containing those rare characters is
 reported as malformed. Ordinary spaces, tabs, newlines, and Unicode are preserved.
 Only the selected tmux server is discovered; multi-server aggregation is not part
 of M1–M6. Saved pane IDs refer to the selected server; tmux can reuse IDs after a
-server restart, so check mappings after restarting tmux. There is no pane remapping
-or deletion command yet. File-level review persistence and changes since review
-are implemented in M7/M8.
+server restart, so check mappings after restarting tmux. Editing IDs, other metadata,
+or pane mappings is not supported yet. WORK supports description edits and
+confirmed registration-only removal. File-level review persistence and changes
+since review are implemented in M7/M8.
 
 ## Checks
 

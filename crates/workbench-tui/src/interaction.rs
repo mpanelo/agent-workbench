@@ -53,6 +53,7 @@ pub(crate) struct Interaction {
     pub selected_pane: Option<String>,
     pub reveal_pane: bool,
     pub registration_requested: Option<String>,
+    pub maintenance_requested: Option<crate::maintenance::Request>,
 }
 
 impl Interaction {

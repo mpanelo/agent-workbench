@@ -56,7 +56,11 @@ fn render_items(
         Constraint::Min(0),
         Constraint::Length(if interaction.message.is_some() { 2 } else { 0 }),
         Constraint::Length(if interaction.draft.is_some() { 3 } else { 0 }),
-        Constraint::Length(1),
+        Constraint::Length(if view == View::Work && interaction.draft.is_none() {
+            2
+        } else {
+            1
+        }),
     ])
     .areas(frame.area());
     let count = match &state.work_items {
@@ -264,6 +268,8 @@ fn render_items(
     frame.render_widget(
         theme::footer(if interaction.draft.is_some() {
             "Enter: send | Esc/Ctrl-C: cancel | Backspace: edit | Ctrl-u: clear"
+        } else if view == View::Work {
+            "e: edit description | u: unregister\nj/k | Enter: open | r: reply | d: review | Ctrl+d/u: scroll | a/w/s | q: quit"
         } else {
             "j/k | Enter: open | r: reply | d: review | Ctrl+d/u: scroll | a/w/s | q: quit"
         }),
@@ -663,6 +669,12 @@ mod tests {
         let state = AppState::default();
         for view in [View::Attention, View::Work] {
             let text = item_screen(&state, 80, 10, &mut 0, view);
+            let maintenance = "e: edit description | u: unregister";
+            if view == View::Work {
+                assert_eq!(text.lines().nth(8).unwrap().trim_end(), maintenance);
+            } else {
+                assert!(!text.contains(maintenance));
+            }
             assert_eq!(
                 text.lines().last().unwrap().trim_end(),
                 "j/k | Enter: open | r: reply | d: review | Ctrl+d/u: scroll | a/w/s | q: quit"

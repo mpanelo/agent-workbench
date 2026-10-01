@@ -17,6 +17,8 @@ In REVIEW, Space saves file marks; r reloads while restoring unchanged marks.
 Marks persist across restarts; changed captured diffs require re-review.
 In SESSIONS, j/k or arrows select a pane; Enter or r opens registration with
 pane/Git metadata filled in. Enter confirms; Tab changes fields; Esc cancels.
+In WORK, e edits Short Description; u opens unregister confirmation. Unregistering
+removes only the Workbench entry, keeping pane, branch, worktree and review history.
 Short descriptions are limited to 120 Unicode characters; --title is a legacy
 alias for --short-description. When omitted, the description defaults to the ID.
 j/k or arrows select; Enter opens the pane; r composes a single-line reply.

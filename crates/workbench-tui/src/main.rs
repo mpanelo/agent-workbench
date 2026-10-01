@@ -10,6 +10,7 @@ use workbench_core::{Engine, Snapshot, WorkItemState, attention_items, validate_
 
 mod cli;
 mod interaction;
+mod maintenance;
 mod registration;
 mod review;
 mod theme;
@@ -25,6 +26,31 @@ struct AppState {
 }
 
 impl AppState {
+    /// Reconcile fresh registration data against observations, preventing an
+    /// in-flight discovery snapshot from resurrecting a removed/edited entry.
+    fn reload_registry(&mut self, engine: &Engine) {
+        let previous = self.items().to_vec();
+        self.work_items = Some(
+            engine
+                .work_item_states(self.snapshot())
+                .map(|mut items| {
+                    for current in &mut items {
+                        if let Some(old) = previous.iter().find(|old| {
+                            let mut observed = old.item.clone();
+                            observed.title.clone_from(&current.item.title);
+                            observed == current.item && old.pane == current.pane
+                        }) {
+                            current.status = old.status;
+                            current.status_detail.clone_from(&old.status_detail);
+                            current.attention_prompt.clone_from(&old.attention_prompt);
+                        }
+                    }
+                    items
+                })
+                .map_err(|error| error.to_string()),
+        );
+        self.attention = attention_items(self.items());
+    }
     fn snapshot(&self) -> Option<&Snapshot> {
         self.discovery
             .as_ref()
@@ -219,12 +245,16 @@ async fn event_loop(
     let mut preparations = JoinSet::new();
     let mut registrations = JoinSet::<Result<workbench_core::WorkItem, String>>::new();
     let mut registration = registration::RegistrationUi::default();
+    let mut maintenance = maintenance::MaintenanceUi::default();
+    let mut mutations = JoinSet::<(String, Result<(), String>)>::new();
     let mut input_tick = time::interval(Duration::from_millis(100));
     input_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         if redraw {
             terminal.draw(|frame| {
-                if registration.pane.is_some() {
+                if maintenance.is_open() {
+                    maintenance.render(frame);
+                } else if registration.pane.is_some() {
                     registration.render(frame);
                 } else if reviews.is_open() {
                     reviews.render(frame);
@@ -243,6 +273,22 @@ async fn event_loop(
             redraw = false;
         }
         tokio::select! {
+            completed = mutations.join_next(), if !mutations.is_empty() => {
+                match completed {
+                    Some(Ok((message, result))) => {
+                        let success = result.is_ok();
+                        maintenance.finish(result);
+                        if success {
+                            state.reload_registry(&engine);
+                            interaction.sync(state.items_for(*view));
+                            interaction.reveal_selection = true;
+                            interaction.message = Some(message);
+                        }
+                    }
+                    _ => maintenance.finish(Err("Maintenance task stopped unexpectedly; inspect WORK before retrying.".into())),
+                }
+                redraw = true;
+            }
             completed = preparations.join_next(), if !preparations.is_empty() => {
                 match completed {
                     Some(Ok((ticket, result))) => registration.finish(ticket, result),
@@ -258,14 +304,7 @@ async fn event_loop(
                         registration.close();
                         // Make the saved item immediately visible. Retain observations
                         // for unchanged existing items until the next normal refresh.
-                        let previous = state.items().to_vec();
-                        state.work_items = Some(engine.work_item_states(state.snapshot()).map(|mut items| {
-                            for current in &mut items {
-                                if let Some(old) = previous.iter().find(|old| old.item == current.item) { *current = old.clone(); }
-                            }
-                            items
-                        }).map_err(|error| error.to_string()));
-                        state.attention = attention_items(state.items());
+                        state.reload_registry(&engine);
                         *view = ui::View::Work;
                         scroll = 0;
                         interaction.selected_id = Some(item.id.clone());
@@ -298,6 +337,7 @@ async fn event_loop(
                 let updated = receiver.borrow_and_update().clone();
                 let attention_changed = state.attention != updated.attention;
                 state = updated;
+                state.reload_registry(&engine);
                 if let Some(snapshot) = state.snapshot() { interaction.sync_panes(snapshot); }
                 interaction.sync(state.items_for(*view));
                 let position = state.items_for(*view).iter().position(|item| Some(&item.item.id) == interaction.selected_id.as_ref());
@@ -320,6 +360,19 @@ async fn event_loop(
                     redraw = true;
                     let event = event::read()?;
                     if matches!(event, Event::Resize(_, _)) { interaction.reveal_selection = true; interaction.reveal_pane = true; }
+                    if maintenance.is_open() {
+                        match event {
+                            Event::Paste(text) => maintenance.paste(&text),
+                            Event::Key(key) if key.kind != KeyEventKind::Release => {
+                                if let maintenance::Intent::Save(mutation) = maintenance.key(key) {
+                                    let engine = Arc::clone(&engine);
+                                    mutations.spawn_blocking(move || (mutation.success_message(), mutation.execute(&engine)));
+                                }
+                            }
+                            _ => {},
+                        }
+                        continue;
+                    }
                     if registration.pane.is_some() {
                         match event {
                             Event::Paste(text) => registration.paste(&text),
@@ -400,6 +453,10 @@ async fn event_loop(
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(RunExit::Quit),
                             _ => {
                                 if let Some(id) = navigate(key, &state, view, &mut scroll, interaction, terminal.size()?.height) { return Ok(RunExit::Focus(id)); }
+                                if let Some(request) = interaction.maintenance_requested.take() {
+                                    interaction.message = None;
+                                    maintenance.open(request);
+                                }
                                 if let Some(id) = interaction.review_requested.take()
                                     && let Some(ticket) = reviews.open(id.clone()) {
                                         diffs.abort_all();
@@ -486,6 +543,19 @@ fn navigate(
             interaction.message = Some("Select an item in the current view first.".into());
         }
         KeyCode::Char('r') if view.is_item_view() => interaction.begin_reply(items),
+        KeyCode::Char('e' | 'u') if *view == ui::View::Work => {
+            interaction.maintenance_requested = interaction.selected(items).map(|selected| {
+                if key.code == KeyCode::Char('e') {
+                    maintenance::Request::Edit(selected.item.clone())
+                } else {
+                    maintenance::Request::Unregister(selected.item.clone())
+                }
+            });
+            interaction.message = interaction
+                .maintenance_requested
+                .is_none()
+                .then(|| "Select an item in WORK first.".into());
+        }
         KeyCode::Tab if view.is_item_view() => interaction.next_attention(items),
         KeyCode::Char('d') if view.is_item_view() => {
             interaction.review_requested = interaction
@@ -536,6 +606,123 @@ fn navigate(
 mod tests {
     use super::*;
     use workbench_core::{AgentStatus, PaneAvailability, WorkItem, WorkItemKind};
+
+    #[test]
+    fn work_maintenance_actions_capture_selection_and_never_target_hidden_items() {
+        let state = state(&[
+            ("hidden", AgentStatus::Running),
+            ("A", AgentStatus::Complete),
+        ]);
+        for mut view in [ui::View::Work, ui::View::Attention, ui::View::Sessions] {
+            let mut interaction = interaction::Interaction::default();
+            interaction.sync(state.items_for(view));
+            for code in [KeyCode::Char('e'), KeyCode::Char('u')] {
+                navigate(code, &state, &mut view, &mut 0, &mut interaction, 24);
+                if view == ui::View::Work {
+                    match interaction.maintenance_requested.take().unwrap() {
+                        maintenance::Request::Edit(item) => {
+                            assert_eq!(code, KeyCode::Char('e'));
+                            assert_eq!(item.id, "hidden");
+                        }
+                        maintenance::Request::Unregister(item) => {
+                            assert_eq!(code, KeyCode::Char('u'));
+                            assert_eq!(item.id, "hidden");
+                        }
+                    }
+                } else {
+                    assert!(interaction.maintenance_requested.is_none());
+                }
+            }
+        }
+        let mut view = ui::View::Work;
+        let mut interaction = interaction::Interaction::default();
+        navigate(
+            KeyCode::Char('e'),
+            &AppState::default(),
+            &mut view,
+            &mut 0,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.maintenance_requested.is_none());
+        assert!(interaction.message.unwrap().contains("Select an item"));
+        let mut interaction = interaction::Interaction::default();
+        interaction.sync(state.items());
+        for (code, modifier) in [('e', KeyModifiers::CONTROL), ('u', KeyModifiers::ALT)] {
+            navigate(
+                KeyEvent::new(KeyCode::Char(code), modifier),
+                &state,
+                &mut view,
+                &mut 0,
+                &mut interaction,
+                24,
+            );
+            assert!(interaction.maintenance_requested.is_none());
+        }
+        interaction.begin_reply(state.items());
+        navigate(
+            KeyCode::Char('u'),
+            &state,
+            &mut view,
+            &mut 0,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.maintenance_requested.is_none());
+    }
+
+    #[test]
+    fn registry_reconciliation_removes_stale_refresh_items_and_keeps_live_observations() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("items.json");
+        let engine = Engine::new(&path);
+        let mut stale = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
+        let a = stale.items()[0].item.clone();
+        let b = stale.items()[1].item.clone();
+        engine.register_work_item(a.clone()).unwrap();
+        engine.register_work_item(b.clone()).unwrap();
+        stale.discovery = Some(Ok(Snapshot {
+            sessions: vec![workbench_core::Session {
+                id: "$1".into(),
+                name: "main".into(),
+                windows: vec![workbench_core::Window {
+                    id: "@1".into(),
+                    index: 0,
+                    name: "agent".into(),
+                    panes: vec![workbench_core::Pane {
+                        id: "%14".into(),
+                        index: 0,
+                        title: "Agent".into(),
+                        current_command: Some("codex".into()),
+                        working_directory: Some("/work".into()),
+                    }],
+                }],
+            }],
+        }));
+        let updated = engine
+            .update_work_item_description(&a, "New description")
+            .unwrap();
+        let mut fresh = stale.clone();
+        fresh.reload_registry(&engine);
+        assert_eq!(fresh.items()[0].item, updated);
+        assert_eq!(fresh.items()[0].status, AgentStatus::Running);
+        engine.unregister_work_item(&b).unwrap();
+        let mut pending_refresh = stale;
+        pending_refresh.reload_registry(&engine);
+        assert_eq!(pending_refresh.items().len(), 1);
+        assert_eq!(pending_refresh.items()[0].item.title, "New description");
+        assert!(pending_refresh.attention.is_empty());
+        engine.unregister_work_item(&updated).unwrap();
+        let mut replacement = updated;
+        replacement.pane_id = "%99".into();
+        engine.register_work_item(replacement).unwrap();
+        pending_refresh.reload_registry(&engine);
+        assert_eq!(pending_refresh.items()[0].status, AgentStatus::Unknown);
+        std::fs::write(&path, "{broken").unwrap();
+        pending_refresh.reload_registry(&engine);
+        assert!(matches!(pending_refresh.work_items, Some(Err(_))));
+        assert!(pending_refresh.attention.is_empty());
+    }
 
     #[test]
     fn sessions_navigation_requests_registration_only_for_a_live_selected_pane() {
