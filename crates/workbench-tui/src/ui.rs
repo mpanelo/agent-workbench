@@ -216,9 +216,9 @@ fn render_items(
     }
     frame.render_widget(
         Paragraph::new(if interaction.draft.is_some() {
-            "Enter: send  Esc/Ctrl-C: cancel  Backspace: edit  Ctrl-u: clear"
+            "Enter: send | Esc/Ctrl-C: cancel | Backspace: edit | Ctrl-u: clear"
         } else {
-            "j/k: select  Enter: open  r: reply  PgUp/Dn: scroll  a/w/s: views  q: quit"
+            "j/k: select | Enter: open | r: reply | PgUp/Dn: scroll | a/w/s: views | q: quit"
         }),
         footer,
     );
@@ -320,9 +320,7 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &DiscoveryState, scroll: &mut
         frame.render_widget(Paragraph::new(lines).scroll((*scroll, 0)), body);
     }
     frame.render_widget(
-        Paragraph::new(
-            "a: attention  w: work  s: sessions  ↑/↓ PgUp/PgDn: scroll  q: quit • refresh: 2s",
-        ),
+        Paragraph::new("a/w/s: views | ↑/↓ PgUp/PgDn: scroll | q: quit • refresh: 2s"),
         footer,
     );
 }
@@ -433,6 +431,23 @@ mod tests {
             status_detail: "Unsupported foreground command.".into(),
             attention_prompt: None,
         }
+    }
+
+    #[test]
+    fn shortcut_footers_have_separators_and_fit_an_80_column_terminal() {
+        let state = AppState::default();
+        for view in [View::Attention, View::Work] {
+            let text = item_screen(&state, 80, 10, &mut 0, view);
+            assert_eq!(
+                text.lines().last().unwrap().trim_end(),
+                "j/k: select | Enter: open | r: reply | PgUp/Dn: scroll | a/w/s: views | q: quit"
+            );
+        }
+        let text = screen(None, 80, 10, &mut 0);
+        assert_eq!(
+            text.lines().last().unwrap().trim_end(),
+            "a/w/s: views | ↑/↓ PgUp/PgDn: scroll | q: quit • refresh: 2s"
+        );
     }
 
     #[test]
@@ -793,7 +808,9 @@ mod tests {
             .collect();
         assert!(text.contains("Reply to ABC-123"));
         assert!(text.contains("yes λ🙂"));
-        assert!(text.contains("Enter: send"));
+        assert!(
+            text.contains("Enter: send | Esc/Ctrl-C: cancel | Backspace: edit | Ctrl-u: clear")
+        );
         let mut terminal = Terminal::new(TestBackend::new(1, 1)).unwrap();
         terminal
             .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
