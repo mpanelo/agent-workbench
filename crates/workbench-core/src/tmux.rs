@@ -461,7 +461,11 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires an installed tmux and a running server; read-only smoke test"]
     async fn discovers_live_tmux() {
-        let snapshot = crate::Engine.discover().await.unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = crate::Engine::new(directory.path().join("work-items.json"))
+            .discover()
+            .await
+            .unwrap();
         assert!(!snapshot.sessions.is_empty());
         assert!(
             snapshot

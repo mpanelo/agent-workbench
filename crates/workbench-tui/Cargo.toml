@@ -13,3 +13,6 @@ workbench-core.workspace = true
 tokio.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,16 +1,75 @@
-//! Presentation-independent tmux discovery for Agent Workbench.
+//! Presentation-independent discovery and persistent work items for Agent Workbench.
+
+use std::path::PathBuf;
 
 mod model;
 mod tmux;
+mod work_items;
 
 pub use model::{Pane, Session, Snapshot, Window};
 pub use tmux::DiscoveryError;
+use work_items::WorkItemStore;
+pub use work_items::{
+    AgentStatus, PaneAvailability, WorkItem, WorkItemError, WorkItemKind, WorkItemState,
+    default_state_file,
+};
 
-/// The M1 engine exposes read-only discovery, without shell commands in its API.
-#[derive(Debug, Default)]
-pub struct Engine;
+/// Discovery and work-item operations, without shell or rendering code in the API.
+#[derive(Debug)]
+pub struct Engine {
+    store: WorkItemStore,
+}
 
 impl Engine {
+    /// Select a local state file. No files are created until registration.
+    pub fn new(state_file: impl Into<PathBuf>) -> Self {
+        Self {
+            store: WorkItemStore::new(state_file.into()),
+        }
+    }
+
+    pub fn work_items(&self) -> Result<Vec<WorkItem>, WorkItemError> {
+        self.store.load()
+    }
+
+    /// Validate and persist a manual registration. Does not require a live pane.
+    pub fn register_work_item(&self, item: WorkItem) -> Result<(), WorkItemError> {
+        self.store.register(item)
+    }
+
+    /// Resolve saved pane mappings against the latest successful discovery.
+    /// `None` means discovery is unavailable, not that all panes have disappeared.
+    pub fn work_item_states(
+        &self,
+        snapshot: Option<&Snapshot>,
+    ) -> Result<Vec<WorkItemState>, WorkItemError> {
+        Ok(self
+            .work_items()?
+            .into_iter()
+            .map(|item| {
+                let pane = match snapshot {
+                    None => PaneAvailability::Unavailable,
+                    Some(snapshot)
+                        if snapshot
+                            .sessions
+                            .iter()
+                            .flat_map(|s| &s.windows)
+                            .flat_map(|w| &w.panes)
+                            .any(|pane| pane.id == item.pane_id) =>
+                    {
+                        PaneAvailability::Present
+                    }
+                    Some(_) => PaneAvailability::Missing,
+                };
+                WorkItemState {
+                    item,
+                    status: AgentStatus::Unknown,
+                    pane,
+                }
+            })
+            .collect())
+    }
+
     /// Discover all sessions, windows, and panes on the current tmux server.
     ///
     /// Uses tmux's normal server selection (including the inherited `TMUX`

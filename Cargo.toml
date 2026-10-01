@@ -12,3 +12,7 @@ tokio = { version = "1", features = ["macros", "rt", "process", "sync", "time"] 
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 crossterm = "0.29"
 workbench-core = { path = "crates/workbench-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+fs2 = "0.4"
+tempfile = "3"

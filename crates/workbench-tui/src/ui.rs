@@ -6,7 +6,94 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
 };
 
-use crate::DiscoveryState;
+use crate::{AppState, DiscoveryState};
+
+pub(crate) enum View {
+    Work,
+    Sessions,
+}
+
+pub(crate) fn render_work(frame: &mut Frame<'_>, state: &AppState, scroll: &mut u16) {
+    let [header, body, footer] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .areas(frame.area());
+    frame.render_widget(
+        Paragraph::new("AGENT WORKBENCH — WORK").style(Style::default().fg(Color::Cyan)),
+        header,
+    );
+    let mut lines = Vec::new();
+    if let Some(Err(error)) = &state.discovery {
+        lines.push(Line::styled(
+            format!("Discovery unavailable: {}", visible(error)),
+            Style::default().fg(Color::Red),
+        ));
+        lines.push(Line::from(
+            "Saved items remain registered. Retrying automatically every 2 seconds.",
+        ));
+        lines.push(Line::from(""));
+    }
+    match &state.work_items {
+        None => lines.push(Line::from("Loading work items…")),
+        Some(Err(error)) => {
+            lines.push(Line::styled(
+                format!("Work-item state unavailable: {}", visible(error)),
+                Style::default().fg(Color::Red),
+            ));
+            lines.push(Line::from(
+                "The state file has not been changed. Retrying automatically.",
+            ));
+        }
+        Some(Ok(items)) if items.is_empty() => {
+            lines.push(Line::from("No work items registered."));
+            lines.push(Line::from(
+                "Register from another terminal with `workbench register` (see --help).",
+            ));
+        }
+        Some(Ok(items)) => {
+            for state in items {
+                let item = &state.item;
+                lines.push(Line::styled(
+                    format!("{}  {}", visible(&item.id), state.status),
+                    Style::default().fg(Color::Cyan),
+                ));
+                lines.push(Line::from(format!("  {}", visible(&item.title))));
+                lines.push(Line::from(format!(
+                    "  Type: {}  Pane: {} ({})",
+                    item.kind,
+                    visible(&item.pane_id),
+                    state.pane
+                )));
+                lines.push(Line::from(format!(
+                    "  Repository: {}",
+                    visible(&item.repository.to_string_lossy())
+                )));
+                lines.push(Line::from(format!(
+                    "  Workspace: {}",
+                    visible(&item.workspace.to_string_lossy())
+                )));
+                if let Some(branch) = &item.branch {
+                    lines.push(Line::from(format!("  Branch: {}", visible(branch))));
+                }
+                lines.push(Line::from(""));
+            }
+        }
+    }
+    let max_scroll = lines
+        .len()
+        .saturating_sub(body.height as usize)
+        .min(u16::MAX as usize) as u16;
+    *scroll = (*scroll).min(max_scroll);
+    frame.render_widget(Paragraph::new(lines).scroll((*scroll, 0)), body);
+    frame.render_widget(
+        Paragraph::new(
+            "w: work  s: sessions  ↑/↓ PgUp/PgDn: scroll  q/Esc/Ctrl-C: quit  • refresh: 2s",
+        ),
+        footer,
+    );
+}
 
 pub(crate) fn render(frame: &mut Frame<'_>, state: &DiscoveryState, scroll: &mut u16) {
     let [header, body, footer] = Layout::vertical([
@@ -83,7 +170,9 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &DiscoveryState, scroll: &mut
         frame.render_widget(Paragraph::new(lines).scroll((*scroll, 0)), body);
     }
     frame.render_widget(
-        Paragraph::new("↑/↓ PgUp/PgDn: scroll  Home: top  q/Esc/Ctrl-C: quit  • refresh: 2s"),
+        Paragraph::new(
+            "w: work  s: sessions  ↑/↓ PgUp/PgDn: scroll  q/Esc/Ctrl-C: quit  • refresh: 2s",
+        ),
         footer,
     );
 }
@@ -104,7 +193,10 @@ fn visible(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use ratatui::{Terminal, backend::TestBackend};
-    use workbench_core::{Pane, Session, Snapshot, Window};
+    use workbench_core::{
+        AgentStatus, Pane, PaneAvailability, Session, Snapshot, Window, WorkItem, WorkItemKind,
+        WorkItemState,
+    };
 
     use super::*;
 
@@ -142,6 +234,104 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    fn work_screen(state: &AppState, width: u16, height: u16, scroll: &mut u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| render_work(frame, state, scroll))
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(width as usize)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn registered(pane: PaneAvailability, kind: WorkItemKind) -> WorkItemState {
+        WorkItemState {
+            item: WorkItem {
+                id: "ABC-123".into(),
+                title: "Fix retries".into(),
+                repository: "/work/repo".into(),
+                workspace: "/work/ABC-123".into(),
+                branch: Some("fix/retries".into()),
+                kind,
+                pane_id: "%14".into(),
+            },
+            status: AgentStatus::Unknown,
+            pane,
+        }
+    }
+
+    #[test]
+    fn work_view_shows_saved_metadata_and_unknown_status_for_both_types() {
+        for kind in [WorkItemKind::Implementation, WorkItemKind::ExternalReview] {
+            for pane in [
+                PaneAvailability::Present,
+                PaneAvailability::Missing,
+                PaneAvailability::Unavailable,
+            ] {
+                let state = AppState {
+                    discovery: Some(Ok(snapshot())),
+                    work_items: Some(Ok(vec![registered(pane, kind)])),
+                };
+                let text = work_screen(&state, 120, 15, &mut 0);
+                for expected in [
+                    "WORK",
+                    "ABC-123  UNKNOWN",
+                    "Fix retries",
+                    "%14",
+                    "/work/repo",
+                    "/work/ABC-123",
+                    "Branch: fix/retries",
+                    &kind.to_string(),
+                    &format!("({pane})"),
+                ] {
+                    assert!(text.contains(expected), "missing {expected:?} in {text}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn discovery_failure_keeps_work_items_visible_and_state_errors_are_actionable() {
+        let state = AppState {
+            discovery: Some(Err("tmux was not found".into())),
+            work_items: Some(Ok(vec![registered(
+                PaneAvailability::Unavailable,
+                WorkItemKind::Implementation,
+            )])),
+        };
+        let text = work_screen(&state, 120, 15, &mut 0);
+        assert!(text.contains("Discovery unavailable"));
+        assert!(text.contains("ABC-123  UNKNOWN"));
+        assert!(text.contains("%14 (unavailable)"));
+        let state = AppState {
+            work_items: Some(Err("unsupported schema version 2".into())),
+            ..AppState::default()
+        };
+        let text = work_screen(&state, 120, 15, &mut 0);
+        assert!(text.contains("unsupported schema version 2"));
+        assert!(text.contains("file has not been changed"));
+    }
+
+    #[test]
+    fn work_view_handles_loading_empty_and_small_screens() {
+        assert!(work_screen(&AppState::default(), 80, 10, &mut 0).contains("Loading work items"));
+        let state = AppState {
+            work_items: Some(Ok(Vec::new())),
+            ..AppState::default()
+        };
+        let mut scroll = 100;
+        let text = work_screen(&state, 100, 10, &mut scroll);
+        assert!(text.contains("No work items registered"));
+        assert!(text.contains("workbench register"));
+        assert_eq!(scroll, 0);
+        work_screen(&state, 1, 1, &mut scroll);
     }
 
     #[test]
