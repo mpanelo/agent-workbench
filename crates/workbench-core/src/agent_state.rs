@@ -143,25 +143,34 @@ fn infer(observation: &PaneObservation) -> (AgentStatus, &'static str) {
         }
         return (Unknown, "Unrecognized confirmation dialog.");
     }
-    // The ready composer is at the bottom, immediately above 1–3 footer rows.
-    // No search through scrollback or arbitrary prose for 'done'/'waiting'.
-    if !last.ends_with("? for shortcuts") {
+    // Some active layouts hide the composer/shortcuts, but retain a rate-limit
+    // footer immediately after the activity row. Require both signals: a lone
+    // interrupt line (or one buried in historical output) is not enough.
+    if !shortcuts_footer(last) {
+        let tail = &lines[lines.len().saturating_sub(4)..];
+        if tail
+            .iter()
+            .rev()
+            .take_while(|line| ui_banner(line))
+            .any(|line| rate_limit_footer(line))
+            && preceding_activity(&lines).is_some_and(running_indicator)
+        {
+            return (Running, "Codex displays an active interruptible turn.");
+        }
         return (
             Unknown,
-            "Codex screen is inconclusive (possibly a menu or truncated pane).",
+            "Codex screen lacks a recognized current composer/footer or active-turn layout.",
         );
     }
+    // The ready composer is at the bottom, immediately above 1–3 footer rows.
+    // No search through scrollback or arbitrary prose for 'done'/'waiting'.
     let prompt = lines
         .iter()
         .rposition(|line| *line == "›" || line.starts_with("› "));
     let Some(prompt) = prompt.filter(|index| (1..=3).contains(&(lines.len() - index - 1))) else {
         return (Unknown, "Codex composer is not visible.");
     };
-    let mut previous = lines[..prompt].iter().rev();
-    let mut activity = previous.next().copied();
-    if activity.is_some_and(|line| line.starts_with("└ Tip: ")) {
-        activity = previous.next().copied();
-    }
+    let activity = preceding_activity(&lines[..prompt]);
     if activity.is_some_and(running_indicator) {
         return (Running, "Codex displays an active interruptible turn.");
     }
@@ -190,11 +199,61 @@ fn running_indicator(line: &str) -> bool {
         return false;
     };
     matches!(
-        label,
-        "• Working" | "• Thinking" | "• Running" | "• Searching"
+        label.strip_prefix("• ").unwrap_or(label),
+        "Working" | "Thinking" | "Running" | "Searching"
     ) && rest
         .strip_suffix(" • esc to interrupt)")
         .is_some_and(duration)
+}
+
+fn preceding_activity<'a>(lines: &[&'a str]) -> Option<&'a str> {
+    lines
+        .iter()
+        .rev()
+        .take(5)
+        .copied()
+        .find(|line| !ui_banner(line))
+}
+
+fn ui_banner(line: &str) -> bool {
+    rate_limit_footer(line)
+        || line.starts_with("└ Tip: ")
+        || (!line.is_empty() && line.chars().all(|ch| ch == '─'))
+}
+
+fn warning_text(line: &str) -> Option<&str> {
+    line.strip_prefix('⚠')
+        .map(|text| text.trim_start_matches('\u{fe0f}').trim())
+}
+
+fn rate_limit_footer(line: &str) -> bool {
+    let line = warning_text(line).unwrap_or(line);
+    let Some((window, rest)) = line.split_once(" limit: ") else {
+        return false;
+    };
+    matches!(window, "5h" | "Weekly" | "weekly")
+        && rest.strip_suffix("% left · /status").is_some_and(|value| {
+            !value.is_empty()
+                && value.bytes().all(|byte| byte.is_ascii_digit())
+                && value.parse::<u8>().is_ok_and(|percent| percent <= 100)
+        })
+}
+
+fn shortcuts_footer(line: &str) -> bool {
+    let Some((_, suffix)) = line.rsplit_once("? for shortcuts") else {
+        return false;
+    };
+    let suffix = suffix.trim();
+    if suffix.is_empty() {
+        return true;
+    }
+    let Some(warning) = warning_text(suffix) else {
+        return false;
+    };
+    let parts: Vec<_> = warning.split_whitespace().collect();
+    matches!(parts.as_slice(), [count, "warning" | "warnings", "·", "f2", "to", "view"]
+        if !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit())
+            && count.parse::<usize>().is_ok_and(|count| count > 0))
 }
 
 fn approval_title(line: &str) -> bool {
@@ -288,6 +347,8 @@ mod tests {
 
     const FOOTER: &str = "\n› Ask Codex to do anything\n\n  GPT-6.1-Sol high · ~/work · Task\n  ← for agents · ? for shortcuts\n";
     const APPROVAL: &str = "Would you like to run the following command?\n\n$ cargo test\n\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)\n\nPress enter to confirm or esc to cancel\n";
+    const LIMIT: &str = "⚠ 5h limit: 16% left · /status";
+    const WARNINGS: &str = "⚠ 2 warnings · f2 to view";
 
     fn observation(screen: &str) -> PaneObservation {
         PaneObservation {
@@ -343,6 +404,101 @@ mod tests {
         assert_eq!(infer(&observation(&screen)).0, AgentStatus::Complete);
         let screen = format!("{APPROVAL}\n• New output λ🙂\n{FOOTER}");
         assert_eq!(infer(&observation(&screen)).0, AgentStatus::Idle);
+    }
+
+    #[test]
+    fn active_turns_support_bulletless_and_rate_limit_layouts() {
+        // Reconstructed from the reported screenshot; no transcript contents.
+        let screenshot = format!(
+            "Browsing the web\nRan a command\nSearched the web\n\nWorking (55s • esc to interrupt)\n\n{LIMIT}\n"
+        );
+        for screen in [
+            screenshot,
+            format!("Working (55s • esc to interrupt)\n{FOOTER}"),
+            format!("• Working (55s • esc to interrupt)\n{LIMIT}"),
+            format!("Thinking (1m 5s • esc to interrupt)\n└ Tip: Use /export.\n{LIMIT}\n──────"),
+            "Searching (2s • esc to interrupt)\n⚠ Weekly limit: 9% left · /status".into(),
+        ] {
+            assert_eq!(
+                infer(&observation(&screen)).0,
+                AgentStatus::Running,
+                "{screen}"
+            );
+        }
+        for label in ["Working", "Thinking", "Running", "Searching"] {
+            for prefix in ["", "• "] {
+                assert!(running_indicator(&format!(
+                    "{prefix}{label} (1m 5s • esc to interrupt)"
+                )));
+            }
+        }
+    }
+
+    #[test]
+    fn rate_limit_and_warning_banners_preserve_ready_composer_status() {
+        let footer = FOOTER.replace("? for shortcuts", &format!("? for shortcuts    {WARNINGS}"));
+        for (activity, expected) in [
+            ("Working (55s • esc to interrupt)", AgentStatus::Running),
+            ("Worked for 12s • 9:47 PM", AgentStatus::Complete),
+            ("New assistant output", AgentStatus::Idle),
+        ] {
+            let screen = format!("{activity}\n{LIMIT}\n{footer}");
+            assert_eq!(infer(&observation(&screen)).0, expected, "{screen}");
+        }
+        assert!(shortcuts_footer(
+            "? for shortcuts  ⚠ 1 warning · f2 to view"
+        ));
+        assert!(shortcuts_footer(
+            "← for agents · ? for shortcuts  ⚠️ 2 warnings · f2 to view"
+        ));
+        assert!(rate_limit_footer("5h limit: 100% left · /status"));
+    }
+
+    #[test]
+    fn new_layouts_do_not_match_historical_quoted_truncated_or_malformed_activity() {
+        for screen in [
+            format!("Working (55s • esc to interrupt)\nNew output\n{LIMIT}"),
+            format!("Working (55s • esc to interrupt)\n{LIMIT}\nChoose a menu item"),
+            format!("Working (55s • esc to interrupt)\n{LIMIT}\nWorked for 55s"),
+            format!("› Working (55s • esc to interrupt)\n{LIMIT}"),
+            format!("> Working (55s • esc to interrupt)\n{LIMIT}"),
+            format!("Working (soon • esc to interrupt)\n{LIMIT}"),
+            "Working (55s • esc to interrupt)\n⚠ 5h limit: 999% left · /status".into(),
+            "Working (55s • esc to interrupt)".into(),
+            format!("{LIMIT}\n{WARNINGS}"),
+            format!("Working (55s • esc to interrupt)\n{LIMIT}\nNo recognized footer"),
+            format!(
+                "Working (55s • esc to interrupt)\n{}",
+                FOOTER.replace("? for shortcuts", "? for shortcuts · unknown menu")
+            ),
+        ] {
+            assert_eq!(
+                infer(&observation(&screen)).0,
+                AgentStatus::Unknown,
+                "{screen}"
+            );
+        }
+        for text in [
+            "? for shortcuts · menu",
+            "? for shortcuts ⚠ 0 warnings · f2 to view",
+            "? for shortcuts ⚠ many warnings · f2 to view",
+        ] {
+            assert!(!shortcuts_footer(text));
+        }
+        let active = format!("Working (55s • esc to interrupt)\n{LIMIT}");
+        let mut pane = observation(&active);
+        pane.in_mode = true;
+        assert_eq!(infer(&pane).0, AgentStatus::Unknown);
+        pane.in_mode = false;
+        pane.dead = true;
+        assert_eq!(infer(&pane).0, AgentStatus::Unknown);
+        pane.dead = false;
+        pane.command = "fish".into();
+        assert_eq!(infer(&pane).0, AgentStatus::Unknown);
+        assert_eq!(
+            infer(&observation(&format!("{active}\n{APPROVAL}"))).0,
+            AgentStatus::WaitingForInput
+        );
     }
 
     #[test]
@@ -704,6 +860,17 @@ cat '{}/'$5
             (
                 format!("• Working (3s • esc to interrupt)\n{FOOTER}"),
                 AgentStatus::Running,
+            ),
+            (
+                format!("Working (55s • esc to interrupt)\n{LIMIT}"),
+                AgentStatus::Running,
+            ),
+            (
+                format!(
+                    "Worked for 12s • 9:47 PM\n{LIMIT}\n{}",
+                    FOOTER.replace("? for shortcuts", &format!("? for shortcuts    {WARNINGS}"))
+                ),
+                AgentStatus::Complete,
             ),
             (format!("Worked for 3s\n{FOOTER}"), AgentStatus::Complete),
             (FOOTER.into(), AgentStatus::Idle),

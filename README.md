@@ -231,7 +231,7 @@ stay `UNKNOWN` and remain fully navigable/replyable.
 
 | State | Evidence |
 | --- | --- |
-| `RUNNING` | Current Codex activity line with elapsed time and `esc to interrupt`. |
+| `RUNNING` | Current Codex activity line with elapsed time and `esc to interrupt`, anchored by a composer/shortcuts footer or a recognized bottom rate-limit banner. |
 | `WAITING_FOR_INPUT` | Current command/edit/permission/terminal-input approval dialog: known title, selected Yes/No option, and confirmation footer. |
 | `IDLE` | Bottom-of-screen Codex composer and shortcuts footer, without an active indicator or explicit completion marker. |
 | `COMPLETE` | Ready composer immediately following Codex's `Worked for …` marker. **The turn finished; the overall task may not be done.** |
@@ -249,13 +249,21 @@ a stale waiting/completed status or remove registrations. `list` falls back to
 
 These are terminal heuristics, not an agent protocol. They recognize observed
 English Codex UI patterns (including legacy context footers and current model/path
-footers); changed keybindings, localization, narrow panes, menus, and UI changes
+footers, with or without activity bullets). Known `5h`/weekly rate-limit banners
+and the `⚠ … warnings · f2 to view` shortcuts suffix are supported. A bare activity
+line, historical indicator followed by new output, or unfamiliar footer is not
+enough evidence; changed keybindings, localization, narrow panes, menus, and UI changes
 can produce `UNKNOWN`. Free-form questions and structured question pickers are
 not reliably distinguished yet—open the full pane when uncertain. `IDLE` means a
 ready composer, not proof that no human response is desired. A visible completion
 marker remains `COMPLETE` until the screen changes; there is no acknowledgement
 action yet. No state is inferred solely from process
 presence, pane disappearance, a quiet terminal, or words such as “done” in prose.
+
+Codex lifecycle hooks are a potential opt-in status source, not installed or
+consumed by Workbench yet. See [the hook investigation](docs/codex-status-signals.md)
+for the proposed approach and limitations. Terminal detection remains the default;
+no Codex configuration is changed automatically.
 
 ## Manual registration
 
