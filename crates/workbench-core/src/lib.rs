@@ -54,6 +54,22 @@ impl Engine {
         self.store.register(item)
     }
 
+    /// Change only the short description of the captured registration.
+    /// Reject stale edits rather than overwriting another process's changes.
+    pub fn update_work_item_description(
+        &self,
+        expected: &WorkItem,
+        description: &str,
+    ) -> Result<WorkItem, WorkItemError> {
+        self.store.update_description(expected, description)
+    }
+
+    /// Remove only an unchanged registration. Never touches tmux, Git, workspace
+    /// files, or saved review snapshots. Those are separate lifecycle decisions.
+    pub fn unregister_work_item(&self, expected: &WorkItem) -> Result<(), WorkItemError> {
+        self.store.unregister(expected)
+    }
+
     /// Resolve saved pane mappings against the latest successful discovery.
     /// `None` means discovery is unavailable, not that all panes have disappeared.
     pub fn work_item_states(

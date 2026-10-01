@@ -105,6 +105,8 @@ pub enum WorkItemError {
     Io { path: PathBuf, source: io::Error },
     Invalid(String),
     DuplicateId(String),
+    NotFound(String),
+    Changed(String),
     Busy(PathBuf),
 }
 
@@ -120,6 +122,11 @@ impl fmt::Display for WorkItemError {
             Self::DuplicateId(id) => write!(
                 f,
                 "Work item {id:?} is already registered; choose a unique ID."
+            ),
+            Self::NotFound(id) => write!(f, "Work item {id:?} is no longer registered."),
+            Self::Changed(id) => write!(
+                f,
+                "Work item {id:?} changed since it was opened; cancel and reopen before retrying."
             ),
             Self::Busy(path) => write!(
                 f,
@@ -298,6 +305,41 @@ impl WorkItemStore {
     pub(crate) fn register(&self, item: WorkItem) -> Result<(), WorkItemError> {
         validate(&item)?;
         validate_short_description(&item.title)?;
+        self.mutate(|work_items| {
+            if work_items.iter().any(|existing| existing.id == item.id) {
+                return Err(WorkItemError::DuplicateId(item.id));
+            }
+            work_items.push(item);
+            Ok(())
+        })
+    }
+
+    pub(crate) fn update_description(
+        &self,
+        expected: &WorkItem,
+        description: &str,
+    ) -> Result<WorkItem, WorkItemError> {
+        validate_short_description(description)?;
+        self.mutate(|work_items| {
+            let index = unchanged_item(work_items, expected)?;
+            work_items[index].title = description.into();
+            Ok(work_items[index].clone())
+        })
+    }
+
+    pub(crate) fn unregister(&self, expected: &WorkItem) -> Result<(), WorkItemError> {
+        self.mutate(|work_items| {
+            let index = unchanged_item(work_items, expected)?;
+            work_items.remove(index);
+            Ok(())
+        })
+    }
+
+    /// Read/modify/write under the same stable lock for every registry mutation.
+    fn mutate<T>(
+        &self,
+        edit: impl FnOnce(&mut Vec<WorkItem>) -> Result<T, WorkItemError>,
+    ) -> Result<T, WorkItemError> {
         let parent = self
             .path
             .parent()
@@ -324,10 +366,7 @@ impl WorkItemStore {
         let _lock = StateLock(lock);
         // Reload under the lock so independent engine instances cannot lose updates.
         let mut work_items = self.load()?;
-        if work_items.iter().any(|existing| existing.id == item.id) {
-            return Err(WorkItemError::DuplicateId(item.id));
-        }
-        work_items.push(item);
+        let result = edit(&mut work_items)?;
         let bytes = serde_json::to_vec_pretty(&StoredState {
             version: 1,
             work_items,
@@ -349,8 +388,19 @@ impl WorkItemStore {
             .persist(&self.path)
             .map_err(|error| self.io_error(error.error))?;
         // StateLock releases the advisory lock, including on any error above.
-        Ok(())
+        Ok(result)
     }
+}
+
+fn unchanged_item(items: &[WorkItem], expected: &WorkItem) -> Result<usize, WorkItemError> {
+    let index = items
+        .iter()
+        .position(|item| item.id == expected.id)
+        .ok_or_else(|| WorkItemError::NotFound(expected.id.clone()))?;
+    if items[index] != *expected {
+        return Err(WorkItemError::Changed(expected.id.clone()));
+    }
+    Ok(index)
 }
 
 #[cfg(test)]
@@ -390,6 +440,176 @@ mod tests {
         );
         let json: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(json["version"], 1);
+    }
+
+    #[test]
+    fn editing_and_unregistering_preserve_workspace_and_review_data() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("items.json");
+        let engine = Engine::new(&path);
+        let mut target = item("A", WorkItemKind::Implementation);
+        target.repository = directory.path().into();
+        target.workspace = directory.path().join("workspace");
+        fs::create_dir(&target.workspace).unwrap();
+        let source = target.workspace.join("keep.txt");
+        fs::write(&source, "uncommitted content").unwrap();
+        let other = item("B", WorkItemKind::ExternalReview);
+        engine.register_work_item(target.clone()).unwrap();
+        engine.register_work_item(other.clone()).unwrap();
+        let review_path = engine.store.review_path();
+        fs::write(&review_path, "saved review history").unwrap();
+        let updated = engine
+            .update_work_item_description(&target, "Updated λ🙂 description")
+            .unwrap();
+        let mut expected = target.clone();
+        expected.title = "Updated λ🙂 description".into();
+        assert_eq!(updated, expected);
+        assert_eq!(
+            Engine::new(&path).work_items().unwrap(),
+            [expected.clone(), other.clone()]
+        );
+        engine.unregister_work_item(&expected).unwrap();
+        assert_eq!(
+            Engine::new(&path).work_items().unwrap(),
+            std::slice::from_ref(&other)
+        );
+        assert_eq!(fs::read_to_string(&source).unwrap(), "uncommitted content");
+        assert_eq!(
+            fs::read_to_string(&review_path).unwrap(),
+            "saved review history"
+        );
+        engine.unregister_work_item(&other).unwrap();
+        assert!(Engine::new(&path).work_items().unwrap().is_empty());
+        assert_eq!(
+            fs::read_to_string(&review_path).unwrap(),
+            "saved review history"
+        );
+    }
+
+    #[test]
+    fn maintenance_rejects_invalid_missing_and_stale_targets_without_writes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("items.json");
+        let first = Engine::new(&path);
+        let second = Engine::new(&path);
+        let target = item("A", WorkItemKind::Implementation);
+        first.register_work_item(target.clone()).unwrap();
+        let original = fs::read(&path).unwrap();
+        for description in [
+            String::new(),
+            "bad\ntext".into(),
+            "λ".repeat(MAX_SHORT_DESCRIPTION_CHARS + 1),
+        ] {
+            assert!(
+                first
+                    .update_work_item_description(&target, &description)
+                    .is_err()
+            );
+            assert_eq!(fs::read(&path).unwrap(), original);
+        }
+        let missing = item("missing", WorkItemKind::Implementation);
+        assert!(matches!(
+            first.update_work_item_description(&missing, "Updated"),
+            Err(WorkItemError::NotFound(_))
+        ));
+        assert!(matches!(
+            first.unregister_work_item(&missing),
+            Err(WorkItemError::NotFound(_))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), original);
+        let updated = second
+            .update_work_item_description(&target, "Changed elsewhere")
+            .unwrap();
+        let stored = fs::read(&path).unwrap();
+        assert!(matches!(
+            first.update_work_item_description(&target, "Stale edit"),
+            Err(WorkItemError::Changed(_))
+        ));
+        assert!(matches!(
+            first.unregister_work_item(&target),
+            Err(WorkItemError::Changed(_))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), stored);
+        second.unregister_work_item(&updated).unwrap();
+        assert!(matches!(
+            first.unregister_work_item(&updated),
+            Err(WorkItemError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn maintenance_reloads_other_items_and_rejects_replaced_bindings() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("items.json");
+        let first = Engine::new(&path);
+        let second = Engine::new(&path);
+        let a = item("A", WorkItemKind::Implementation);
+        let b = item("B", WorkItemKind::Implementation);
+        first.register_work_item(a.clone()).unwrap();
+        second.register_work_item(b.clone()).unwrap();
+        let updated = first.update_work_item_description(&a, "Updated").unwrap();
+        assert_eq!(first.work_items().unwrap(), [updated.clone(), b.clone()]);
+        second.unregister_work_item(&b).unwrap();
+        assert_eq!(first.work_items().unwrap(), [updated]);
+        let mut replacement = b.clone();
+        replacement.pane_id = "%99".into();
+        second.register_work_item(replacement.clone()).unwrap();
+        let stored = fs::read(&path).unwrap();
+        assert!(matches!(
+            first.unregister_work_item(&b),
+            Err(WorkItemError::Changed(_))
+        ));
+        assert!(matches!(
+            first.update_work_item_description(&b, "Must not change"),
+            Err(WorkItemError::Changed(_))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), stored);
+    }
+
+    #[test]
+    fn maintenance_preserves_busy_corrupt_and_unwritable_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("items.json");
+        let engine = Engine::new(&path);
+        let target = item("A", WorkItemKind::Implementation);
+        engine.register_work_item(target.clone()).unwrap();
+        let stored = fs::read(&path).unwrap();
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(directory.path().join("items.json.lock"))
+            .unwrap();
+        fs2::FileExt::lock_exclusive(&lock).unwrap();
+        assert!(matches!(
+            engine.update_work_item_description(&target, "Updated"),
+            Err(WorkItemError::Busy(_))
+        ));
+        assert!(matches!(
+            engine.unregister_work_item(&target),
+            Err(WorkItemError::Busy(_))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), stored);
+        fs2::FileExt::unlock(&lock).unwrap();
+        for invalid in ["{broken", r#"{"version":2,"work_items":[]}"#] {
+            fs::write(&path, invalid).unwrap();
+            assert!(
+                engine
+                    .update_work_item_description(&target, "Updated")
+                    .is_err()
+            );
+            assert!(engine.unregister_work_item(&target).is_err());
+            assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
+        }
+        let blocked = directory.path().join("blocked-state");
+        fs::create_dir(&blocked).unwrap();
+        let unwritable = Engine::new(&blocked);
+        assert!(
+            unwritable
+                .update_work_item_description(&target, "Updated")
+                .is_err()
+        );
+        assert!(unwritable.unregister_work_item(&target).is_err());
+        assert!(blocked.is_dir());
     }
 
     #[test]
