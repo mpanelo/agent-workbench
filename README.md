@@ -5,6 +5,53 @@ conservative agent-state detection, and a dedicated attention queue, alongside a
 view of your sessions, windows, and panes. Requires Rust 1.88+ and tmux on `PATH`
 for live discovery. Registration and listing also work without tmux.
 
+## Installation
+
+Install [Rust and Cargo](https://www.rust-lang.org/tools/install) (Rust 1.88 or
+newer), Git, and tmux. Rust/Cargo and Git are needed to build from source; tmux
+must be on `PATH` for live discovery, pane navigation, and replies.
+
+Install the latest `main` branch from GitHub:
+
+```sh
+cargo install --locked --git https://github.com/mpanelo/agent-workbench.git \
+  --branch main workbench-tui
+```
+
+The package is called `workbench-tui`, but the installed executable is
+`workbench`. With Cargo's default installation directory, it is placed in
+`~/.cargo/bin`. If that directory is not on `PATH`, add it in your shell:
+
+```sh
+# Bash/zsh: add this line to your shell configuration for future sessions.
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+For fish, run:
+
+```fish
+fish_add_path ~/.cargo/bin
+```
+
+If you use a custom `CARGO_HOME` or installation root, add its `bin` directory
+instead. See [Cargo's installation documentation](https://doc.rust-lang.org/cargo/commands/cargo-install.html).
+
+Verify the installation and launch the TUI:
+
+```sh
+workbench --help
+workbench
+```
+
+To update, rerun the GitHub installation command. From an existing checkout, you
+can instead install with `cargo install --locked --path crates/workbench-tui`.
+Installation currently builds from source; no prebuilt binaries or `curl | bash`
+installer are provided.
+
+## Run from a checkout
+
+For development, run from the repository root without installing:
+
 ```sh
 cargo run -p workbench-tui --bin workbench
 ```
@@ -146,7 +193,8 @@ presence, pane disappearance, a quiet terminal, or words such as “done” in p
 
 ## Manual registration
 
-Build the binary with `cargo build -p workbench-tui`, then invoke
+If installed, use `workbench register` and `workbench list`. From a checkout,
+build the binary with `cargo build -p workbench-tui`, then invoke
 `./target/debug/workbench` (or use `cargo run -p workbench-tui --bin workbench --`
 before the arguments). For example:
 
