@@ -5,12 +5,12 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
-    style::{Color, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, List, ListItem, ListState, Paragraph},
 };
 use workbench_core::{ChangedFile, ReviewSession, ReviewStatus};
 
+use crate::theme;
 use crate::ui::{display_path, visible};
 
 #[derive(Default)]
@@ -242,6 +242,7 @@ impl ReviewUi {
     }
 
     pub fn render(&mut self, frame: &mut Frame<'_>) {
+        theme::paint(frame);
         let [header, summary, notice, body, footer] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(2),
@@ -268,16 +269,11 @@ impl ReviewUi {
                 },
                 visible(id)
             ))
-            .style(Style::default().fg(Color::Cyan)),
+            .style(theme::header()),
             header,
         );
         frame.render_widget(
-            Paragraph::new(vec![
-                Line::from(
-                    "j/k: files | Space: reviewed | Ctrl+d/u: scroll | h/l: pan | r: reload",
-                ),
-                Line::from("c: full/since | Tab: unreviewed | PgUp/Dn: page | Home: top | Esc: back | q: quit"),
-            ]),
+            theme::footer("j/k: files | Space: reviewed | Ctrl+d/u: scroll | h/l: pan | r: reload\nc: full/since | Tab: unreviewed | PgUp/Dn: page | Home: top | Esc: back | q: quit"),
             footer,
         );
         if self.loading {
@@ -290,7 +286,7 @@ impl ReviewUi {
         if let Some(error) = &self.error {
             frame.render_widget(
                 Paragraph::new(visible(error))
-                    .style(Style::default().fg(Color::Red))
+                    .style(theme::error())
                     .wrap(ratatui::widgets::Wrap { trim: false }),
                 body,
             );
@@ -309,16 +305,32 @@ impl ReviewUi {
         });
         frame.render_widget(
             Paragraph::new(vec![
-                Line::from(format!(
-                    "{reviewed} / {total} reviewed • +{added} -{deleted} {} • base {} ({})",
-                    if self.since_review {
-                        "since review (text)"
-                    } else {
-                        "(text)"
-                    },
-                    visible(&session.diff.base),
-                    &session.diff.base_revision[..session.diff.base_revision.len().min(12)]
-                )),
+                Line::from(vec![
+                    Span::styled(
+                        format!("{reviewed} / {total} reviewed"),
+                        theme::review_status(ReviewStatus::Reviewed),
+                    ),
+                    Span::raw(" • "),
+                    Span::styled(
+                        format!("+{added}"),
+                        theme::review_status(ReviewStatus::Reviewed),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(format!("-{deleted}"), theme::error()),
+                    Span::styled(
+                        format!(
+                            " {} • base {} ({})",
+                            if self.since_review {
+                                "since review (text)"
+                            } else {
+                                "(text)"
+                            },
+                            visible(&session.diff.base),
+                            &session.diff.base_revision[..session.diff.base_revision.len().min(12)]
+                        ),
+                        theme::muted(),
+                    ),
+                ]),
                 Line::from(if self.saving {
                     "Saving review mark… Please wait (input temporarily disabled).".to_owned()
                 } else if self.save_error.is_some() {
@@ -329,6 +341,13 @@ impl ReviewUi {
                         session.changed_after_review(),
                         visible(&display_path(&session.diff.workspace))
                     )
+                })
+                .style(if self.save_error.is_some() {
+                    theme::error()
+                } else if self.saving {
+                    theme::notice()
+                } else {
+                    theme::muted()
                 }),
             ]),
             summary,
@@ -336,7 +355,7 @@ impl ReviewUi {
         if let Some(error) = &self.save_error {
             frame.render_widget(
                 Paragraph::new(visible(error))
-                    .style(Style::default().fg(Color::Red))
+                    .style(theme::error())
                     .wrap(ratatui::widgets::Wrap { trim: false }),
                 notice,
             );
@@ -374,35 +393,50 @@ impl ReviewUi {
                     ReviewStatus::ChangedAfterReview => "⚠",
                 };
                 let name = visible(&file.path.to_string_lossy());
+                let name_line = Line::from(vec![
+                    Span::styled(
+                        format!("{mark} "),
+                        theme::review_status(session.status(&file.path)),
+                    ),
+                    Span::raw(name.clone()),
+                ]);
                 if self.since_review {
                     ListItem::new(vec![
-                        Line::from(format!("{mark} {name}")),
+                        name_line,
                         Line::from(format!(
                             "  {}",
                             file.additions
                                 .zip(file.deletions)
                                 .map(|(a, d)| format!("{} lines (+{a} -{d})", a + d))
                                 .unwrap_or_else(|| "non-text / unavailable".into())
-                        )),
+                        ))
+                        .style(theme::muted()),
                     ])
                 } else {
-                    ListItem::new(format!("{mark} {name}  {}", file.kind))
+                    let mut name_line = name_line;
+                    name_line
+                        .spans
+                        .push(Span::styled(format!("  {}", file.kind), theme::muted()));
+                    ListItem::new(name_line)
                 }
             })
             .collect();
         frame.render_stateful_widget(
             List::new(items)
                 .block(if file_area.height >= 3 {
-                    Block::bordered().title(if self.since_review {
-                        "Since review"
-                    } else {
-                        "Changed files"
-                    })
+                    Block::bordered()
+                        .title(if self.since_review {
+                            "Since review"
+                        } else {
+                            "Changed files"
+                        })
+                        .border_style(theme::border(true))
+                        .title_style(theme::accent())
                 } else {
                     Block::default()
                 })
                 .highlight_symbol("> ")
-                .highlight_style(Style::default().fg(Color::Yellow)),
+                .highlight_style(theme::selection()),
             file_area,
             &mut ListState::default().with_selected(Some(self.selected)),
         );
@@ -424,24 +458,25 @@ impl ReviewUi {
                 )
             }
         );
-        let block = Block::bordered().title(title);
+        let block = Block::bordered()
+            .title(title)
+            .style(theme::panel())
+            .border_style(theme::border(false))
+            .title_style(theme::accent());
         let inner = block.inner(patch);
+        let mut in_hunk = false;
         let lines: Vec<_> = file
             .patch
             .lines()
             .map(|line| {
-                Line::styled(
-                    visible(line),
-                    Style::default().fg(if line.starts_with("@@") {
-                        Color::Cyan
-                    } else if line.starts_with('+') {
-                        Color::Green
-                    } else if line.starts_with('-') {
-                        Color::Red
-                    } else {
-                        Color::Reset
-                    }),
-                )
+                if line.starts_with("diff ") {
+                    in_hunk = false;
+                }
+                let style = theme::diff_line(line, in_hunk);
+                if line.starts_with("@@") {
+                    in_hunk = true;
+                }
+                Line::styled(visible(line), style)
             })
             .collect();
         let max_scroll = lines
@@ -459,7 +494,9 @@ impl ReviewUi {
         self.horizontal = self.horizontal.min(max_horizontal);
         frame.render_widget(block, patch);
         frame.render_widget(
-            Paragraph::new(lines).scroll((self.scroll, self.horizontal)),
+            Paragraph::new(lines)
+                .style(theme::panel())
+                .scroll((self.scroll, self.horizontal)),
             inner,
         );
     }
@@ -641,6 +678,31 @@ mod tests {
         let scrolled = screen(&mut review, 45, 12);
         assert!(scrolled.contains("@@ -1 +1 @@"));
         assert!(scrolled.contains("+after"));
+    }
+
+    #[test]
+    fn review_colors_marks_hunks_and_content_without_losing_selected_mark_color() {
+        let mut review = ready();
+        key(&mut review, KeyCode::Char(' '));
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal.draw(|frame| review.render(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        theme::assert_text_style(buffer, "AGENT WORKBENCH", theme::LAVENDER, theme::MANTLE);
+        theme::assert_text_style(buffer, "✓ source.rs", theme::GREEN, theme::SURFACE);
+        theme::assert_text_style(buffer, "+++ b/source.rs", theme::PINK, theme::MANTLE);
+        theme::assert_text_style(buffer, "@@ -1 +1 @@", theme::PEACH, theme::MANTLE);
+        theme::assert_text_style(
+            buffer,
+            "+after",
+            theme::GREEN,
+            ratatui::style::Color::Rgb(52, 64, 61),
+        );
+        theme::assert_text_style(
+            buffer,
+            "-before",
+            theme::RED,
+            ratatui::style::Color::Rgb(67, 47, 63),
+        );
     }
 
     #[test]

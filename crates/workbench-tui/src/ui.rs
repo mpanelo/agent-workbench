@@ -3,13 +3,13 @@ use std::path::{Path, PathBuf};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
-    style::{Color, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Paragraph, Wrap},
 };
 
 use crate::AppState;
 use crate::interaction::Interaction;
+use crate::theme;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum View {
@@ -50,6 +50,7 @@ fn render_items(
     interaction: &mut Interaction,
     view: View,
 ) {
+    theme::paint(frame);
     let [header, body, notice, composer, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
@@ -68,16 +69,13 @@ fn render_items(
     } else {
         format!("AGENT WORKBENCH — WORK • attention: {count} (a)")
     };
-    frame.render_widget(
-        Paragraph::new(title).style(Style::default().fg(Color::Cyan)),
-        header,
-    );
+    frame.render_widget(Paragraph::new(title).style(theme::header()), header);
     let mut lines = Vec::new();
     let mut selected_row = None;
     if let Some(Err(error)) = &state.discovery {
         lines.push(Line::styled(
             format!("Discovery unavailable: {}", visible(error)),
-            Style::default().fg(Color::Red),
+            theme::error(),
         ));
         lines.push(Line::from(
             "Saved items remain registered. Retrying automatically every 2 seconds.",
@@ -89,7 +87,7 @@ fn render_items(
         Some(Err(error)) => {
             lines.push(Line::styled(
                 format!("Work-item state unavailable: {}", visible(error)),
-                Style::default().fg(Color::Red),
+                theme::error(),
             ));
             lines.push(Line::from(
                 "The state file has not been changed. Retrying automatically.",
@@ -123,55 +121,76 @@ fn render_items(
                 if selected {
                     selected_row = Some(lines.len());
                 }
-                lines.push(Line::styled(
-                    format!(
-                        "{}{}  {}",
-                        if selected { "> " } else { "  " },
-                        visible(&item.id),
-                        state.status
-                    ),
-                    Style::default().fg(if selected { Color::Yellow } else { Color::Cyan }),
-                ));
+                lines.push(
+                    Line::from(vec![
+                        Span::styled(
+                            format!(
+                                "{}{}  ",
+                                if selected { "> " } else { "  " },
+                                visible(&item.id),
+                            ),
+                            theme::accent(),
+                        ),
+                        Span::styled(state.status.to_string(), theme::status(state.status)),
+                    ])
+                    .style(if selected {
+                        theme::selection()
+                    } else {
+                        theme::text()
+                    }),
+                );
                 lines.push(Line::from(format!("  {}", visible(&item.title))));
                 if view == View::Work {
-                    lines.push(Line::from(format!(
-                        "  Status: {}",
-                        visible(&state.status_detail)
-                    )));
+                    lines.push(Line::styled(
+                        format!("  Status: {}", visible(&state.status_detail)),
+                        theme::muted(),
+                    ));
                 }
                 if view == View::Attention || selected {
                     if state.status == workbench_core::AgentStatus::WaitingForInput {
-                        lines.push(Line::from("  Agent requests input:"));
+                        lines.push(Line::styled("  Agent requests input:", theme::notice()));
                         if let Some(prompt) = &state.attention_prompt {
                             push_prompt(&mut lines, prompt, body.width);
                         } else {
                             lines.push(Line::from(format!("  {}", visible(&state.status_detail))));
                         }
                     } else if view == View::Attention {
-                        lines.push(Line::from("  Agent turn completed."));
-                        lines.push(Line::from("  Overall task completion is unverified."));
+                        lines.push(Line::styled(
+                            "  Agent turn completed.",
+                            theme::status(state.status),
+                        ));
+                        lines.push(Line::styled(
+                            "  Overall task completion is unverified.",
+                            theme::muted(),
+                        ));
                     }
                 }
-                lines.push(Line::from(format!(
-                    "  Type: {}  Pane: {} ({})",
-                    item.kind,
-                    visible(&item.pane_id),
-                    state.pane
-                )));
+                lines.push(Line::styled(
+                    format!(
+                        "  Type: {}  Pane: {} ({})",
+                        item.kind,
+                        visible(&item.pane_id),
+                        state.pane
+                    ),
+                    theme::muted(),
+                ));
                 if view == View::Work {
-                    lines.push(Line::from(format!(
-                        "  Repository: {}",
-                        visible(&display_path(&item.repository))
-                    )));
+                    lines.push(Line::styled(
+                        format!("  Repository: {}", visible(&display_path(&item.repository))),
+                        theme::muted(),
+                    ));
                 }
-                lines.push(Line::from(format!(
-                    "  Workspace: {}",
-                    visible(&display_path(&item.workspace))
-                )));
+                lines.push(Line::styled(
+                    format!("  Workspace: {}", visible(&display_path(&item.workspace))),
+                    theme::muted(),
+                ));
                 if view == View::Work
                     && let Some(branch) = &item.branch
                 {
-                    lines.push(Line::from(format!("  Branch: {}", visible(branch))));
+                    lines.push(Line::styled(
+                        format!("  Branch: {}", visible(branch)),
+                        theme::muted(),
+                    ));
                 }
                 lines.push(Line::from(""));
             }
@@ -197,12 +216,18 @@ fn render_items(
     frame.render_widget(Paragraph::new(lines).scroll((*scroll, 0)), body);
     if let Some(message) = &interaction.message {
         frame.render_widget(
-            Paragraph::new(visible(message)).wrap(Wrap { trim: false }),
+            Paragraph::new(visible(message))
+                .style(theme::notice())
+                .wrap(Wrap { trim: false }),
             notice,
         );
     }
     if let Some(draft) = &interaction.draft {
-        let block = Block::bordered().title(format!("Reply to {}", visible(&draft.item_id)));
+        let block = Block::bordered()
+            .title(format!("Reply to {}", visible(&draft.item_id)))
+            .style(theme::panel())
+            .border_style(theme::border(true))
+            .title_style(theme::accent());
         let inner = block.inner(composer);
         frame.render_widget(block, composer);
         let width = Line::from(draft.text.as_str())
@@ -210,7 +235,9 @@ fn render_items(
             .min(u16::MAX as usize) as u16;
         let offset = width.saturating_sub(inner.width.saturating_sub(1));
         frame.render_widget(
-            Paragraph::new(draft.text.as_str()).scroll((0, offset)),
+            Paragraph::new(draft.text.as_str())
+                .style(theme::panel())
+                .scroll((0, offset)),
             inner,
         );
         if !interaction.sending && inner.width > 0 && inner.height > 0 {
@@ -218,7 +245,7 @@ fn render_items(
         }
     }
     frame.render_widget(
-        Paragraph::new(if interaction.draft.is_some() {
+        theme::footer(if interaction.draft.is_some() {
             "Enter: send | Esc/Ctrl-C: cancel | Backspace: edit | Ctrl-u: clear"
         } else {
             "j/k | Enter: open | r: reply | d: review | Ctrl+d/u: scroll | a/w/s | q: quit"
@@ -232,19 +259,20 @@ fn render_items(
 fn push_prompt(lines: &mut Vec<Line<'static>>, text: &str, width: u16) {
     let limit = usize::from(width).max(3);
     for line in text.lines() {
+        let style = theme::prompt_line(line);
         let mut row = String::from("  ");
         let mut columns = 2;
         for ch in visible(line).chars() {
             let ch_width = Line::from(ch.to_string()).width();
             if columns + ch_width > limit && columns > 2 {
-                lines.push(Line::from(row));
+                lines.push(Line::styled(row, style));
                 row = String::from("  ");
                 columns = 2;
             }
             row.push(ch);
             columns += ch_width;
         }
-        lines.push(Line::from(row));
+        lines.push(Line::styled(row, style));
     }
 }
 
@@ -254,6 +282,7 @@ pub(crate) fn render_sessions(
     scroll: &mut u16,
     interaction: &mut Interaction,
 ) {
+    theme::paint(frame);
     let [header, body, notice, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
@@ -262,7 +291,7 @@ pub(crate) fn render_sessions(
     ])
     .areas(frame.area());
     frame.render_widget(
-        Paragraph::new("AGENT WORKBENCH — SESSIONS").style(Style::default().fg(Color::Cyan)),
+        Paragraph::new("AGENT WORKBENCH — SESSIONS").style(theme::header()),
         header,
     );
     let mut lines = Vec::<Line<'static>>::new();
@@ -276,7 +305,7 @@ pub(crate) fn render_sessions(
                     "Discovery unavailable\n\n{}\n\nRetrying automatically every 2 seconds…",
                     visible(error)
                 ))
-                .style(Style::default().fg(Color::Red))
+                .style(theme::error())
                 .wrap(Wrap { trim: false }),
                 body,
             );
@@ -288,15 +317,18 @@ pub(crate) fn render_sessions(
             for session in &snapshot.sessions {
                 lines.push(Line::styled(
                     format!("{}  ({})", visible(&session.name), session.id),
-                    Style::default().fg(Color::Cyan),
+                    theme::accent(),
                 ));
                 for window in &session.windows {
-                    lines.push(Line::from(format!(
-                        "  {}  {}  ({})",
-                        window.index,
-                        visible(&window.name),
-                        window.id
-                    )));
+                    lines.push(Line::styled(
+                        format!(
+                            "  {}  {}  ({})",
+                            window.index,
+                            visible(&window.name),
+                            window.id
+                        ),
+                        theme::accent(),
+                    ));
                     for pane in &window.panes {
                         let selected =
                             interaction.selected_pane.as_deref() == Some(pane.id.as_str());
@@ -319,16 +351,17 @@ pub(crate) fn render_sessions(
                                 visible(pane.current_command.as_deref().unwrap_or("unavailable")),
                                 visible(&pane.title),
                             ),
-                            Style::default().fg(if selected {
-                                Color::Yellow
+                            if selected {
+                                theme::selection().fg(theme::LAVENDER)
                             } else {
-                                Color::Reset
-                            }),
+                                theme::text()
+                            },
                         ));
                         if !registered.is_empty() {
-                            lines.push(Line::from(format!(
-                                "      Registered: {registered} (w: work items)"
-                            )));
+                            lines.push(Line::styled(
+                                format!("      Registered: {registered} (w: work items)"),
+                                theme::status(workbench_core::AgentStatus::Complete),
+                            ));
                         }
                         lines.push(Line::styled(
                             format!(
@@ -338,7 +371,7 @@ pub(crate) fn render_sessions(
                                     .map(|path| visible(&display_path(path)))
                                     .unwrap_or_else(|| "unavailable".to_owned())
                             ),
-                            Style::default().fg(Color::DarkGray),
+                            theme::muted(),
                         ));
                     }
                 }
@@ -368,12 +401,14 @@ pub(crate) fn render_sessions(
     }
     if let Some(message) = &interaction.message {
         frame.render_widget(
-            Paragraph::new(visible(message)).wrap(Wrap { trim: false }),
+            Paragraph::new(visible(message))
+                .style(theme::notice())
+                .wrap(Wrap { trim: false }),
             notice,
         );
     }
     frame.render_widget(
-        Paragraph::new("j/k: panes | Enter/r: register | Ctrl+d/u: scroll | a/w/s | q: quit"),
+        theme::footer("j/k: panes | Enter/r: register | Ctrl+d/u: scroll | a/w/s | q: quit"),
         footer,
     );
 }
@@ -770,6 +805,69 @@ mod tests {
                 .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn item_views_keep_status_colors_under_selection_and_style_prompt_options() {
+        let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
+        waiting.status = AgentStatus::WaitingForInput;
+        waiting.attention_prompt = Some("Question\nReason: permission needed\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, cancel (esc)".into());
+        let mut complete = waiting.clone();
+        complete.item.id = "DONE".into();
+        complete.status = AgentStatus::Complete;
+        complete.attention_prompt = None;
+        let state = AppState::from_refresh(Ok(snapshot()), Ok(vec![waiting, complete]));
+        let mut interaction = Interaction::default();
+        interaction.sync(&state.attention);
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|frame| render_attention(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        for (text, fg, bg) in [
+            ("AGENT WORKBENCH", theme::LAVENDER, theme::MANTLE),
+            ("> ABC-123", theme::LAVENDER, theme::SURFACE),
+            ("WAITING_FOR_INPUT", theme::YELLOW, theme::SURFACE),
+            ("COMPLETE", theme::GREEN, theme::BASE),
+            ("Options:", theme::LAVENDER, theme::BASE),
+            ("› 1. Yes", theme::MAUVE, theme::BASE),
+            ("$ cargo test", theme::TEAL, theme::BASE),
+            ("Reason:", theme::PEACH, theme::BASE),
+            ("Workspace:", theme::SUBTEXT, theme::BASE),
+        ] {
+            theme::assert_text_style(buffer, text, fg, bg);
+        }
+        assert!(
+            buffer
+                .content()
+                .iter()
+                .all(|cell| matches!(cell.bg, ratatui::style::Color::Rgb(_, _, _)))
+        );
+    }
+
+    #[test]
+    fn sessions_selection_metadata_and_errors_use_shared_theme() {
+        let state = AppState::from_refresh(Ok(snapshot()), Ok(vec![]));
+        let mut interaction = Interaction::default();
+        interaction.sync_panes(&snapshot());
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal
+            .draw(|frame| render_sessions(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        theme::assert_text_style(buffer, "AGENT WORKBENCH", theme::LAVENDER, theme::MANTLE);
+        theme::assert_text_style(buffer, "pane 0", theme::LAVENDER, theme::SURFACE);
+        theme::assert_text_style(buffer, "cwd:", theme::SUBTEXT, theme::BASE);
+        let failed = AppState::from_refresh(Err("test discovery error".into()), Ok(vec![]));
+        terminal
+            .draw(|frame| render_sessions(frame, &failed, &mut 0, &mut interaction))
+            .unwrap();
+        theme::assert_text_style(
+            terminal.backend().buffer(),
+            "Discovery unavailable",
+            theme::RED,
+            theme::BASE,
+        );
     }
 
     #[test]

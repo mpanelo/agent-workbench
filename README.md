@@ -83,6 +83,21 @@ as escapes. Repository, workspace, and session working-directory paths under the
 current `$HOME` are displayed with `~` (also in `workbench list`). Stored paths and
 approval command text are unchanged; paths outside `$HOME` remain absolute.
 
+## Appearance
+
+The TUI uses [Catppuccin Mocha](https://catppuccin.com/palette/#mocha), with a
+dark background, lavender headers/focus accents, and muted workspace metadata.
+Running is blue, waiting is yellow, idle is teal, complete/reviewed is green,
+and unknown is muted. Errors and deletions are red; changes requiring re-review
+are peach. Prompt choices and shortcut keys are accented, and diff additions/
+deletions have subtle tinted backgrounds. Text labels and selection/review marks
+remain, so color is not the only cue.
+
+Styling is shared across ATTENTION, WORK, SESSIONS, registration, and REVIEW.
+It uses RGB colors; exact appearance requires a truecolor-capable terminal path.
+Workbench does not modify terminal palettes or tmux configuration. Mocha is the
+single built-in theme for now; no theme-selection setting is included.
+
 ## Register from SESSIONS
 
 Press `s`, select an agent pane with `j/k` or arrows, then press `r` (or Enter).

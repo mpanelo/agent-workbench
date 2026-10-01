@@ -12,6 +12,7 @@ mod cli;
 mod interaction;
 mod registration;
 mod review;
+mod theme;
 mod ui;
 
 type DiscoveryState = Option<Result<Snapshot, String>>;

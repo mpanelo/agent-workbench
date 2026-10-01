@@ -2,7 +2,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
-    style::{Color, Style},
     text::Line,
     widgets::{Block, Paragraph, Wrap},
 };
@@ -10,6 +9,7 @@ use workbench_core::{RegistrationDraft, WorkItemKind};
 
 use crate::{
     interaction::Draft,
+    theme,
     ui::{display_path, visible},
 };
 
@@ -177,6 +177,7 @@ impl RegistrationUi {
     }
 
     pub fn render(&self, frame: &mut Frame<'_>) {
+        theme::paint(frame);
         let [header, body, notice, footer] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(0),
@@ -189,10 +190,10 @@ impl RegistrationUi {
                 "REGISTER WORK ITEM — pane {}",
                 visible(self.pane.as_deref().unwrap_or("—"))
             ))
-            .style(Style::default().fg(Color::Cyan)),
+            .style(theme::header()),
             header,
         );
-        frame.render_widget(Paragraph::new(if self.loading {
+        frame.render_widget(theme::footer(if self.loading {
             "Reading metadata… | Esc: cancel"
         } else if self.saving {
             "Saving… | Please wait"
@@ -211,7 +212,7 @@ impl RegistrationUi {
         if let Some(error) = &self.error {
             frame.render_widget(
                 Paragraph::new(visible(error))
-                    .style(Style::default().fg(Color::Red))
+                    .style(theme::error())
                     .wrap(Wrap { trim: false }),
                 notice,
             );
@@ -219,17 +220,21 @@ impl RegistrationUi {
             frame.render_widget(
                 Paragraph::new(
                     "Saving registration… Please wait; input and cancellation are disabled.",
-                ),
+                )
+                .style(theme::notice()),
                 notice,
             );
         } else if let Some(message) = self.draft.as_ref().and_then(|draft| draft.notice.as_ref()) {
             frame.render_widget(
-                Paragraph::new(visible(message)).wrap(Wrap { trim: false }),
+                Paragraph::new(visible(message))
+                    .style(theme::notice())
+                    .wrap(Wrap { trim: false }),
                 notice,
             );
         } else {
             frame.render_widget(
-                Paragraph::new("Pane is fixed. Review the defaults, then Enter to register."),
+                Paragraph::new("Pane is fixed. Review the defaults, then Enter to register.")
+                    .style(theme::muted()),
                 notice,
             );
         }
@@ -257,11 +262,17 @@ impl RegistrationUi {
                 LABELS[index],
                 if selected { " (editing)" } else { "" }
             ))
-            .border_style(Style::default().fg(if selected {
-                Color::Yellow
+            .style(if selected {
+                theme::text().bg(theme::SURFACE)
             } else {
-                Color::DarkGray
-            }));
+                theme::text()
+            })
+            .border_style(theme::border(selected))
+            .title_style(if selected {
+                theme::accent()
+            } else {
+                theme::muted()
+            });
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let text = visible(&self.fields[index]);
@@ -271,7 +282,16 @@ impl RegistrationUi {
         } else {
             0
         };
-        frame.render_widget(Paragraph::new(text).scroll((0, offset)), inner);
+        frame.render_widget(
+            Paragraph::new(text)
+                .style(if selected {
+                    theme::text().bg(theme::SURFACE)
+                } else {
+                    theme::text()
+                })
+                .scroll((0, offset)),
+            inner,
+        );
         if selected && !self.saving && index != 2 && inner.width > 0 && inner.height > 0 {
             frame.set_cursor_position((inner.x + width.saturating_sub(offset), inner.y));
         }
@@ -468,5 +488,24 @@ mod tests {
         for (width, height) in [(40, 8), (1, 1), (0, 1)] {
             screen(&form, width, height);
         }
+    }
+
+    #[test]
+    fn registration_uses_theme_for_active_fields_inactive_fields_and_errors() {
+        let mut form = ready();
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal.draw(|frame| form.render(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        theme::assert_text_style(buffer, "REGISTER WORK ITEM", theme::LAVENDER, theme::MANTLE);
+        theme::assert_text_style(buffer, "feature-task", theme::TEXT, theme::SURFACE);
+        theme::assert_text_style(buffer, "2 / 6", theme::SUBTEXT, theme::BASE);
+        form.error = Some("test registration error".into());
+        terminal.draw(|frame| form.render(frame)).unwrap();
+        theme::assert_text_style(
+            terminal.backend().buffer(),
+            "test registration error",
+            theme::RED,
+            theme::BASE,
+        );
     }
 }
