@@ -4,11 +4,13 @@ use std::path::PathBuf;
 
 mod actions;
 mod agent_state;
+mod attention;
 mod model;
 mod tmux;
 mod work_items;
 
 pub use actions::{ActionError, MAX_INPUT_BYTES, validate_agent_input};
+pub use attention::attention_items;
 pub use model::{Pane, Session, Snapshot, Window};
 pub use tmux::DiscoveryError;
 use work_items::WorkItemStore;
@@ -76,6 +78,7 @@ impl Engine {
                         PaneAvailability::Unavailable => "Tmux discovery is unavailable.",
                     }
                     .into(),
+                    attention_prompt: None,
                 }
             })
             .collect())

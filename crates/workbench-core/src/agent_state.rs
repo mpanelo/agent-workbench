@@ -60,19 +60,24 @@ impl Engine {
             };
             if let Ok((id, result)) = result {
                 let detected = match result {
-                    Ok(observation) => infer(&observation),
+                    Ok(observation) => {
+                        let (status, detail) = infer(&observation);
+                        (status, detail, approval_prompt(&observation, status))
+                    }
                     Err(_) => (
                         AgentStatus::Unknown,
                         "Pane capture failed or changed; retrying next refresh.",
+                        None,
                     ),
                 };
                 observations.insert(id, detected);
             }
         }
         for state in &mut states {
-            if let Some((status, detail)) = observations.get(&state.item.pane_id) {
+            if let Some((status, detail, prompt)) = observations.get(&state.item.pane_id) {
                 state.status = *status;
                 state.status_detail = (*detail).into();
+                state.attention_prompt.clone_from(prompt);
             }
         }
         Ok(states)
@@ -124,15 +129,7 @@ fn infer(observation: &PaneObservation) -> (AgentStatus, &'static str) {
     );
     if confirm {
         let tail = &lines[lines.len().saturating_sub(40)..];
-        let title = tail.iter().any(|line| {
-            matches!(
-                *line,
-                "Would you like to run the following command?"
-                    | "Would you like to make the following edits?"
-                    | "Would you like to grant these permissions?"
-                    | "Would you like to send input to the existing terminal?"
-            )
-        });
+        let title = tail.iter().any(|line| approval_title(line));
         let choice = tail.iter().any(|line| {
             line.strip_prefix("› ")
                 .and_then(|choice| choice.split_once(". "))
@@ -201,6 +198,53 @@ fn running_indicator(line: &str) -> bool {
     ) && rest
         .strip_suffix(" • esc to interrupt)")
         .is_some_and(duration)
+}
+
+fn approval_title(line: &str) -> bool {
+    matches!(
+        line,
+        "Would you like to run the following command?"
+            | "Would you like to make the following edits?"
+            | "Would you like to grant these permissions?"
+            | "Would you like to send input to the existing terminal?"
+    )
+}
+
+fn approval_prompt(observation: &PaneObservation, status: AgentStatus) -> Option<String> {
+    if status != AgentStatus::WaitingForInput {
+        return None;
+    }
+    let lines: Vec<_> = observation
+        .screen
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let start = lines.iter().rposition(|line| approval_title(line))?;
+    let context: Vec<_> = lines[start..]
+        .iter()
+        .take_while(|line| {
+            let line = line.strip_prefix("› ").unwrap_or(line);
+            !line.starts_with("Press ")
+                && line
+                    .split_once(". ")
+                    .is_none_or(|(number, _)| number.parse::<u8>().is_err())
+        })
+        .copied()
+        .collect();
+    // Keep only the dialog title and first few details. Never expose the rest of
+    // the viewport/history, and truncate on Unicode scalar boundaries.
+    let text = context
+        .iter()
+        .take(4)
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut preview: String = text.chars().take(512).collect();
+    if context.len() > 4 || text.chars().count() > 512 {
+        preview.push('…');
+    }
+    Some(preview)
 }
 
 fn completion_indicator(line: &str) -> bool {
@@ -348,6 +392,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn approval_context_is_bounded_unicode_safe_and_contains_only_the_current_dialog() {
+        let screen = format!("Private earlier conversation\n{APPROVAL}");
+        let pane = observation(&screen);
+        let preview = approval_prompt(&pane, infer(&pane).0).unwrap();
+        assert_eq!(
+            preview,
+            "Would you like to run the following command?\n$ cargo test"
+        );
+        assert!(!preview.contains("Private earlier"));
+        assert!(!preview.contains("Yes, proceed"));
+        let long = APPROVAL.replace("$ cargo test", &format!("$ {}", "λ🙂".repeat(600)));
+        let long_pane = observation(&long);
+        let preview = approval_prompt(&long_pane, infer(&long_pane).0).unwrap();
+        assert_eq!(preview.chars().count(), 513);
+        assert!(preview.ends_with('…'));
+        assert!(preview.contains("λ🙂"));
+        let multi_line = APPROVAL.replace("$ cargo test", "First\nSecond\nThird\nFourth\nFifth");
+        let multi_pane = observation(&multi_line);
+        let preview = approval_prompt(&multi_pane, infer(&multi_pane).0).unwrap();
+        assert_eq!(preview.lines().count(), 4);
+        assert!(!preview.contains("Fourth"));
+        for status in [
+            AgentStatus::Running,
+            AgentStatus::Complete,
+            AgentStatus::Idle,
+            AgentStatus::Unknown,
+        ] {
+            assert!(approval_prompt(&pane, status).is_none());
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn refresh_replaces_evidence_deduplicates_panes_and_isolates_failures() {
@@ -438,6 +514,11 @@ cat '{}/'$5
                 .unwrap();
             assert_eq!(states[0].status, expected);
             assert_eq!(states[1].status, expected);
+            assert_eq!(
+                states[0].attention_prompt.is_some(),
+                expected == AgentStatus::WaitingForInput
+            );
+            assert_eq!(states[0].attention_prompt, states[1].attention_prompt);
             assert_eq!(states[2].status, AgentStatus::Unknown);
             assert_eq!(states[3].pane, PaneAvailability::Missing);
             assert_eq!(states[4].status, AgentStatus::Unknown);
@@ -469,6 +550,7 @@ cat '{}/'$5
                     .iter()
                     .all(|state| state.status == AgentStatus::Unknown)
             );
+            assert!(states.iter().all(|state| state.attention_prompt.is_none()));
         }
         assert_eq!(fs::read_to_string(&log).unwrap(), calls_before);
         assert_eq!(fs::read(&path).unwrap(), stored);
@@ -599,12 +681,23 @@ cat '{}/'$5
             let mut observed = AgentStatus::Unknown;
             for _ in 0..50 {
                 let snapshot = engine.discover().await.unwrap();
-                observed = engine
+                let states = engine
                     .observe_work_item_states(Some(&snapshot))
                     .await
-                    .unwrap()[0]
-                    .status;
+                    .unwrap();
+                observed = states[0].status;
                 if observed == expected {
+                    assert_eq!(
+                        crate::attention_items(&states).len(),
+                        usize::from(expected.needs_attention())
+                    );
+                    assert_eq!(
+                        states[0].attention_prompt.is_some(),
+                        expected == AgentStatus::WaitingForInput
+                    );
+                    if let Some(prompt) = &states[0].attention_prompt {
+                        assert!(prompt.contains("$ cargo test"));
+                    }
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -648,6 +741,8 @@ cat '{}/'$5
             .unwrap();
         assert_eq!(states[0].pane, PaneAvailability::Missing);
         assert_eq!(states[0].status, AgentStatus::Unknown);
+        assert!(crate::attention_items(&states).is_empty());
+        assert!(states[0].attention_prompt.is_none());
         assert_eq!(engine.work_items().unwrap().len(), 1);
     }
 }

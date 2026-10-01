@@ -1,7 +1,7 @@
 # Agent Workbench
 
-M1–M4: persistent work items mapped to tmux panes, navigation, reply submission,
-and conservative agent-state detection, alongside a read-only terminal
+M1–M5: persistent work items mapped to tmux panes, navigation, reply submission,
+conservative agent-state detection, and a dedicated attention queue, alongside a read-only terminal
 view of your sessions, windows, and panes. Requires Rust 1.88+ and tmux on `PATH`
 for live discovery. Registration and listing also work without tmux.
 
@@ -14,26 +14,27 @@ normal server selection: the inherited `TMUX` environment when present, otherwis
 the default socket. Discovery is read-only. Only explicit open/reply actions
 switch to panes or submit input; no sessions or workspaces are created.
 
-The TUI opens in **WORK**, showing registered items with observed agent status,
+The TUI opens in **ATTENTION**, showing items currently known to need input or
+whose agent turn completed. Press `a` to return there, `w` for **WORK**, or `s`
+for the session view. WORK shows all registered items with observed agent status,
 their type, repository, workspace, optional branch, and mapped pane ID. Pane
 availability is separate from agent status: `present` means the pane was found,
 `missing` means it is absent from a successful discovery, and `unavailable` means
-discovery failed. A disappeared pane does not remove its registration. Press `s`
-for the M1 session view and `w` to return to WORK.
+discovery failed. A disappeared pane does not remove its registration.
 
 The session view shows session names/IDs, window names/indices/IDs, and pane IDs, indices,
 titles, current commands, and working directories. Missing command/path metadata
 is shown as `unavailable`. Discovery refreshes in the background every two seconds;
 errors replace the displayed snapshot and retry automatically. Each command has a
 three-second timeout. Quit with `q`, `Esc`, or `Ctrl-C` when not composing a reply.
-In WORK, `j/k` or arrows move selection. Page Up/Page Down scroll details; Home
+In ATTENTION and WORK, `j/k` or arrows move selection. Page Up/Page Down scroll details; Home
 selects the first item. The sessions view still uses arrows to scroll. Resize is handled automatically.
 Long metadata lines are clipped to terminal width; control characters are displayed
 as escapes.
 
 ## Navigation and replies
 
-In WORK, the selected item is highlighted with `>`:
+In ATTENTION and WORK, the selected item is highlighted with `>`:
 
 | Key | Action |
 | --- | --- |
@@ -41,7 +42,8 @@ In WORK, the selected item is highlighted with `>`:
 | `Enter` | Open/focus the selected item's mapped pane. |
 | `r` | Compose a reply to the selected item. |
 | `Tab` | Select the next `WAITING_FOR_INPUT` or `COMPLETE` item, wrapping around. |
-| `s`, `w` | Switch to sessions or work items. |
+| `a`, `w`, `s` | Switch to attention, all work items, or sessions. |
+| `d` | Explain that built-in diff review is deferred to M6; no Git operation is performed yet. |
 
 Opening from inside tmux switches its current client to the target session/window/
 pane; Workbench stays running in its original pane. Use your tmux navigation keys
@@ -69,9 +71,37 @@ panes and command failures are shown in WORK without deleting the registration.
 Input is sent to whatever program is running in the mapped pane; classification
 does not restrict open/reply actions. Exit tmux copy mode before sending a reply.
 
+## Attention queue (M5)
+
+ATTENTION is the primary supervision view. Its header displays the current queue
+count. It contains only live, `present` panes with `WAITING_FOR_INPUT` or `COMPLETE`
+status, in registration order. Running, idle, and unknown items remain in WORK;
+unknowns are explicitly reported as unclassified, not assumed idle. WORK's header
+also shows the attention count. Store/discovery errors and empty queues are visible.
+
+Waiting cards show the detected approval question plus a bounded preview of its
+details, when available. Only the current dialog is retained: at most four nonempty
+lines and 512 Unicode characters, plus an ellipsis on truncation. Previews wrap to
+terminal width; use `Enter` for the full pane. Completion cards say the **turn**
+finished, without claiming the whole task is done or inventing changed-file counts.
+
+The core builds the queue from the same observation snapshot used by WORK, with no
+extra tmux captures. Queue entries and prompt previews are not persisted or logged.
+Refreshes remove entries when an agent resumes, becomes unknown, or its pane
+disappears. Selection follows work-item IDs, falling back to the first visible
+entry when the selected item leaves. An existing reply draft stays bound to its
+original item even if the queue changes. Empty queues cannot open or reply to hidden
+WORK items. Switching views or returning from a focused pane preserves the chosen
+view. Completed turns remain queued while their visible completion marker remains;
+there is no dismiss/acknowledge action yet.
+
+M5 does not implement Git diffs, changed-file counts, workspace-change detection,
+or review state. The `d` key explains the M6 boundary; `Enter` still opens the full
+terminal session for manual inspection. Unknown agents retain M4's limitations.
+
 ## Basic agent state (M4)
 
-Detection is automatic in WORK and `workbench list`; no re-registration, hooks,
+Detection is automatic in ATTENTION, WORK, and `workbench list`; no re-registration, hooks,
 API keys, or agent configuration is needed. The first supported agent is the
 interactive **Codex CLI**, when tmux reports the foreground command as `codex`
 (or a path ending in `/codex`). Other agents, shells, and wrappers such as `node`
@@ -102,7 +132,7 @@ can produce `UNKNOWN`. Free-form questions and structured question pickers are
 not reliably distinguished yet—open the full pane when uncertain. `IDLE` means a
 ready composer, not proof that no human response is desired. A visible completion
 marker remains `COMPLETE` until the screen changes; there is no acknowledgement
-or dedicated attention queue in M4. No state is inferred solely from process
+action yet. No state is inferred solely from process
 presence, pane disappearance, a quiet terminal, or words such as “done” in prose.
 
 ## Manual registration
@@ -151,7 +181,7 @@ it; the sessions view remains usable while a state error is shown in WORK.
 ## Structure
 
 - `workbench-core`: typed snapshots, work-item models, pane resolution, pure agent
-  status interpretation, read-only observations, tmux CLI
+  status interpretation, ephemeral attention queue and prompt previews, read-only observations, tmux CLI
   adapter, and JSON persistence. Tokio handles discovery; Serde/serde_json serialize
   state; tempfile/fs2 provide atomic replacement and advisory locking. It has no
   presentation dependencies.
@@ -166,10 +196,9 @@ Metadata must be UTF-8. ASCII unit/record separators (`U+001F`/`U+001E`) are
 reserved for the discovery format; metadata containing those rare characters is
 reported as malformed. Ordinary spaces, tabs, newlines, and Unicode are preserved.
 Only the selected tmux server is discovered; multi-server aggregation is not part
-of M1–M4. Saved pane IDs refer to the selected server; tmux can reuse IDs after a
+of M1–M5. Saved pane IDs refer to the selected server; tmux can reuse IDs after a
 server restart, so check mappings after restarting tmux. There is no pane remapping
-or deletion command yet. Dedicated attention queues and Git/review functionality
-belong to later milestones.
+or deletion command yet. Git/review functionality belongs to later milestones.
 
 ## Checks
 

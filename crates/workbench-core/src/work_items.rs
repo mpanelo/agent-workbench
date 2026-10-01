@@ -91,6 +91,9 @@ pub struct WorkItemState {
     pub pane: PaneAvailability,
     /// Local observation only; never persisted and never contains terminal text.
     pub status_detail: String,
+    /// Bounded visible approval context, only for a current detected input request.
+    /// Ephemeral, not a full transcript; never persisted.
+    pub attention_prompt: Option<String>,
 }
 
 #[derive(Debug)]

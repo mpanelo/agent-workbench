@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, ffi::OsString, path::PathBuf};
 
 use workbench_core::{WorkItem, WorkItemKind, default_state_file};
 
-pub(crate) const HELP: &str = "Agent Workbench — M4 basic agent state
+pub(crate) const HELP: &str = "Agent Workbench — M5 attention queue
 
 Usage:
   workbench [--state-file PATH]
@@ -12,9 +12,10 @@ Usage:
   workbench list [--state-file PATH]
   workbench --help
 
-The TUI defaults to WORK; press s for sessions and w for work items.
+The TUI defaults to ATTENTION; a returns there, w shows all work, s shows sessions.
 j/k or arrows select; Enter opens the pane; r composes a single-line reply.
-Enter submits a reply and Esc cancels. Tab reports known attention items (none yet).
+Enter submits a reply and Esc cancels. Tab selects known waiting/completed items.
+d explains that diff review is not available until M6; no Git operations yet.
 Registration does not require a running tmux server. Relative repository/workspace
 paths are resolved from the current directory; expand ~ using your shell.
 State: --state-file, then AGENT_WORKBENCH_STATE_FILE, then

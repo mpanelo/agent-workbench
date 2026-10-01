@@ -6,7 +6,7 @@ use tokio::{
     task::JoinSet,
     time::{self, MissedTickBehavior},
 };
-use workbench_core::{Engine, Snapshot, WorkItemState, validate_agent_input};
+use workbench_core::{Engine, Snapshot, WorkItemState, attention_items, validate_agent_input};
 
 mod cli;
 mod interaction;
@@ -18,14 +18,37 @@ type DiscoveryState = Option<Result<Snapshot, String>>;
 struct AppState {
     discovery: DiscoveryState,
     work_items: Option<Result<Vec<WorkItemState>, String>>,
+    attention: Vec<WorkItemState>,
 }
 
 impl AppState {
+    fn from_refresh(
+        discovery: Result<Snapshot, String>,
+        work_items: Result<Vec<WorkItemState>, String>,
+    ) -> Self {
+        let attention = work_items
+            .as_ref()
+            .map(|items| attention_items(items))
+            .unwrap_or_default();
+        Self {
+            discovery: Some(discovery),
+            work_items: Some(work_items),
+            attention,
+        }
+    }
+
     fn items(&self) -> &[WorkItemState] {
         self.work_items
             .as_ref()
             .and_then(|items| items.as_ref().ok())
             .map_or(&[], Vec::as_slice)
+    }
+
+    fn items_for(&self, view: ui::View) -> &[WorkItemState] {
+        match view {
+            ui::View::Attention => &self.attention,
+            _ => self.items(),
+        }
     }
 }
 
@@ -91,9 +114,16 @@ async fn start() -> io::Result<()> {
         cli::Command::Help => unreachable!("help was handled above"),
     }
     let mut interaction = interaction::Interaction::default();
+    let mut view = ui::View::default();
     loop {
         let mut terminal = init_terminal()?;
-        let result = run(&mut terminal, Arc::clone(&engine), &mut interaction).await;
+        let result = run(
+            &mut terminal,
+            Arc::clone(&engine),
+            &mut interaction,
+            &mut view,
+        )
+        .await;
         restore_terminal()?;
         match result? {
             RunExit::Quit => return Ok(()),
@@ -135,6 +165,7 @@ async fn run(
     terminal: &mut ratatui::DefaultTerminal,
     engine: Arc<Engine>,
     interaction: &mut interaction::Interaction,
+    view: &mut ui::View,
 ) -> io::Result<RunExit> {
     let (sender, mut receiver) = watch::channel::<AppState>(AppState::default());
     let discovery_engine = Arc::clone(&engine);
@@ -152,17 +183,14 @@ async fn run(
                 .await
                 .map_err(|error| error.to_string());
             if sender
-                .send(AppState {
-                    discovery: Some(discovery),
-                    work_items: Some(work_items),
-                })
+                .send(AppState::from_refresh(discovery, work_items))
                 .is_err()
             {
                 break;
             }
         }
     });
-    let result = event_loop(terminal, &mut receiver, engine, interaction).await;
+    let result = event_loop(terminal, &mut receiver, engine, interaction, view).await;
     discovery.abort();
     // Wait for cancellation so an in-flight command is dropped and killed.
     let _ = discovery.await;
@@ -174,9 +202,9 @@ async fn event_loop(
     receiver: &mut watch::Receiver<AppState>,
     engine: Arc<Engine>,
     interaction: &mut interaction::Interaction,
+    view: &mut ui::View,
 ) -> io::Result<RunExit> {
     let mut state = AppState::default();
-    let mut view = ui::View::Work;
     let mut scroll = 0_u16;
     let mut redraw = true;
     let mut sends = JoinSet::new();
@@ -184,8 +212,11 @@ async fn event_loop(
     input_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         if redraw {
-            terminal.draw(|frame| match view {
+            terminal.draw(|frame| match *view {
                 ui::View::Work => ui::render_work(frame, &state, &mut scroll, interaction),
+                ui::View::Attention => {
+                    ui::render_attention(frame, &state, &mut scroll, interaction)
+                }
                 ui::View::Sessions => ui::render(frame, &state.discovery, &mut scroll),
             })?;
             redraw = false;
@@ -193,8 +224,13 @@ async fn event_loop(
         tokio::select! {
             changed = receiver.changed() => {
                 changed.map_err(|_| io::Error::other("Discovery task stopped unexpectedly"))?;
-                state = receiver.borrow_and_update().clone();
-                interaction.sync(state.items());
+                let previous_position = state.items_for(*view).iter().position(|item| Some(&item.item.id) == interaction.selected_id.as_ref());
+                let updated = receiver.borrow_and_update().clone();
+                let attention_changed = state.attention != updated.attention;
+                state = updated;
+                interaction.sync(state.items_for(*view));
+                let position = state.items_for(*view).iter().position(|item| Some(&item.item.id) == interaction.selected_id.as_ref());
+                interaction.reveal_selection |= position != previous_position || (*view == ui::View::Attention && attention_changed);
                 redraw = true;
             }
             completed = sends.join_next(), if !sends.is_empty() => {
@@ -212,6 +248,7 @@ async fn event_loop(
                 while event::poll(Duration::ZERO)? {
                     redraw = true;
                     let event = event::read()?;
+                    if matches!(event, Event::Resize(_, _)) { interaction.reveal_selection = true; }
                     if let Event::Paste(text) = &event
                         && !interaction.sending
                         && let Some(draft) = &mut interaction.draft
@@ -249,26 +286,270 @@ async fn event_loop(
                         match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => return Ok(RunExit::Quit),
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(RunExit::Quit),
-                            KeyCode::Down | KeyCode::Char('j') if matches!(view, ui::View::Work) => interaction.move_selection(state.items(), 1),
-                            KeyCode::Up | KeyCode::Char('k') if matches!(view, ui::View::Work) => interaction.move_selection(state.items(), -1),
-                            KeyCode::Enter if matches!(view, ui::View::Work) => {
-                                if let Some(selected) = interaction.selected(state.items()) { return Ok(RunExit::Focus(selected.item.id.clone())); }
-                                interaction.message = Some("Select a registered work item first.".into());
-                            }
-                            KeyCode::Char('r') if matches!(view, ui::View::Work) => interaction.begin_reply(state.items()),
-                            KeyCode::Tab if matches!(view, ui::View::Work) => interaction.next_attention(state.items()),
-                            KeyCode::Down => scroll = scroll.saturating_add(1),
-                            KeyCode::Up => scroll = scroll.saturating_sub(1),
-                            KeyCode::PageDown => scroll = scroll.saturating_add(terminal.size()?.height.saturating_sub(3)),
-                            KeyCode::PageUp => scroll = scroll.saturating_sub(terminal.size()?.height.saturating_sub(3)),
-                            KeyCode::Home => { scroll = 0; if matches!(view, ui::View::Work) { interaction.selected_id = None; interaction.sync(state.items()); } },
-                            KeyCode::Char('w') => { view = ui::View::Work; scroll = 0; },
-                            KeyCode::Char('s') => { view = ui::View::Sessions; scroll = 0; },
-                            _ => {}
+                            _ => if let Some(id) = navigate(key.code, &state, view, &mut scroll, interaction, terminal.size()?.height) { return Ok(RunExit::Focus(id)); },
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+/// Route list actions against the visible subset, never the hidden WORK list.
+fn navigate(
+    key: KeyCode,
+    state: &AppState,
+    view: &mut ui::View,
+    scroll: &mut u16,
+    interaction: &mut interaction::Interaction,
+    height: u16,
+) -> Option<String> {
+    let items = state.items_for(*view);
+    match key {
+        KeyCode::Down | KeyCode::Char('j') if view.is_item_view() => {
+            interaction.move_selection(items, 1)
+        }
+        KeyCode::Up | KeyCode::Char('k') if view.is_item_view() => {
+            interaction.move_selection(items, -1)
+        }
+        KeyCode::Enter if view.is_item_view() => {
+            if let Some(selected) = interaction.selected(items) {
+                return Some(selected.item.id.clone());
+            }
+            interaction.message = Some("Select an item in the current view first.".into());
+        }
+        KeyCode::Char('r') if view.is_item_view() => interaction.begin_reply(items),
+        KeyCode::Tab if view.is_item_view() => interaction.next_attention(items),
+        KeyCode::Char('d') if view.is_item_view() => {
+            interaction.message = Some(match interaction.selected(items) {
+                Some(selected) => format!(
+                    "Diff review for {} is not available until M6. Press Enter to inspect the full pane.",
+                    selected.item.id
+                ),
+                None => "Select an item in the current view first.".into(),
+            });
+        }
+        KeyCode::Down => *scroll = scroll.saturating_add(1),
+        KeyCode::Up => *scroll = scroll.saturating_sub(1),
+        KeyCode::PageDown => *scroll = scroll.saturating_add(height.saturating_sub(3)),
+        KeyCode::PageUp => *scroll = scroll.saturating_sub(height.saturating_sub(3)),
+        KeyCode::Home => {
+            *scroll = 0;
+            if view.is_item_view() {
+                interaction.selected_id = None;
+                interaction.sync(items);
+            }
+        }
+        KeyCode::Char('a' | 'w' | 's') => {
+            *view = match key {
+                KeyCode::Char('a') => ui::View::Attention,
+                KeyCode::Char('w') => ui::View::Work,
+                _ => ui::View::Sessions,
+            };
+            *scroll = 0;
+            interaction.sync(state.items_for(*view));
+            interaction.reveal_selection = true;
+        }
+        _ => {}
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use workbench_core::{AgentStatus, PaneAvailability, WorkItem, WorkItemKind};
+
+    fn state(items: &[(&str, AgentStatus)]) -> AppState {
+        AppState::from_refresh(
+            Ok(Snapshot::default()),
+            Ok(items
+                .iter()
+                .map(|(id, status)| WorkItemState {
+                    item: WorkItem {
+                        id: (*id).into(),
+                        title: "Task".into(),
+                        repository: "/work".into(),
+                        workspace: "/work".into(),
+                        branch: None,
+                        kind: WorkItemKind::Implementation,
+                        pane_id: "%14".into(),
+                    },
+                    status: *status,
+                    pane: PaneAvailability::Present,
+                    status_detail: "Observed locally.".into(),
+                    attention_prompt: None,
+                })
+                .collect()),
+        )
+    }
+
+    #[test]
+    fn attention_is_default_and_all_actions_target_the_visible_queue() {
+        let state = state(&[
+            ("hidden", AgentStatus::Running),
+            ("B", AgentStatus::Complete),
+            ("C", AgentStatus::WaitingForInput),
+        ]);
+        let mut view = ui::View::default();
+        assert_eq!(view, ui::View::Attention);
+        let mut interaction = interaction::Interaction::default();
+        interaction.sync(state.items_for(view));
+        let mut scroll = 0;
+        assert_eq!(interaction.selected_id.as_deref(), Some("B"));
+        navigate(
+            KeyCode::Char('j'),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert_eq!(
+            navigate(
+                KeyCode::Enter,
+                &state,
+                &mut view,
+                &mut scroll,
+                &mut interaction,
+                24
+            )
+            .as_deref(),
+            Some("C")
+        );
+        navigate(
+            KeyCode::Char('r'),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert_eq!(interaction.draft.as_ref().unwrap().item_id, "C");
+        interaction.draft = None;
+        navigate(
+            KeyCode::Tab,
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert_eq!(interaction.selected_id.as_deref(), Some("B"));
+        navigate(
+            KeyCode::Char('d'),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.message.as_ref().unwrap().contains("M6"));
+        assert!(interaction.message.as_ref().unwrap().contains("B"));
+        navigate(
+            KeyCode::Char('w'),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert_eq!(view, ui::View::Work);
+        navigate(
+            KeyCode::Home,
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert_eq!(interaction.selected_id.as_deref(), Some("hidden"));
+        navigate(
+            KeyCode::Char('a'),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert_eq!(interaction.selected_id.as_deref(), Some("B"));
+        navigate(
+            KeyCode::Char('s'),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert_eq!(view, ui::View::Sessions);
+        assert!(
+            navigate(
+                KeyCode::Enter,
+                &state,
+                &mut view,
+                &mut scroll,
+                &mut interaction,
+                24
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn refresh_changes_queue_without_redirecting_an_existing_draft() {
+        let initial = state(&[
+            ("A", AgentStatus::WaitingForInput),
+            ("B", AgentStatus::Complete),
+        ]);
+        let mut interaction = interaction::Interaction::default();
+        interaction.sync(initial.items_for(ui::View::Attention));
+        interaction.begin_reply(initial.items_for(ui::View::Attention));
+        let next = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
+        interaction.sync(next.items_for(ui::View::Attention));
+        assert_eq!(interaction.selected_id.as_deref(), Some("B"));
+        assert_eq!(interaction.draft.as_ref().unwrap().item_id, "A");
+        let empty = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Unknown)]);
+        interaction.sync(empty.items_for(ui::View::Attention));
+        assert!(interaction.selected_id.is_none());
+        assert_eq!(interaction.draft.as_ref().unwrap().item_id, "A");
+        assert_eq!(empty.items().len(), 2);
+    }
+
+    #[test]
+    fn empty_or_failed_queue_never_opens_or_replies_to_hidden_work() {
+        let empty = state(&[("hidden", AgentStatus::Unknown)]);
+        let failed = AppState::from_refresh(
+            Err("tmux unavailable".into()),
+            Err("state unreadable".into()),
+        );
+        for state in [empty, failed] {
+            let mut view = ui::View::Attention;
+            let mut scroll = 0;
+            let mut interaction = interaction::Interaction {
+                selected_id: Some("hidden".into()),
+                ..Default::default()
+            };
+            assert!(
+                navigate(
+                    KeyCode::Enter,
+                    &state,
+                    &mut view,
+                    &mut scroll,
+                    &mut interaction,
+                    24
+                )
+                .is_none()
+            );
+            navigate(
+                KeyCode::Char('r'),
+                &state,
+                &mut view,
+                &mut scroll,
+                &mut interaction,
+                24,
+            );
+            assert!(interaction.draft.is_none());
+            assert!(state.attention.is_empty());
         }
     }
 }

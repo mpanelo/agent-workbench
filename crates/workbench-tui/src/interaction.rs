@@ -90,7 +90,7 @@ impl Interaction {
             .map_or(0, |index| index + 1);
         let next = (0..items.len())
             .map(|offset| (start + offset) % items.len())
-            .find(|index| items[*index].status.needs_attention());
+            .find(|index| items[*index].needs_attention());
         if let Some(index) = next {
             self.selected_id = Some(items[index].item.id.clone());
             self.reveal_selection = true;
@@ -137,6 +137,7 @@ mod tests {
                 status: AgentStatus::Unknown,
                 pane: PaneAvailability::Present,
                 status_detail: "Unsupported foreground command.".into(),
+                attention_prompt: None,
             })
             .collect()
     }
