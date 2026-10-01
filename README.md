@@ -1,7 +1,7 @@
 # Agent Workbench
 
-M1–M3: persistent work items mapped to tmux panes, navigation and reply submission,
-alongside a read-only terminal
+M1–M4: persistent work items mapped to tmux panes, navigation, reply submission,
+and conservative agent-state detection, alongside a read-only terminal
 view of your sessions, windows, and panes. Requires Rust 1.88+ and tmux on `PATH`
 for live discovery. Registration and listing also work without tmux.
 
@@ -14,7 +14,7 @@ normal server selection: the inherited `TMUX` environment when present, otherwis
 the default socket. Discovery is read-only. Only explicit open/reply actions
 switch to panes or submit input; no sessions or workspaces are created.
 
-The TUI opens in **WORK**, showing registered items with `UNKNOWN` agent status,
+The TUI opens in **WORK**, showing registered items with observed agent status,
 their type, repository, workspace, optional branch, and mapped pane ID. Pane
 availability is separate from agent status: `present` means the pane was found,
 `missing` means it is absent from a successful discovery, and `unavailable` means
@@ -40,7 +40,7 @@ In WORK, the selected item is highlighted with `>`:
 | `j` / `↓`, `k` / `↑` | Select the next/previous work item. |
 | `Enter` | Open/focus the selected item's mapped pane. |
 | `r` | Compose a reply to the selected item. |
-| `Tab` | Select the next item known to need attention; currently reports none because all statuses are `UNKNOWN`. |
+| `Tab` | Select the next `WAITING_FOR_INPUT` or `COMPLETE` item, wrapping around. |
 | `s`, `w` | Switch to sessions or work items. |
 
 Opening from inside tmux switches its current client to the target session/window/
@@ -66,8 +66,44 @@ never retried automatically. A failed send retains the draft: inspect the target
 before manually resending, because a command can fail after partial delivery.
 Once submission starts, cancellation is unavailable until it completes. Missing
 panes and command failures are shown in WORK without deleting the registration.
-Input is sent to whatever program is running in the mapped pane; agent detection
-is not implemented yet. Exit tmux copy mode before sending a reply.
+Input is sent to whatever program is running in the mapped pane; classification
+does not restrict open/reply actions. Exit tmux copy mode before sending a reply.
+
+## Basic agent state (M4)
+
+Detection is automatic in WORK and `workbench list`; no re-registration, hooks,
+API keys, or agent configuration is needed. The first supported agent is the
+interactive **Codex CLI**, when tmux reports the foreground command as `codex`
+(or a path ending in `/codex`). Other agents, shells, and wrappers such as `node`
+stay `UNKNOWN` and remain fully navigable/replyable.
+
+| State | Evidence |
+| --- | --- |
+| `RUNNING` | Current Codex activity line with elapsed time and `esc to interrupt`. |
+| `WAITING_FOR_INPUT` | Current command/edit/permission/terminal-input approval dialog: known title, selected Yes/No option, and confirmation footer. |
+| `IDLE` | Bottom-of-screen Codex composer and shortcuts footer, without an active indicator or explicit completion marker. |
+| `COMPLETE` | Ready composer immediately following Codex's `Worked for …` marker. **The turn finished; the overall task may not be done.** |
+| `UNKNOWN` | Unsupported agent, missing/unavailable/dead pane, copy/view mode, failed capture, unrecognized menu, or inconclusive/truncated UI. |
+
+The work list shows a short explanation beside each status. Detection reads only
+the current visible viewport of registered supported-agent panes, not scrollback,
+session transcripts, or unregistered panes. Captures include foreground/dead/mode
+metadata before and after the screen; inconsistent observations are discarded.
+Linked panes or multiple registrations sharing a pane are captured once per refresh.
+At most four captures run concurrently, each with the same three-second timeout.
+Observations are replaced on every refresh, not persisted; failures never retain
+a stale waiting/completed status or remove registrations. `list` falls back to
+`UNKNOWN` with unavailable panes when tmux cannot be reached.
+
+These are terminal heuristics, not an agent protocol. They recognize observed
+English Codex UI patterns (including legacy context footers and current model/path
+footers); changed keybindings, localization, narrow panes, menus, and UI changes
+can produce `UNKNOWN`. Free-form questions and structured question pickers are
+not reliably distinguished yet—open the full pane when uncertain. `IDLE` means a
+ready composer, not proof that no human response is desired. A visible completion
+marker remains `COMPLETE` until the screen changes; there is no acknowledgement
+or dedicated attention queue in M4. No state is inferred solely from process
+presence, pane disappearance, a quiet terminal, or words such as “done” in prose.
 
 ## Manual registration
 
@@ -114,7 +150,8 @@ it; the sessions view remains usable while a state error is shown in WORK.
 
 ## Structure
 
-- `workbench-core`: typed snapshots, work-item models and pane resolution, tmux CLI
+- `workbench-core`: typed snapshots, work-item models, pane resolution, pure agent
+  status interpretation, read-only observations, tmux CLI
   adapter, and JSON persistence. Tokio handles discovery; Serde/serde_json serialize
   state; tempfile/fs2 provide atomic replacement and advisory locking. It has no
   presentation dependencies.
@@ -129,10 +166,10 @@ Metadata must be UTF-8. ASCII unit/record separators (`U+001F`/`U+001E`) are
 reserved for the discovery format; metadata containing those rare characters is
 reported as malformed. Ordinary spaces, tabs, newlines, and Unicode are preserved.
 Only the selected tmux server is discovered; multi-server aggregation is not part
-of M1–M3. Saved pane IDs refer to the selected server; tmux can reuse IDs after a
+of M1–M4. Saved pane IDs refer to the selected server; tmux can reuse IDs after a
 server restart, so check mappings after restarting tmux. There is no pane remapping
-or deletion command yet. There is no agent classification or Git/review
-functionality; those belong to later milestones.
+or deletion command yet. Dedicated attention queues and Git/review functionality
+belong to later milestones.
 
 ## Checks
 
@@ -155,4 +192,12 @@ that server:
 
 ```sh
 cargo test -p workbench-core isolated_tmux_input_is_literal_and_missing_panes_are_safe -- --ignored
+```
+
+The M4 opt-in transport test replays Codex UI fixtures with an inert process on
+its own isolated server, checking all recognized statuses, copy mode, and a
+disappearing pane. It does not start a real agent or call an API:
+
+```sh
+cargo test -p workbench-core isolated_tmux_observations_handle_copy_mode_and_disappearance -- --ignored
 ```

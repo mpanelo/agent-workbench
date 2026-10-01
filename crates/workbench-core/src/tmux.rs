@@ -70,7 +70,7 @@ impl Error for DiscoveryError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct TmuxClient {
     pub(crate) executable: OsString,
     pub(crate) socket: Option<std::path::PathBuf>,
@@ -106,6 +106,78 @@ impl TmuxClient {
         let output = run_command(self.command().args(args), COMMAND_TIMEOUT).await?;
         ensure_success(&output)
     }
+
+    /// Capture only the current viewport (no scrollback or escape sequences).
+    /// Metadata brackets the screen so process changes/copy mode invalidate it.
+    pub(crate) async fn observe_pane(
+        &self,
+        pane_id: &str,
+    ) -> Result<PaneObservation, DiscoveryError> {
+        validate_id(pane_id, '%', 0)?;
+        let format = "\x1e#{pane_current_command}\x1f#{pane_dead}\x1f#{pane_in_mode}\x1e";
+        let output = run_command(
+            self.command().args([
+                "display-message",
+                "-p",
+                "-t",
+                pane_id,
+                format,
+                ";",
+                "capture-pane",
+                "-p",
+                "-J",
+                "-t",
+                pane_id,
+                ";",
+                "display-message",
+                "-p",
+                "-t",
+                pane_id,
+                format,
+            ]),
+            COMMAND_TIMEOUT,
+        )
+        .await?;
+        ensure_success(&output)?;
+        let text = std::str::from_utf8(&output.stdout).map_err(|error| {
+            invalid_output(0, format!("pane observation is not UTF-8: {error}"))
+        })?;
+        parse_observation(text)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct PaneObservation {
+    pub(crate) command: String,
+    pub(crate) dead: bool,
+    pub(crate) in_mode: bool,
+    pub(crate) screen: String,
+}
+
+fn parse_observation(text: &str) -> Result<PaneObservation, DiscoveryError> {
+    if text.len() > 256 * 1024 {
+        return Err(invalid_output(0, "pane observation exceeds 256 KiB"));
+    }
+    let fields: Vec<_> = text.split(RECORD_SEPARATOR).collect();
+    let ["", before, screen, after, "\n"] = fields.as_slice() else {
+        return Err(invalid_output(0, "incomplete pane observation"));
+    };
+    if before != after {
+        return Err(invalid_output(
+            0,
+            "pane metadata changed during observation",
+        ));
+    }
+    let metadata: Vec<_> = before.split(FIELD_SEPARATOR).collect();
+    let [command, dead @ ("0" | "1"), in_mode @ ("0" | "1")] = metadata.as_slice() else {
+        return Err(invalid_output(0, "invalid pane observation metadata"));
+    };
+    Ok(PaneObservation {
+        command: (*command).into(),
+        dead: *dead == "1",
+        in_mode: *in_mode == "1",
+        screen: screen.strip_prefix('\n').unwrap_or(screen).into(),
+    })
 }
 
 async fn run_command(command: &mut Command, limit: Duration) -> Result<Output, DiscoveryError> {
@@ -261,6 +333,21 @@ fn parse_snapshot(text: &str) -> Result<Snapshot, DiscoveryError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observation_preserves_screen_and_requires_matching_complete_metadata() {
+        let text = "\x1ecodex\x1f0\x1f0\x1e\n› λ🙂\n\x1ecodex\x1f0\x1f0\x1e\n";
+        let observation = parse_observation(text).unwrap();
+        assert_eq!(observation.screen, "› λ🙂\n");
+        assert_eq!(observation.command, "codex");
+        assert!(!observation.dead);
+        assert!(!observation.in_mode);
+        assert!(parse_observation(&text.replacen("codex", "fish", 1)).is_err());
+        assert!(parse_observation(&text.replace("\x1f0", "\x1finvalid")).is_err());
+        assert!(parse_observation("› λ🙂\n").is_err());
+        assert!(parse_observation(&text[..text.len() - 1]).is_err());
+        assert!(parse_observation(&text.replace("λ🙂", "\x1e")).is_err());
+    }
 
     fn row(fields: [&str; 10]) -> String {
         format!("{}\x1e\n", fields.join("\x1f"))

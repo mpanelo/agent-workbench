@@ -38,22 +38,32 @@ impl fmt::Display for WorkItemKind {
     }
 }
 
-// M2 deliberately makes no inference about an agent's activity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentStatus {
+    Running,
+    WaitingForInput,
+    Idle,
+    /// A visible agent turn finished; not proof that the work item is done.
+    Complete,
     Unknown,
 }
 
 impl AgentStatus {
-    /// UNKNOWN does not imply that an agent needs input.
+    /// Only affirmative input/completion evidence creates an attention item.
     pub fn needs_attention(self) -> bool {
-        false
+        matches!(self, Self::WaitingForInput | Self::Complete)
     }
 }
 
 impl fmt::Display for AgentStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("UNKNOWN")
+        f.write_str(match self {
+            Self::Running => "RUNNING",
+            Self::WaitingForInput => "WAITING_FOR_INPUT",
+            Self::Idle => "IDLE",
+            Self::Complete => "COMPLETE",
+            Self::Unknown => "UNKNOWN",
+        })
     }
 }
 
@@ -79,6 +89,8 @@ pub struct WorkItemState {
     pub item: WorkItem,
     pub status: AgentStatus,
     pub pane: PaneAvailability,
+    /// Local observation only; never persisted and never contains terminal text.
+    pub status_detail: String,
 }
 
 #[derive(Debug)]

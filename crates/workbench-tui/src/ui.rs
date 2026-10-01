@@ -79,6 +79,10 @@ pub(crate) fn render_work(
                 ));
                 lines.push(Line::from(format!("  {}", visible(&item.title))));
                 lines.push(Line::from(format!(
+                    "  Status: {}",
+                    visible(&state.status_detail)
+                )));
+                lines.push(Line::from(format!(
                     "  Type: {}  Pane: {} ({})",
                     item.kind,
                     visible(&item.pane_id),
@@ -320,6 +324,32 @@ mod tests {
             },
             status: AgentStatus::Unknown,
             pane,
+            status_detail: "Unsupported foreground command.".into(),
+        }
+    }
+
+    #[test]
+    fn work_view_renders_each_observed_status_and_explanation() {
+        for status in [
+            AgentStatus::Running,
+            AgentStatus::WaitingForInput,
+            AgentStatus::Idle,
+            AgentStatus::Complete,
+            AgentStatus::Unknown,
+        ] {
+            let mut item = registered(PaneAvailability::Present, WorkItemKind::Implementation);
+            item.status = status;
+            item.status_detail = "Observed locally; task completion unverified.".into();
+            let state = AppState {
+                discovery: None,
+                work_items: Some(Ok(vec![item])),
+            };
+            let text = work_screen(&state, 100, 15, &mut 0);
+            assert!(text.contains(&status.to_string()), "{text}");
+            assert!(
+                text.contains("Observed locally; task completion unverified."),
+                "{text}"
+            );
         }
     }
 

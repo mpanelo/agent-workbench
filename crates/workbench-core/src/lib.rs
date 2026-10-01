@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 mod actions;
+mod agent_state;
 mod model;
 mod tmux;
 mod work_items;
@@ -69,6 +70,12 @@ impl Engine {
                     item,
                     status: AgentStatus::Unknown,
                     pane,
+                    status_detail: match pane {
+                        PaneAvailability::Present => "Agent has not been observed.",
+                        PaneAvailability::Missing => "Mapped pane is missing.",
+                        PaneAvailability::Unavailable => "Tmux discovery is unavailable.",
+                    }
+                    .into(),
                 }
             })
             .collect())

@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, ffi::OsString, path::PathBuf};
 
 use workbench_core::{WorkItem, WorkItemKind, default_state_file};
 
-pub(crate) const HELP: &str = "Agent Workbench — M3 navigation and input
+pub(crate) const HELP: &str = "Agent Workbench — M4 basic agent state
 
 Usage:
   workbench [--state-file PATH]

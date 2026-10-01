@@ -41,6 +41,10 @@ fn registrations_survive_independent_processes_without_tmux_or_a_terminal() {
     let listed = Command::new(env!("CARGO_BIN_EXE_workbench"))
         .args(["list", "--state-file"])
         .arg(&path)
+        .env(
+            "TMUX",
+            format!("{},1,0", directory.path().join("absent.sock").display()),
+        )
         .output()
         .unwrap();
     assert!(listed.status.success());

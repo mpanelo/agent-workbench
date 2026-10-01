@@ -60,17 +60,26 @@ async fn start() -> io::Result<()> {
             return Ok(());
         }
         cli::Command::List => {
-            let items = engine.work_items().map_err(io::Error::other)?;
+            // Listing remains useful offline, with unavailable/UNKNOWN observations.
+            let snapshot = engine.discover().await.ok();
+            let items = engine
+                .observe_work_item_states(snapshot.as_ref())
+                .await
+                .map_err(io::Error::other)?;
             if items.is_empty() {
                 println!("No work items registered.");
             }
-            for item in items {
+            for state in items {
+                let item = state.item;
                 println!(
-                    "{}\tUNKNOWN\t{}\t{}\n  {}\n  Repository: {}\n  Workspace: {}\n  Branch: {}",
+                    "{}\t{}\t{}\t{} ({})\n  {}\n  Status: {}\n  Repository: {}\n  Workspace: {}\n  Branch: {}",
                     item.id,
+                    state.status,
                     item.kind,
                     item.pane_id,
+                    state.pane,
                     item.title,
+                    state.status_detail,
                     item.repository.display(),
                     item.workspace.display(),
                     item.branch.as_deref().unwrap_or("unavailable")
@@ -139,7 +148,8 @@ async fn run(
                 .await
                 .map_err(|error| error.to_string());
             let work_items = discovery_engine
-                .work_item_states(discovery.as_ref().ok())
+                .observe_work_item_states(discovery.as_ref().ok())
+                .await
                 .map_err(|error| error.to_string());
             if sender
                 .send(AppState {

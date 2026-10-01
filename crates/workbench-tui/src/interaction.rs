@@ -95,8 +95,9 @@ impl Interaction {
             self.selected_id = Some(items[index].item.id.clone());
             self.reveal_selection = true;
         } else {
-            self.message =
-                Some("No items are known to need attention; agent status is UNKNOWN in M3.".into());
+            self.message = Some(
+                "No items are currently known to need attention. UNKNOWN is inconclusive.".into(),
+            );
         }
     }
 
@@ -135,6 +136,7 @@ mod tests {
                 },
                 status: AgentStatus::Unknown,
                 pane: PaneAvailability::Present,
+                status_detail: "Unsupported foreground command.".into(),
             })
             .collect()
     }
@@ -172,6 +174,21 @@ mod tests {
         assert_eq!(interaction.selected_id.as_deref(), Some("A"));
         assert!(interaction.message.unwrap().contains("UNKNOWN"));
         Interaction::default().next_attention(&[]);
+    }
+
+    #[test]
+    fn tab_cycles_waiting_and_completed_items_only() {
+        let mut states = items(&["A", "B", "C", "D", "E"]);
+        states[0].status = AgentStatus::Running;
+        states[1].status = AgentStatus::WaitingForInput;
+        states[2].status = AgentStatus::Idle;
+        states[3].status = AgentStatus::Complete;
+        let mut interaction = Interaction::default();
+        interaction.sync(&states);
+        for id in ["B", "D", "B"] {
+            interaction.next_attention(&states);
+            assert_eq!(interaction.selected_id.as_deref(), Some(id));
+        }
     }
 
     #[test]
