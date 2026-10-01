@@ -5,6 +5,8 @@ conservative agent-state detection, an attention queue, and local Git diff revie
 view of your sessions, windows, and panes. Requires Rust 1.88+ and tmux on `PATH`
 for live discovery. Registration and listing also work without tmux.
 
+Potential future improvements are tracked in [v1 ideas](docs/v1-ideas.md).
+
 ## Installation
 
 Install [Rust and Cargo](https://www.rust-lang.org/tools/install) (Rust 1.88 or
