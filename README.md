@@ -27,7 +27,8 @@ titles, current commands, and working directories. Missing command/path metadata
 is shown as `unavailable`. Discovery refreshes in the background every two seconds;
 errors replace the displayed snapshot and retry automatically. Each command has a
 three-second timeout. Quit with `q`, `Esc`, or `Ctrl-C` when not composing a reply.
-In ATTENTION and WORK, `j/k` or arrows move selection. Page Up/Page Down scroll details; Home
+In ATTENTION and WORK, `j/k` or arrows move selection. `Ctrl+d`/`Ctrl+u` scroll
+down/up half a page in all views; Page Down/Page Up still scroll a full page. Home
 selects the first item. The sessions view still uses arrows to scroll. Resize is handled automatically.
 Long metadata lines are clipped to terminal width; control characters are displayed
 as escapes.
@@ -43,6 +44,8 @@ In ATTENTION and WORK, the selected item is highlighted with `>`:
 | `r` | Compose a reply to the selected item. |
 | `Tab` | Select the next `WAITING_FOR_INPUT` or `COMPLETE` item, wrapping around. |
 | `a`, `w`, `s` | Switch to attention, all work items, or sessions. |
+| `Ctrl+d`, `Ctrl+u` | Scroll down/up half a page without changing selection (outside the reply editor). |
+| Page Down, Page Up | Scroll down/up a full page. |
 | `d` | Explain that built-in diff review is deferred to M6; no Git operation is performed yet. |
 
 Opening from inside tmux switches its current client to the target session/window/

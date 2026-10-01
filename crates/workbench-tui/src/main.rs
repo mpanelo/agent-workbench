@@ -1,6 +1,6 @@
 use std::{io, sync::Arc, time::Duration};
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use tokio::{
     sync::watch,
     task::JoinSet,
@@ -286,7 +286,7 @@ async fn event_loop(
                         match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => return Ok(RunExit::Quit),
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(RunExit::Quit),
-                            _ => if let Some(id) = navigate(key.code, &state, view, &mut scroll, interaction, terminal.size()?.height) { return Ok(RunExit::Focus(id)); },
+                            _ => if let Some(id) = navigate(key, &state, view, &mut scroll, interaction, terminal.size()?.height) { return Ok(RunExit::Focus(id)); },
                         }
                     }
                 }
@@ -297,15 +297,35 @@ async fn event_loop(
 
 /// Route list actions against the visible subset, never the hidden WORK list.
 fn navigate(
-    key: KeyCode,
+    key: impl Into<KeyEvent>,
     state: &AppState,
     view: &mut ui::View,
     scroll: &mut u16,
     interaction: &mut interaction::Interaction,
     height: u16,
 ) -> Option<String> {
+    let key = key.into();
+    if interaction.draft.is_some() {
+        return None;
+    }
+    if key.modifiers == KeyModifiers::CONTROL {
+        let half_page = (height.saturating_sub(2) / 2).max(1);
+        match key.code {
+            KeyCode::Char('d') => *scroll = scroll.saturating_add(half_page),
+            KeyCode::Char('u') => *scroll = scroll.saturating_sub(half_page),
+            _ => return None,
+        }
+        interaction.reveal_selection = false;
+        return None;
+    }
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+    {
+        return None;
+    }
     let items = state.items_for(*view);
-    match key {
+    match key.code {
         KeyCode::Down | KeyCode::Char('j') if view.is_item_view() => {
             interaction.move_selection(items, 1)
         }
@@ -341,7 +361,7 @@ fn navigate(
             }
         }
         KeyCode::Char('a' | 'w' | 's') => {
-            *view = match key {
+            *view = match key.code {
                 KeyCode::Char('a') => ui::View::Attention,
                 KeyCode::Char('w') => ui::View::Work,
                 _ => ui::View::Sessions,
@@ -382,6 +402,120 @@ mod tests {
                 })
                 .collect()),
         )
+    }
+
+    #[test]
+    fn vim_half_page_scroll_works_in_every_view_without_changing_selection() {
+        let state = state(&[("A", AgentStatus::WaitingForInput)]);
+        for mut view in [ui::View::Attention, ui::View::Work, ui::View::Sessions] {
+            let original_view = view;
+            let mut interaction = interaction::Interaction::default();
+            interaction.sync(state.items_for(view));
+            let selected = interaction.selected_id.clone();
+            let mut scroll = 0;
+            for (key, expected) in [('d', 11), ('d', 22), ('u', 11), ('u', 0), ('u', 0)] {
+                assert!(
+                    navigate(
+                        KeyEvent::new(KeyCode::Char(key), KeyModifiers::CONTROL),
+                        &state,
+                        &mut view,
+                        &mut scroll,
+                        &mut interaction,
+                        24,
+                    )
+                    .is_none()
+                );
+                assert_eq!(scroll, expected);
+                assert_eq!(view, original_view);
+                assert_eq!(interaction.selected_id, selected);
+                assert!(interaction.message.is_none());
+                assert!(interaction.draft.is_none());
+                assert!(!interaction.reveal_selection);
+            }
+            navigate(
+                KeyCode::PageDown,
+                &state,
+                &mut view,
+                &mut scroll,
+                &mut interaction,
+                24,
+            );
+            assert_eq!(scroll, 21);
+            navigate(
+                KeyCode::PageUp,
+                &state,
+                &mut view,
+                &mut scroll,
+                &mut interaction,
+                24,
+            );
+            assert_eq!(scroll, 0);
+        }
+    }
+
+    #[test]
+    fn vim_scroll_saturates_and_moves_at_least_one_row_on_tiny_terminals() {
+        let state = state(&[]);
+        let mut view = ui::View::Attention;
+        let mut interaction = interaction::Interaction::default();
+        for height in [0, 1, 2, 3, 4] {
+            let mut scroll = 0;
+            navigate(
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+                &state,
+                &mut view,
+                &mut scroll,
+                &mut interaction,
+                height,
+            );
+            assert_eq!(scroll, 1);
+            scroll = u16::MAX;
+            navigate(
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+                &state,
+                &mut view,
+                &mut scroll,
+                &mut interaction,
+                height,
+            );
+            assert_eq!(scroll, u16::MAX);
+        }
+    }
+
+    #[test]
+    fn modified_keys_and_reply_drafts_do_not_trigger_list_actions() {
+        let state = state(&[("A", AgentStatus::WaitingForInput)]);
+        let mut view = ui::View::Attention;
+        let mut interaction = interaction::Interaction::default();
+        interaction.sync(state.items_for(view));
+        let mut scroll = 10;
+        for key in [
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::ALT),
+            KeyEvent::new(
+                KeyCode::Char('d'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ),
+        ] {
+            navigate(key, &state, &mut view, &mut scroll, &mut interaction, 24);
+            assert_eq!(scroll, 10);
+            assert!(interaction.message.is_none());
+            assert!(interaction.draft.is_none());
+        }
+        interaction.begin_reply(state.items_for(view));
+        interaction.draft.as_mut().unwrap().append("yes").unwrap();
+        for ch in ['d', 'u'] {
+            navigate(
+                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL),
+                &state,
+                &mut view,
+                &mut scroll,
+                &mut interaction,
+                24,
+            );
+            assert_eq!(scroll, 10);
+            assert_eq!(interaction.draft.as_ref().unwrap().text, "yes");
+        }
     }
 
     #[test]

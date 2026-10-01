@@ -14,7 +14,9 @@ Usage:
 
 The TUI defaults to ATTENTION; a returns there, w shows all work, s shows sessions.
 j/k or arrows select; Enter opens the pane; r composes a single-line reply.
+Ctrl+d/Ctrl+u scroll down/up half a page; Page Down/Page Up scroll a full page.
 Enter submits a reply and Esc cancels. Tab selects known waiting/completed items.
+While composing a reply, Ctrl+u clears the draft instead of scrolling.
 d explains that diff review is not available until M6; no Git operations yet.
 Registration does not require a running tmux server. Relative repository/workspace
 paths are resolved from the current directory; expand ~ using your shell.

@@ -218,7 +218,7 @@ fn render_items(
         Paragraph::new(if interaction.draft.is_some() {
             "Enter: send | Esc/Ctrl-C: cancel | Backspace: edit | Ctrl-u: clear"
         } else {
-            "j/k: select | Enter: open | r: reply | PgUp/Dn: scroll | a/w/s: views | q: quit"
+            "j/k: select | Enter: open | r: reply | Ctrl+d/u: scroll | a/w/s: views | q: quit"
         }),
         footer,
     );
@@ -320,7 +320,7 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &DiscoveryState, scroll: &mut
         frame.render_widget(Paragraph::new(lines).scroll((*scroll, 0)), body);
     }
     frame.render_widget(
-        Paragraph::new("a/w/s: views | ↑/↓ PgUp/PgDn: scroll | q: quit • refresh: 2s"),
+        Paragraph::new("a/w/s: views | ↑/↓: scroll | Ctrl+d/u: half-page | q: quit • refresh: 2s"),
         footer,
     );
 }
@@ -440,13 +440,13 @@ mod tests {
             let text = item_screen(&state, 80, 10, &mut 0, view);
             assert_eq!(
                 text.lines().last().unwrap().trim_end(),
-                "j/k: select | Enter: open | r: reply | PgUp/Dn: scroll | a/w/s: views | q: quit"
+                "j/k: select | Enter: open | r: reply | Ctrl+d/u: scroll | a/w/s: views | q: quit"
             );
         }
         let text = screen(None, 80, 10, &mut 0);
         assert_eq!(
             text.lines().last().unwrap().trim_end(),
-            "a/w/s: views | ↑/↓ PgUp/PgDn: scroll | q: quit • refresh: 2s"
+            "a/w/s: views | ↑/↓: scroll | Ctrl+d/u: half-page | q: quit • refresh: 2s"
         );
     }
 
@@ -478,7 +478,7 @@ mod tests {
             "1 UNKNOWN item(s)",
             "Enter: open",
             "r: reply",
-            "PgUp/Dn: scroll",
+            "Ctrl+d/u: scroll",
         ] {
             assert!(text.contains(expected), "missing {expected:?}: {text}");
         }
@@ -506,7 +506,7 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains('…'));
-        assert!(text.contains("PgUp/Dn: scroll"));
+        assert!(text.contains("Ctrl+d/u: scroll"));
 
         let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
         let mut interaction = Interaction::default();

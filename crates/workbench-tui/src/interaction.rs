@@ -207,6 +207,10 @@ mod tests {
         assert_eq!(draft.text, "yes λ");
         assert!(draft.append(&"a".repeat(MAX_INPUT_BYTES)).is_err());
         draft
+            .edit(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert_eq!(draft.text, "yes λ");
+        draft
             .edit(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL))
             .unwrap();
         assert!(draft.text.is_empty());
