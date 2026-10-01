@@ -13,6 +13,8 @@ Usage:
   workbench --help
 
 The TUI defaults to ATTENTION; a returns there, w shows all work, s shows sessions.
+In REVIEW, Space saves file marks; r reloads while restoring unchanged marks.
+Marks persist across restarts; changed captured diffs require re-review.
 In SESSIONS, j/k or arrows select a pane; Enter or r opens registration with
 pane/Git metadata filled in. Enter confirms; Tab changes fields; Esc cancels.
 j/k or arrows select; Enter opens the pane; r composes a single-line reply.

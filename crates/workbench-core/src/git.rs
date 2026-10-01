@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
     process::Command,
@@ -23,7 +24,8 @@ const MAX_FILES: usize = 512;
 const MAX_PATCH_LINES: usize = 60_000;
 const MAX_LINE_BYTES: usize = 8192;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ChangeKind {
     Added,
     Modified,
@@ -48,7 +50,8 @@ impl fmt::Display for ChangeKind {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChangedFile {
     /// Literal repository-relative path (never a Git pathspec expression).
     pub path: PathBuf,
@@ -413,6 +416,9 @@ fn diff_args(values: &[&str]) -> Vec<OsString> {
         "--no-color",
         "--no-ext-diff",
         "--no-textconv",
+        // Include exact object IDs even for binary diffs; no binary payloads
+        // or external diff/filter helpers are needed for review comparison.
+        "--full-index",
         "--find-renames",
         "--submodule=short",
         "--src-prefix=a/",
@@ -442,7 +448,7 @@ fn nul_fields(bytes: &[u8]) -> Result<Vec<&str>, GitError> {
     Ok(data.split('\0').collect())
 }
 
-fn parse_path(path: &str) -> Result<PathBuf, GitError> {
+pub(crate) fn parse_path(path: &str) -> Result<PathBuf, GitError> {
     let path = PathBuf::from(path);
     if path.as_os_str().is_empty()
         || path

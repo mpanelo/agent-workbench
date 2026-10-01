@@ -217,7 +217,7 @@ pub(crate) struct WorkItemStore {
 
 /// Explicitly unlock on every return path. Merely closing our descriptor may
 /// leave the lock briefly held by a concurrently forked command before exec.
-struct StateLock(fs::File);
+pub(crate) struct StateLock(pub(crate) fs::File);
 
 impl Drop for StateLock {
     fn drop(&mut self) {
@@ -228,6 +228,12 @@ impl Drop for StateLock {
 impl WorkItemStore {
     pub(crate) fn new(path: PathBuf) -> Self {
         Self { path }
+    }
+
+    pub(crate) fn review_path(&self) -> PathBuf {
+        let mut path = self.path.as_os_str().to_owned();
+        path.push(".reviews.json");
+        path.into()
     }
 
     fn io_error(&self, source: io::Error) -> WorkItemError {

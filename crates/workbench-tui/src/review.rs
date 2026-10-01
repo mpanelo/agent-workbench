@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -8,7 +9,7 @@ use ratatui::{
     text::Line,
     widgets::{Block, List, ListItem, ListState, Paragraph},
 };
-use workbench_core::{ReviewSession, WorkItemDiff};
+use workbench_core::{ReviewSession, ReviewStatus};
 
 use crate::ui::{display_path, visible};
 
@@ -19,6 +20,8 @@ pub(crate) struct ReviewUi {
     generation: u64,
     loading: bool,
     error: Option<String>,
+    save_error: Option<String>,
+    saving: bool,
     selected: usize,
     scroll: u16,
     horizontal: u16,
@@ -29,6 +32,12 @@ pub(crate) struct ReviewUi {
 pub(crate) enum ReviewIntent {
     None,
     Reload,
+    Save {
+        ticket: u64,
+        session: Box<ReviewSession>,
+        path: PathBuf,
+        reviewed: bool,
+    },
 }
 
 impl ReviewUi {
@@ -42,6 +51,10 @@ impl ReviewUi {
         self.current.is_some()
     }
 
+    pub fn is_saving(&self) -> bool {
+        self.saving
+    }
+
     pub fn fail_loading(&mut self, error: String) {
         if self.is_open() && self.loading {
             self.finish(self.generation, Err(error));
@@ -50,9 +63,11 @@ impl ReviewUi {
 
     pub fn open(&mut self, id: String) -> Option<u64> {
         self.generation += 1;
-        self.loading = !self.sessions.contains_key(&id);
+        self.sessions.remove(&id);
+        self.loading = true;
         self.current = Some(id);
         self.error = None;
+        self.save_error = None;
         self.selected = 0;
         self.scroll = 0;
         self.horizontal = 0;
@@ -65,21 +80,22 @@ impl ReviewUi {
         self.generation += 1;
         self.loading = true;
         self.error = None;
+        self.save_error = None;
         self.selected = 0;
         self.scroll = 0;
         self.horizontal = 0;
         Some((self.generation, id))
     }
 
-    pub fn finish(&mut self, ticket: u64, result: Result<WorkItemDiff, String>) {
+    pub fn finish(&mut self, ticket: u64, result: Result<ReviewSession, String>) {
         if !self.is_open() || ticket != self.generation {
             return;
         }
         self.loading = false;
         match result {
-            Ok(diff) if self.current.as_deref() == Some(diff.work_item_id.as_str()) => {
+            Ok(session) if self.current.as_deref() == Some(session.diff.work_item_id.as_str()) => {
                 self.sessions
-                    .insert(diff.work_item_id.clone(), ReviewSession::new(diff));
+                    .insert(session.diff.work_item_id.clone(), session);
                 self.error = None;
             }
             Ok(_) => {
@@ -89,7 +105,39 @@ impl ReviewUi {
         }
     }
 
+    pub fn finish_save(&mut self, ticket: u64, result: Result<ReviewSession, String>) {
+        if !self.is_open() || ticket != self.generation {
+            return;
+        }
+        self.saving = false;
+        match result {
+            Ok(session) if self.current.as_deref() == Some(session.diff.work_item_id.as_str()) => {
+                self.sessions
+                    .insert(session.diff.work_item_id.clone(), session);
+                self.save_error = None;
+            }
+            Ok(_) => {
+                self.save_error = Some("Review save returned another item; reopen review.".into())
+            }
+            Err(error) => self.save_error = Some(error),
+        }
+    }
+
+    pub fn fail_saving(&mut self, error: String) {
+        if self.saving {
+            self.finish_save(self.generation, Err(error));
+        }
+    }
+
+    #[cfg(test)]
+    fn finish_diff(&mut self, ticket: u64, result: Result<workbench_core::WorkItemDiff, String>) {
+        self.finish(ticket, result.map(ReviewSession::new));
+    }
+
     pub fn key(&mut self, key: KeyEvent, height: u16) -> ReviewIntent {
+        if self.saving {
+            return ReviewIntent::None;
+        }
         if key.code == KeyCode::Esc {
             self.current = None;
             self.loading = false;
@@ -141,7 +189,15 @@ impl ReviewUi {
             KeyCode::Char(' ') => {
                 if let Some(file) = session.diff.files.get(self.selected) {
                     let path = file.path.clone();
-                    session.toggle_reviewed(&path);
+                    let reviewed = !session.is_reviewed(&path);
+                    self.saving = true;
+                    self.save_error = None;
+                    return ReviewIntent::Save {
+                        ticket: self.generation,
+                        session: Box::new(session.clone()),
+                        path,
+                        reviewed,
+                    };
                 }
             }
             KeyCode::PageDown => {
@@ -170,9 +226,10 @@ impl ReviewUi {
     }
 
     pub fn render(&mut self, frame: &mut Frame<'_>) {
-        let [header, summary, body, footer] = Layout::vertical([
+        let [header, summary, notice, body, footer] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(2),
+            Constraint::Length(if self.save_error.is_some() { 3 } else { 0 }),
             Constraint::Min(0),
             Constraint::Length(2),
         ])
@@ -220,13 +277,28 @@ impl ReviewUi {
                     visible(&session.diff.base),
                     &session.diff.base_revision[..session.diff.base_revision.len().min(12)]
                 )),
-                Line::from(format!(
-                    "Captured diff • reload resets marks • {}",
-                    visible(&display_path(&session.diff.workspace))
-                )),
+                Line::from(if self.saving {
+                    "Saving review mark… Please wait (input temporarily disabled).".to_owned()
+                } else if self.save_error.is_some() {
+                    "Save failed; previous marks unchanged. Space: retry | r: reload".to_owned()
+                } else {
+                    format!(
+                        "Saved marks • {} changed after review • {}",
+                        session.changed_after_review(),
+                        visible(&display_path(&session.diff.workspace))
+                    )
+                }),
             ]),
             summary,
         );
+        if let Some(error) = &self.save_error {
+            frame.render_widget(
+                Paragraph::new(visible(error))
+                    .style(Style::default().fg(Color::Red))
+                    .wrap(ratatui::widgets::Wrap { trim: false }),
+                notice,
+            );
+        }
         if session.diff.files.is_empty() {
             frame.render_widget(
                 Paragraph::new(
@@ -255,10 +327,10 @@ impl ReviewUi {
             .files
             .iter()
             .map(|file| {
-                let mark = if session.is_reviewed(&file.path) {
-                    "✓"
-                } else {
-                    "○"
+                let mark = match session.status(&file.path) {
+                    ReviewStatus::Reviewed => "✓",
+                    ReviewStatus::Unreviewed => "○",
+                    ReviewStatus::ChangedAfterReview => "⚠",
                 };
                 ListItem::new(format!(
                     "{mark} {}  {}",
@@ -338,7 +410,7 @@ impl ReviewUi {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
-    use workbench_core::{ChangeKind, ChangedFile};
+    use workbench_core::{ChangeKind, ChangedFile, Engine, WorkItem, WorkItemDiff, WorkItemKind};
 
     fn diff(id: &str) -> WorkItemDiff {
         WorkItemDiff {
@@ -355,12 +427,53 @@ mod tests {
     fn ready() -> ReviewUi {
         let mut review = ReviewUi::default();
         let ticket = review.open("A".into()).unwrap();
-        review.finish(ticket, Ok(diff("A")));
+        review.finish_diff(ticket, Ok(diff("A")));
         review
     }
 
     fn key(review: &mut ReviewUi, code: KeyCode) -> ReviewIntent {
-        review.key(KeyEvent::new(code, KeyModifiers::NONE), 24)
+        let intent = review.key(KeyEvent::new(code, KeyModifiers::NONE), 24);
+        // UI-only navigation fixtures acknowledge saves. Durable behavior is
+        // tested against the real engine/store below and in the core.
+        if let ReviewIntent::Save {
+            ticket,
+            mut session,
+            path,
+            reviewed,
+        } = intent
+        {
+            let directory = tempfile::tempdir().unwrap();
+            let engine = Engine::new(directory.path().join("items.json"));
+            let already: Vec<_> = session
+                .diff
+                .files
+                .iter()
+                .filter(|file| session.is_reviewed(&file.path))
+                .map(|file| file.path.clone())
+                .collect();
+            session.diff.workspace = std::fs::canonicalize(directory.path()).unwrap();
+            engine
+                .register_work_item(WorkItem {
+                    id: session.diff.work_item_id.clone(),
+                    title: "Test".into(),
+                    repository: session.diff.workspace.clone(),
+                    workspace: session.diff.workspace.clone(),
+                    branch: None,
+                    kind: WorkItemKind::Implementation,
+                    pane_id: "%1".into(),
+                })
+                .unwrap();
+            for file in already {
+                engine.set_file_reviewed(&mut session, &file, true).unwrap();
+            }
+            engine
+                .set_file_reviewed(&mut session, &path, reviewed)
+                .unwrap();
+            review.finish_save(ticket, Ok(*session));
+            ReviewIntent::None
+        } else {
+            intent
+        }
     }
 
     fn screen(review: &mut ReviewUi, width: u16, height: u16) -> String {
@@ -377,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn file_navigation_marking_and_back_preserve_only_in_memory_progress() {
+    fn file_navigation_and_explicit_saves_restore_progress_on_reopen_and_reload() {
         let mut review = ready();
         key(&mut review, KeyCode::Char(' '));
         assert_eq!(review.sessions["A"].progress(), (1, 2));
@@ -391,13 +504,16 @@ mod tests {
         assert_eq!(review.selected, 0);
         key(&mut review, KeyCode::Esc);
         assert!(!review.is_open());
-        assert_eq!(review.open("A".into()), None);
+        let restored = review.sessions["A"].clone();
+        let ticket = review.open("A".into()).unwrap();
+        assert!(review.loading);
+        review.finish(ticket, Ok(restored.clone()));
         assert_eq!(review.sessions["A"].progress(), (1, 2));
         assert_eq!(key(&mut review, KeyCode::Char('r')), ReviewIntent::Reload);
         let (ticket, _) = review.reload().unwrap();
         assert!(!review.sessions.contains_key("A"));
-        review.finish(ticket, Ok(diff("A")));
-        assert_eq!(review.sessions["A"].progress(), (0, 2));
+        review.finish(ticket, Ok(restored));
+        assert_eq!(review.sessions["A"].progress(), (1, 2));
     }
 
     #[test]
@@ -406,10 +522,10 @@ mod tests {
         let old = review.open("A".into()).unwrap();
         key(&mut review, KeyCode::Esc);
         let current = review.open("B".into()).unwrap();
-        review.finish(old, Ok(diff("A")));
+        review.finish_diff(old, Ok(diff("A")));
         assert!(review.loading);
         assert!(!review.sessions.contains_key("A"));
-        review.finish(current, Ok(diff("B")));
+        review.finish_diff(current, Ok(diff("B")));
         assert_eq!(review.current.as_deref(), Some("B"));
         let (reload, _) = review.reload().unwrap();
         review.finish(reload, Err("Workspace removed".into()));
@@ -417,7 +533,7 @@ mod tests {
         assert!(screen(&mut review, 80, 12).contains("Workspace removed"));
         assert!(!screen(&mut review, 80, 12).contains("reviewed •"));
         let (ticket, _) = review.reload().unwrap();
-        review.finish(ticket, Ok(diff("A")));
+        review.finish_diff(ticket, Ok(diff("A")));
         assert!(!review.sessions.contains_key("A"));
         assert!(screen(&mut review, 80, 12).contains("different work item"));
         review.reload().unwrap();
@@ -442,7 +558,7 @@ mod tests {
             "+after",
             "Space: reviewed",
             "Esc: back",
-            "reload resets marks",
+            "Saved marks",
         ] {
             assert!(text.contains(expected), "missing {expected:?}: {text}");
         }
@@ -491,7 +607,7 @@ mod tests {
         key(&mut review, KeyCode::Char(' '));
         let mut empty = diff("A");
         empty.files.clear();
-        review.finish(ticket, Ok(empty));
+        review.finish_diff(ticket, Ok(empty));
         assert!(screen(&mut review, 100, 12).contains("No changes against this base"));
         key(&mut review, KeyCode::Tab);
         key(&mut review, KeyCode::Char(' '));
@@ -500,7 +616,66 @@ mod tests {
         binary.files[0].additions = None;
         binary.files[0].deletions = None;
         binary.files[0].patch = "Binary files a/source.rs and b/source.rs differ\n".into();
-        review.finish(ticket, Ok(binary));
+        review.finish_diff(ticket, Ok(binary));
         assert!(screen(&mut review, 160, 12).contains("binary; external viewer needed"));
+    }
+
+    #[test]
+    fn pending_failed_and_stale_saves_never_claim_an_unsaved_mark() {
+        let mut review = ready();
+        let intent = review.key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), 24);
+        let ReviewIntent::Save {
+            ticket,
+            session,
+            path,
+            reviewed,
+        } = intent
+        else {
+            panic!("expected save intent")
+        };
+        assert!(reviewed);
+        assert_eq!(path, PathBuf::from("source.rs"));
+        assert_eq!(session.progress(), (0, 2));
+        assert!(review.is_saving());
+        assert_eq!(review.sessions["A"].progress(), (0, 2));
+        for code in [KeyCode::Char(' '), KeyCode::Char('r'), KeyCode::Esc] {
+            assert_eq!(key(&mut review, code), ReviewIntent::None);
+        }
+        assert!(review.is_open());
+        assert!(screen(&mut review, 120, 24).contains("Saving review mark"));
+        review.finish_save(
+            ticket,
+            Err("State directory is read-only; no mark changed".into()),
+        );
+        assert!(!review.is_saving());
+        assert_eq!(review.sessions["A"].progress(), (0, 2));
+        let text = screen(&mut review, 120, 24);
+        assert!(text.contains("read-only"));
+        assert!(text.contains("diff --git"));
+        key(&mut review, KeyCode::Esc);
+        let newer = review.open("B".into()).unwrap();
+        review.finish_save(ticket, Ok(*session));
+        assert!(review.loading);
+        assert_eq!(review.current.as_deref(), Some("B"));
+        review.finish_diff(newer, Ok(diff("B")));
+        review.key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), 24);
+        review.fail_saving("Save task stopped".into());
+        assert!(!review.saving);
+        assert!(screen(&mut review, 120, 24).contains("Save task stopped"));
+    }
+
+    #[test]
+    fn changed_after_review_is_visible_and_space_requests_reviewing_the_new_capture() {
+        let mut review = ready();
+        key(&mut review, KeyCode::Char(' '));
+        review.sessions.get_mut("A").unwrap().diff.files[0]
+            .patch
+            .push_str("+new agent edit\n");
+        let text = screen(&mut review, 120, 24);
+        assert!(text.contains("⚠ source.rs"));
+        assert!(text.contains("1 changed after review"));
+        assert!(text.contains("0 / 2 reviewed"));
+        let intent = review.key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), 24);
+        assert!(matches!(intent, ReviewIntent::Save { reviewed: true, .. }));
     }
 }

@@ -9,6 +9,7 @@ mod git;
 mod model;
 mod registration;
 mod review;
+mod review_store;
 mod tmux;
 mod work_items;
 
@@ -17,7 +18,7 @@ pub use attention::attention_items;
 pub use git::{ChangeKind, ChangedFile, GitError, WorkItemDiff};
 pub use model::{Pane, Session, Snapshot, Window};
 pub use registration::{RegistrationDraft, RegistrationError};
-pub use review::ReviewSession;
+pub use review::{ReviewError, ReviewSession, ReviewStatus};
 pub use tmux::DiscoveryError;
 use work_items::WorkItemStore;
 pub use work_items::{

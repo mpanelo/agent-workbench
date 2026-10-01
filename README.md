@@ -219,30 +219,28 @@ SHA yourself. The screen shows the chosen base and its resolved revision.
 | Review key | Action |
 | --- | --- |
 | `j` / `↓`, `k` / `↑` | Select the next/previous changed file. |
-| Space | Toggle the selected file reviewed/unreviewed. |
-| `Tab` | Select the next unreviewed file, wrapping around. |
+| Space | Save a reviewed/unreviewed mark; on ⚠, mark the current capture reviewed. |
+| `Tab` | Select the next unreviewed or changed-after-review file, wrapping around. |
 | `Ctrl+d`, `Ctrl+u` | Scroll the diff down/up half a page. |
 | Page Down, Page Up | Scroll the diff down/up a page. |
 | `h` / `←`, `l` / `→` | Pan long diff lines horizontally. |
 | Home | Reset vertical and horizontal diff scrolling. |
-| `r` | Reload the diff and clear every review mark for that item. |
+| `r` | Reload the diff, restoring unchanged marks and flagging changed snapshots. |
 | `Esc` | Return to the originating ATTENTION/WORK view. |
 | `q` / `Ctrl-C` | Quit Workbench. |
 
-Review marks and diff text are **in memory only**. Reopening an item during the
-same application session retains its captured diff and progress, including after
-tmux navigation. `r` discards the old capture/marks before loading again. Agent
-edits are not automatically refreshed or detected as changed-after-review; use
-`r` to inspect new changes. Persistent review state and re-review tracking remain
-M7/M8, not part of M6. Captures are bounded, on-demand Git reads, not an atomic
-filesystem snapshot; reload if the agent is actively editing during capture.
+Opening or reloading an item captures current changes and restores persisted
+file-review marks (M7 below). Agent edits are not polled automatically while REVIEW
+is open; press `r` to inspect them. Captures are bounded, on-demand Git reads, not
+an atomic filesystem snapshot; reload if the agent is actively editing during capture.
 
 Added, modified, deleted, renamed, type-changed, untracked, and binary files are
 listed. Binary content requires an external viewer and is excluded from line
 totals. Submodules show only their Gitlink/pointer diff, not nested file changes.
 UTF-8 paths and text are supported; terminal control characters are escaped.
-Symlink diffs show link targets, not the linked file's contents. Review is read-only:
-it never stages, commits, applies patches, fetches, or changes branches. External
+Symlink diffs show link targets, not the linked file's contents. Git review is read-only:
+it never stages, commits, applies patches, fetches, or changes branches. Explicit
+review marks write only Workbench's local companion state. External
 diff/textconv helpers and filesystem-monitor hooks are disabled for these reads.
 
 To keep large repositories responsive, capture is limited to 512 changed files,
@@ -250,7 +248,50 @@ To keep large repositories responsive, capture is limited to 512 changed files,
 and 8 KiB per line. Commands time out after five seconds, with a 30-second overall
 capture limit. Oversized/undecodable diffs fail explicitly rather than silently
 loading a partial review; use an external viewer in those cases. No AI review,
-GitHub integration, inline PR comments, or review-state persistence is included.
+GitHub integration, or inline PR comments are included.
+
+## Persistent review state (M7)
+
+Space saves a file-level snapshot of exactly the diff you inspected. Marks survive
+reopening, reloading, tmux navigation, and application restart:
+
+| Mark | Meaning |
+| --- | --- |
+| ✓ | Current captured diff matches the reviewed snapshot. |
+| ○ | No reviewed snapshot for this file/context. |
+| ⚠ | Current diff differs from the previously reviewed snapshot. |
+
+The summary counts only unchanged reviewed files and separately counts files
+changed after review. Space on ⚠ reviews the new capture; Space on ✓ removes its
+mark. Marks appear only after saving succeeds. Input and cancellation are briefly
+disabled while saving; write/lock errors keep the original marks and allow retry.
+Opening with corrupt/unreadable review state fails explicitly instead of claiming
+there were no previous reviews. Work-item registration/listing remains available.
+
+Snapshots are stored beside the selected work-item state file, with
+`.reviews.json` appended (for example, `work-items.json.reviews.json`). The same
+`--state-file`/environment/default path selection therefore selects review state
+too, without migrating the existing work-item file. Writes use a separate lock,
+reload under that lock, and atomically replace the companion file; independent
+instances merge individual file marks rather than replacing an entire stale view.
+The file contains **local source-diff text**, paths, change metadata, and resolved
+base revisions. Binary payloads are not stored; full Git object IDs distinguish
+binary changes. There is no network upload or telemetry. Back up both state files
+if moving registrations and review history together.
+
+Marks are scoped to work-item ID, canonical workspace, and resolved base commit.
+Changing the base commit starts an unreviewed context; spelling another ref that
+resolves to the same commit restores the same marks. Older contexts and snapshots
+for files no longer in the diff are retained. Exact captured diffs (including
+paths, change kind, modes/object IDs, and patch text) are compared conservatively;
+staging a previously untracked file can require re-review even with identical text.
+Changes made after capture are **not** silently marked reviewed: the next reload
+shows ⚠. Staged/unstaged movement of otherwise identical tracked changes retains ✓.
+
+Review state is bounded to 64 MiB; oversized files/updates fail without overwriting
+history. There is no automatic pruning yet. Tracking is file-level only. REVIEW
+still displays the full diff against the chosen base: constructing a smaller
+diff containing only changes since review belongs to M8 and is not implemented.
 
 ## Basic agent state (M4)
 

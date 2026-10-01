@@ -220,6 +220,7 @@ async fn event_loop(
     let mut redraw = true;
     let mut sends = JoinSet::new();
     let mut diffs = JoinSet::new();
+    let mut review_saves = JoinSet::new();
     let mut preparations = JoinSet::new();
     let mut registrations = JoinSet::<Result<workbench_core::WorkItem, String>>::new();
     let mut registration = registration::RegistrationUi::default();
@@ -289,6 +290,13 @@ async fn event_loop(
                 }
                 redraw = true;
             }
+            completed = review_saves.join_next(), if !review_saves.is_empty() => {
+                match completed {
+                    Some(Ok((ticket, result))) => reviews.finish_save(ticket, result),
+                    _ => reviews.fail_saving("Review save task stopped; reopen review to verify the saved state before retrying.".into()),
+                }
+                redraw = true;
+            }
             changed = receiver.changed() => {
                 changed.map_err(|_| io::Error::other("Discovery task stopped unexpectedly"))?;
                 let previous_position = state.items_for(*view).iter().position(|item| Some(&item.item.id) == interaction.selected_id.as_ref());
@@ -346,15 +354,25 @@ async fn event_loop(
                             continue;
                         }
                         if reviews.is_open() {
-                            if key.code == KeyCode::Char('q') || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)) {
+                            if !reviews.is_saving() && (key.code == KeyCode::Char('q') || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))) {
                                 return Ok(RunExit::Quit);
                             }
-                            if reviews.key(key, terminal.size()?.height) == review::ReviewIntent::Reload {
+                            match reviews.key(key, terminal.size()?.height) {
+                              review::ReviewIntent::Reload => {
                                 diffs.abort_all();
                                 let (ticket, id) = reviews.reload().expect("review is open");
                                 let engine = Arc::clone(&engine);
                                 let base = reviews.base.clone();
-                                diffs.spawn(async move { (ticket, engine.diff(&id, base.as_deref()).await.map_err(|error| error.to_string())) });
+                                diffs.spawn(async move { (ticket, engine.open_review(&id, base.as_deref()).await.map_err(|error| error.to_string())) });
+                              }
+                              review::ReviewIntent::Save { ticket, mut session, path, reviewed } => {
+                                let engine = Arc::clone(&engine);
+                                review_saves.spawn_blocking(move || {
+                                    let result = engine.set_file_reviewed(&mut session, &path, reviewed).map(|()| *session).map_err(|error| error.to_string());
+                                    (ticket, result)
+                                });
+                              }
+                              review::ReviewIntent::None => {},
                             }
                             if !reviews.is_open() { diffs.abort_all(); }
                             continue;
@@ -392,7 +410,7 @@ async fn event_loop(
                                         diffs.abort_all();
                                         let engine = Arc::clone(&engine);
                                         let base = reviews.base.clone();
-                                        diffs.spawn(async move { (ticket, engine.diff(&id, base.as_deref()).await.map_err(|error| error.to_string())) });
+                                        diffs.spawn(async move { (ticket, engine.open_review(&id, base.as_deref()).await.map_err(|error| error.to_string())) });
                                 }
                                 if let Some(pane) = interaction.registration_requested.take() {
                                     let ticket = registration.open(pane.clone());
