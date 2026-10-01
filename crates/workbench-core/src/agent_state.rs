@@ -8,6 +8,9 @@ use crate::tmux::PaneObservation;
 use crate::{AgentStatus, Engine, PaneAvailability, Snapshot, WorkItemError, WorkItemState};
 
 const MAX_CONCURRENT_CAPTURES: usize = 4;
+const MAX_APPROVAL_CHARS: usize = 16 * 1024;
+const APPROVAL_CLIPPED: &str =
+    "\n[Approval dialog exceeded the display limit. Press Enter to inspect the full pane.]";
 
 impl Engine {
     /// Resolve registrations and infer status from live, read-only pane observations.
@@ -120,13 +123,7 @@ fn infer(observation: &PaneObservation) -> (AgentStatus, &'static str) {
     };
     // Require a current dialog footer, a known title, and a selected Yes/No
     // choice. A quoted/historical approval question alone is not evidence.
-    let confirm = matches!(
-        *last,
-        "Press enter to confirm or esc to cancel"
-            | "Press Enter to confirm or Esc to cancel"
-            | "Press enter to confirm or select"
-            | "Press Enter to confirm or select"
-    );
+    let confirm = approval_footer(last);
     if confirm {
         let tail = &lines[lines.len().saturating_sub(40)..];
         let title = tail.iter().any(|line| approval_title(line));
@@ -210,39 +207,54 @@ fn approval_title(line: &str) -> bool {
     )
 }
 
+fn approval_footer(line: &str) -> bool {
+    matches!(
+        line,
+        "Press enter to confirm or esc to cancel"
+            | "Press Enter to confirm or Esc to cancel"
+            | "Press enter to confirm or select"
+            | "Press Enter to confirm or select"
+    )
+}
+
+fn approval_option(line: &str) -> bool {
+    line.strip_prefix("› ")
+        .unwrap_or(line)
+        .split_once(". ")
+        .is_some_and(|(number, text)| {
+            number.parse::<u8>().is_ok() && (text.starts_with("Yes, ") || text.starts_with("No, "))
+        })
+}
+
 fn approval_prompt(observation: &PaneObservation, status: AgentStatus) -> Option<String> {
     if status != AgentStatus::WaitingForInput {
         return None;
     }
-    let lines: Vec<_> = observation
-        .screen
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect();
-    let start = lines.iter().rposition(|line| approval_title(line))?;
+    let lines: Vec<_> = observation.screen.lines().map(str::trim_end).collect();
+    let start = lines.iter().rposition(|line| approval_title(line.trim()))?;
     let context: Vec<_> = lines[start..]
         .iter()
-        .take_while(|line| {
-            let line = line.strip_prefix("› ").unwrap_or(line);
-            !line.starts_with("Press ")
-                && line
-                    .split_once(". ")
-                    .is_none_or(|(number, _)| number.parse::<u8>().is_err())
-        })
+        .take_while(|line| !approval_option(line.trim()) && !approval_footer(line.trim()))
         .copied()
         .collect();
-    // Keep only the dialog title and first few details. Never expose the rest of
-    // the viewport/history, and truncate on Unicode scalar boundaries.
+    // Strip only the common UI margin, preserving command indentation, blank
+    // lines and wrapped reason continuations. The whole visible dialog matters:
+    // metadata/reasons can otherwise consume the budget before the command.
+    let margin = context
+        .iter()
+        .filter(|line| !line.is_empty())
+        .map(|line| line.bytes().take_while(|byte| *byte == b' ').count())
+        .min()
+        .unwrap_or(0);
     let text = context
         .iter()
-        .take(4)
-        .copied()
+        .map(|line| if line.is_empty() { "" } else { &line[margin..] })
         .collect::<Vec<_>>()
         .join("\n");
-    let mut preview: String = text.chars().take(512).collect();
-    if context.len() > 4 || text.chars().count() > 512 {
-        preview.push('…');
+    let text = text.trim_end();
+    let mut preview: String = text.chars().take(MAX_APPROVAL_CHARS).collect();
+    if text.chars().count() > MAX_APPROVAL_CHARS {
+        preview.push_str(APPROVAL_CLIPPED);
     }
     Some(preview)
 }
@@ -399,21 +411,27 @@ mod tests {
         let preview = approval_prompt(&pane, infer(&pane).0).unwrap();
         assert_eq!(
             preview,
-            "Would you like to run the following command?\n$ cargo test"
+            "Would you like to run the following command?\n\n$ cargo test"
         );
         assert!(!preview.contains("Private earlier"));
         assert!(!preview.contains("Yes, proceed"));
-        let long = APPROVAL.replace("$ cargo test", &format!("$ {}", "λ🙂".repeat(600)));
+        let long = APPROVAL.replace(
+            "$ cargo test",
+            &format!("$ {}", "λ🙂".repeat(MAX_APPROVAL_CHARS)),
+        );
         let long_pane = observation(&long);
         let preview = approval_prompt(&long_pane, infer(&long_pane).0).unwrap();
-        assert_eq!(preview.chars().count(), 513);
-        assert!(preview.ends_with('…'));
+        assert_eq!(
+            preview.chars().count(),
+            MAX_APPROVAL_CHARS + APPROVAL_CLIPPED.chars().count()
+        );
+        assert!(preview.ends_with(APPROVAL_CLIPPED));
         assert!(preview.contains("λ🙂"));
         let multi_line = APPROVAL.replace("$ cargo test", "First\nSecond\nThird\nFourth\nFifth");
         let multi_pane = observation(&multi_line);
         let preview = approval_prompt(&multi_pane, infer(&multi_pane).0).unwrap();
-        assert_eq!(preview.lines().count(), 4);
-        assert!(!preview.contains("Fourth"));
+        assert!(preview.contains("First\nSecond\nThird\nFourth\nFifth"));
+        assert!(!preview.contains('…'));
         for status in [
             AgentStatus::Running,
             AgentStatus::Complete,
@@ -422,6 +440,31 @@ mod tests {
         ] {
             assert!(approval_prompt(&pane, status).is_none());
         }
+    }
+
+    #[test]
+    fn approval_retains_wrapped_reason_and_command_after_metadata() {
+        let screen = "Earlier unrelated terminal output\n\n  Would you like to run the following command?\n\n  Environment: local\n\n  Reason: May I create the unsigned commit for the staged Packer\n  removal? Git must write to shared metadata outside this workspace.\n\n  $ git -c commit.gpgsign=false commit -m \"Remove obsolete Packer\n  installation\"\n\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again for this command (p)\n  3. No, and tell Codex what to do differently (esc)\n\n  Press enter to confirm or esc to cancel\n";
+        let pane = observation(screen);
+        assert_eq!(infer(&pane).0, AgentStatus::WaitingForInput);
+        let prompt = approval_prompt(&pane, infer(&pane).0).unwrap();
+        assert!(prompt.contains("Reason: May I create the unsigned commit for the staged Packer\nremoval? Git must write to shared metadata outside this workspace."));
+        assert!(prompt.contains(
+            "$ git -c commit.gpgsign=false commit -m \"Remove obsolete Packer\ninstallation\""
+        ));
+        assert!(!prompt.contains("Earlier unrelated"));
+        assert!(!prompt.contains("Yes, proceed"));
+        assert!(!prompt.contains('…'));
+    }
+
+    #[test]
+    fn approval_retains_numbered_details_blank_lines_and_relative_command_indentation() {
+        let screen = "  Would you like to run the following command?\n\n  Reason: Check these cases.\n  1. Read-only inspection\n  2. Preserve all existing files\n\n  $ printf '%s\\n' \\\n      'λ🙂 value'\n\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)\nPress enter to confirm or esc to cancel\n";
+        let pane = observation(screen);
+        let prompt = approval_prompt(&pane, infer(&pane).0).unwrap();
+        assert!(prompt.contains("1. Read-only inspection\n2. Preserve all existing files"));
+        assert!(prompt.contains("$ printf '%s\\n' \\\n    'λ🙂 value'"));
+        assert!(!prompt.contains("No, and tell"));
     }
 
     #[cfg(unix)]

@@ -218,7 +218,7 @@ fn render_items(
         Paragraph::new(if interaction.draft.is_some() {
             "Enter: send  Esc/Ctrl-C: cancel  Backspace: edit  Ctrl-u: clear"
         } else {
-            "j/k: select  Enter: open  r: reply  d: diff (M6)  Tab  a/w/s: views  q: quit"
+            "j/k: select  Enter: open  r: reply  PgUp/Dn: scroll  a/w/s: views  q: quit"
         }),
         footer,
     );
@@ -463,7 +463,7 @@ mod tests {
             "1 UNKNOWN item(s)",
             "Enter: open",
             "r: reply",
-            "diff (M6)",
+            "PgUp/Dn: scroll",
         ] {
             assert!(text.contains(expected), "missing {expected:?}: {text}");
         }
@@ -471,6 +471,59 @@ mod tests {
         assert!(!text.contains("HIDDEN_RUNNING"));
         assert!(work_screen(&state, 120, 30, &mut 0).contains("attention: 2 (a)"));
         assert!(attention_screen(&state, 80, 24, &mut 0).contains("q: quit"));
+    }
+
+    #[test]
+    fn full_reason_and_command_render_and_remain_accessible_by_page_scrolling() {
+        let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
+        waiting.status = AgentStatus::WaitingForInput;
+        waiting.attention_prompt = Some(format!(
+            "Would you like to run the following command?\n\nEnvironment: local\n\nReason: {}Shared metadata requires write access. END-OF-REASON\n\n$ git -c commit.gpgsign=false commit -m \"Remove obsolete Packer installation\"",
+            "Preserve signing settings for future commits. λ🙂 ".repeat(20)
+        ));
+        let state = AppState::from_refresh(Ok(snapshot()), Ok(vec![waiting]));
+        let text = attention_screen(&state, 80, 45, &mut 0);
+        let compact: String = text.chars().filter(|ch| !ch.is_whitespace()).collect();
+        assert!(compact.contains("END-OF-REASON"), "{text}");
+        assert!(
+            compact
+                .contains("$git-ccommit.gpgsign=falsecommit-m\"RemoveobsoletePackerinstallation\""),
+            "{text}"
+        );
+        assert!(!text.contains('…'));
+        assert!(text.contains("PgUp/Dn: scroll"));
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
+        let mut interaction = Interaction::default();
+        interaction.sync(&state.attention);
+        let mut scroll = 0;
+        let mut pages = String::new();
+        let mut view = View::Attention;
+        for _ in 0..8 {
+            terminal
+                .draw(|frame| render_attention(frame, &state, &mut scroll, &mut interaction))
+                .unwrap();
+            pages.extend(
+                terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol()),
+            );
+            crate::navigate(
+                crossterm::event::KeyCode::PageDown,
+                &state,
+                &mut view,
+                &mut scroll,
+                &mut interaction,
+                10,
+            );
+        }
+        assert!(pages.contains("END-OF-REASON"));
+        assert!(pages.contains("git -c commit.gpgsign=false"));
+        assert!(pages.contains("Packer installation"));
+        assert_eq!(interaction.selected_id.as_deref(), Some("ABC-123"));
     }
 
     #[test]

@@ -79,10 +79,14 @@ status, in registration order. Running, idle, and unknown items remain in WORK;
 unknowns are explicitly reported as unclassified, not assumed idle. WORK's header
 also shows the attention count. Store/discovery errors and empty queues are visible.
 
-Waiting cards show the detected approval question plus a bounded preview of its
-details, when available. Only the current dialog is retained: at most four nonempty
-lines and 512 Unicode characters, plus an ellipsis on truncation. Previews wrap to
-terminal width; use `Enter` for the full pane. Completion cards say the **turn**
+Waiting cards show the full visible approval question, environment, reason, and
+command, when available. Only the current dialog is retained, excluding prior
+conversation and approval choices. Blank lines and relative command indentation
+are preserved; reasons and commands are not cut off after a fixed number of lines.
+Dialog text is bounded at 16,384 Unicode characters, with an explicit warning if
+that limit is exceeded. Text wraps to terminal width; use Page Up/Page Down to
+scroll long dialogs, or `Enter` for the full pane. Content already clipped by the
+agent's own screen cannot be recovered from a viewport capture. Completion cards say the **turn**
 finished, without claiming the whole task is done or inventing changed-file counts.
 
 The core builds the queue from the same observation snapshot used by WORK, with no
