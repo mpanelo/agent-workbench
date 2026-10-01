@@ -399,6 +399,11 @@ consumed by Workbench yet. See [the hook investigation](docs/codex-status-signal
 for the proposed approach and limitations. Terminal detection remains the default;
 no Codex configuration is changed automatically.
 
+Codex's scrolled-history footer (`New activity · Earlier messages available.
+enter/esc latest`) is also supported when a live activity timer and composer
+remain visible. If scrolling hides that timer, Workbench keeps `UNKNOWN` rather
+than treating historical output as live activity.
+
 ## Manual registration
 
 If installed, use `workbench register` and `workbench list`. From a checkout,

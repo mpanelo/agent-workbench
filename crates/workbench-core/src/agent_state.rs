@@ -153,7 +153,8 @@ fn infer(observation: &PaneObservation) -> (AgentStatus, &'static str) {
     // Some active layouts hide the composer/shortcuts, but retain a rate-limit
     // footer immediately after the activity row. Require both signals: a lone
     // interrupt line (or one buried in historical output) is not enough.
-    if !shortcuts_footer(last) && *last != "tab to queue message" {
+    let viewing_history = history_footer(last);
+    if !shortcuts_footer(last) && *last != "tab to queue message" && !viewing_history {
         let tail = &lines[lines.len().saturating_sub(4)..];
         if tail
             .iter()
@@ -183,6 +184,12 @@ fn infer(observation: &PaneObservation) -> (AgentStatus, &'static str) {
     let activity = preceding_activity(&lines[..prompt]);
     if activity.is_some_and(running_indicator) {
         return (Running, "Codex displays an active interruptible turn.");
+    }
+    if viewing_history {
+        return (
+            Unknown,
+            "Codex is showing history without a recognizable live activity row.",
+        );
     }
     if lines[..prompt]
         .iter()
@@ -312,6 +319,12 @@ fn scroll_banner(line: &str) -> bool {
         line,
         "↓ Back to bottom · esc" | "New activity · ↓ Back to bottom · esc"
     )
+}
+
+fn history_footer(line: &str) -> bool {
+    let line = line.strip_prefix("New activity · ").unwrap_or(line);
+    line.split_whitespace()
+        .eq(["Earlier", "messages", "available.", "enter/esc", "latest"])
 }
 
 fn warning_text(line: &str) -> Option<&str> {
@@ -469,6 +482,7 @@ mod tests {
     const QUEUED: &str = "• Queued follow-up inputs\n? 1 question\nshift+↵ to answer";
     const QUEUED_MESSAGES: &str = "• Messages to be submitted after next tool call (press esc to\ninterrupt and send immediately)\n↳ queued follow-up text\nwrapped preview continuation\n…";
     const WARNINGS: &str = "⚠ 2 warnings · f2 to view";
+    const HISTORY_FOOTER: &str = "New activity · Earlier messages available.  enter/esc latest";
 
     fn observation(screen: &str) -> PaneObservation {
         PaneObservation {
@@ -943,6 +957,74 @@ mod tests {
         assert!(approval_prompt(&no_menu, infer(&no_menu).0).is_none());
         let context = approval_prompt(&no_menu, AgentStatus::WaitingForInput).unwrap();
         assert!(!context.contains("Options:"));
+    }
+
+    #[test]
+    fn codex_history_footer_preserves_visible_live_activity_from_scrolling_screenshot() {
+        // UI chrome only from the Oct 1 11:53 screenshot, not transcript text.
+        for footer in [
+            HISTORY_FOOTER,
+            "Earlier messages available. enter/esc latest",
+            "New activity · Earlier messages available.   enter/esc latest",
+        ] {
+            for activity in [
+                "• Working (7m 51s • esc to interrupt)",
+                "Working (7m 51s • esc to interrupt)",
+                "• Thinking (9s • esc to interrupt)",
+            ] {
+                let screen = format!(
+                    "Unrelated history\n{activity}\n└ Tip: Press ctrl+r to search previously entered prompts.\n\nNew activity · ↓ Back to bottom · esc\n\n› Ask Codex to do anything\n\nGPT-6.1-Sol high · ~/work · Task\n{footer}\n"
+                );
+                let pane = observation(&screen);
+                assert_eq!(infer(&pane).0, AgentStatus::Running, "{screen}");
+                assert!(approval_prompt(&pane, infer(&pane).0).is_none());
+            }
+        }
+        let screen = format!(
+            "• Working (7m 51s • esc to interrupt)\nNew activity · ↓ Back to bottom · esc\n› typed reply\nwrapped draft\n{HISTORY_FOOTER}\n"
+        );
+        assert_eq!(infer(&observation(&screen)).0, AgentStatus::Running);
+    }
+
+    #[test]
+    fn history_footer_does_not_turn_hidden_historical_or_malformed_activity_into_a_status() {
+        for content in [
+            "Historical text only",
+            "Worked for 3s",
+            "• Working (soon • esc to interrupt)",
+            "• Working (8s • esc to interrupt)\nLater unrelated output",
+            "> • Working (8s • esc to interrupt)",
+        ] {
+            let screen = format!(
+                "{content}\nNew activity · ↓ Back to bottom · esc\n› Ask Codex to do anything\n{HISTORY_FOOTER}\n"
+            );
+            assert_eq!(
+                infer(&observation(&screen)).0,
+                AgentStatus::Unknown,
+                "{screen}"
+            );
+        }
+        for footer in [
+            "> New activity · Earlier messages available. enter/esc latest",
+            "New activity · Earlier messages available. enter to continue",
+            "Earlier messages might be available. enter/esc latest",
+        ] {
+            let screen = format!(
+                "• Working (8s • esc to interrupt)\n› Ask Codex to do anything\n{footer}\n"
+            );
+            assert_eq!(infer(&observation(&screen)).0, AgentStatus::Unknown);
+        }
+        let no_composer = format!("• Working (8s • esc to interrupt)\n{HISTORY_FOOTER}\n");
+        assert_eq!(infer(&observation(&no_composer)).0, AgentStatus::Unknown);
+        let screen = format!(
+            "• Working (8s • esc to interrupt)\n› Ask Codex to do anything\n{HISTORY_FOOTER}\n"
+        );
+        let mut pane = observation(&screen);
+        pane.in_mode = true;
+        assert_eq!(infer(&pane).0, AgentStatus::Unknown);
+        pane.in_mode = false;
+        pane.dead = true;
+        assert_eq!(infer(&pane).0, AgentStatus::Unknown);
     }
 
     #[cfg(unix)]

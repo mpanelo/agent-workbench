@@ -31,6 +31,14 @@ come from before that title, never arbitrary preview/draft text. If scrolling
 hides the activity row, the detector stays `UNKNOWN`, not `IDLE` or `COMPLETE`.
 tmux copy mode still invalidates observation; Codex's own scroll UI is separate.
 
+The October 1 11:53 screenshot replaces the usual shortcut footer with
+`New activity · Earlier messages available. enter/esc latest` (the `New activity`
+prefix is optional; spacing may vary). This footer is now recognized, but still
+requires a visible composer and an adjacent valid live activity timer before
+reporting `RUNNING`. Hidden timers, old completion markers, unrelated output,
+quoted/malformed chrome, dead panes and tmux copy mode remain `UNKNOWN`; merely
+scrolling never establishes activity or completion.
+
 ## Hook investigation — not implemented
 
 Local verification: `codex-cli 0.159.3`; `codex features list` reports `hooks`
