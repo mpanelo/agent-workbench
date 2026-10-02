@@ -215,7 +215,7 @@ impl RegistrationUi {
         } else if self.draft.is_none() {
             "Esc: return to SESSIONS"
         } else {
-            "Tab/↑/↓: field | Space: toggle kind | Enter: save | Esc: cancel\nBackspace: edit | Ctrl+u: clear field (q types text)"
+            "Tab/↑/↓: field | Space: toggle kind | <enter>: save | Esc: cancel\nBackspace: edit | <c-u>: clear field (q types text)"
         }), footer);
         if self.loading {
             frame.render_widget(
@@ -248,7 +248,7 @@ impl RegistrationUi {
             );
         } else {
             frame.render_widget(
-                Paragraph::new("Pane is fixed. Review the defaults, then Enter to register.")
+                Paragraph::new("Pane is fixed. Review the defaults, then <enter> to register.")
                     .style(theme::muted()),
                 notice,
             );
@@ -542,7 +542,7 @@ mod tests {
         form.finish(current, Ok(draft()));
         assert!(form.draft.is_none());
         assert!(form.error.as_ref().unwrap().contains("another pane"));
-        assert!(!screen(&form, 80, 12).contains("Enter: save"));
+        assert!(!screen(&form, 80, 12).contains("<enter>: save"));
         key(&mut form, KeyCode::Esc);
         form.finish(current, Ok(draft()));
         assert!(form.pane.is_none());
@@ -558,7 +558,7 @@ mod tests {
             "Repository",
             "Workspace",
             "feature/task",
-            "Enter: save",
+            "<enter>: save",
         ] {
             assert!(wide.contains(text), "{wide}");
         }
@@ -579,7 +579,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
         terminal.draw(|frame| form.render(frame)).unwrap();
         let buffer = terminal.backend().buffer();
-        theme::assert_text_style(buffer, "REGISTER WORK ITEM", theme::MANTLE, theme::MAUVE);
+        theme::assert_text_style(buffer, "REGISTER WORK ITEM", theme::LAVENDER, theme::MANTLE);
         theme::assert_text_style(buffer, "feature-task", theme::TEXT, theme::SURFACE);
         theme::assert_text_style(buffer, "2 / 6", theme::SUBTEXT, theme::BASE);
         form.error = Some("test registration error".into());

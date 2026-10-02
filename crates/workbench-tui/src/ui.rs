@@ -144,7 +144,7 @@ fn render_items(
                 if view == View::Work {
                     lines.push(Line::styled(
                         format!("  {}", visible(&item.title)),
-                        theme::text().add_modifier(ratatui::style::Modifier::BOLD),
+                        theme::text(),
                     ));
                     lines.push(Line::styled(
                         format!("  Status: {}", visible(&state.status_detail)),
@@ -195,7 +195,7 @@ fn render_items(
                 if view == View::Work
                     && let Some(branch) = &item.branch
                 {
-                    lines.push(metadata("Branch", branch, Style::default().fg(theme::PINK)));
+                    lines.push(metadata("Branch", branch, theme::muted()));
                 }
                 if view == View::Work
                     || state.status == workbench_core::AgentStatus::WaitingForInput
@@ -255,11 +255,11 @@ fn render_items(
     }
     frame.render_widget(
         theme::footer(if interaction.draft.is_some() {
-            "Enter: send | Esc/Ctrl-C: cancel | Backspace: edit | Ctrl-u: clear"
+            "<enter>: send | Esc/Ctrl-C: cancel | Backspace: edit | <c-u>: clear"
         } else if view == View::Work {
-            "e: edit description | n: rename ID | u: unregister\nj/k | Enter: open | r: reply | d: review | Ctrl+d/u: scroll | a/w/s | q: quit"
+            "e: edit description | n: rename ID | u: unregister | q: quit\nj/k | <enter>: open | r: reply | d: review | <c-d>/<c-u>: scroll | a/w/s"
         } else {
-            "x: acknowledge finished turn\nj/k | Enter: open | r: reply | d: review | Ctrl+d/u: scroll | a/w/s | q: quit"
+            "x: acknowledge finished turn | q: quit\nj/k | <enter>: open | r: reply | d: review | <c-d>/<c-u>: scroll | a/w/s"
         }),
         footer,
     );
@@ -369,7 +369,7 @@ pub(crate) fn render_sessions(
             for session in &snapshot.sessions {
                 lines.push(Line::styled(
                     format!(" {}", visible(&session.name)),
-                    theme::accent().fg(theme::PINK),
+                    theme::accent().fg(theme::MAUVE),
                 ));
                 for window in &session.windows {
                     lines.push(Line::styled(
@@ -456,9 +456,9 @@ pub(crate) fn render_sessions(
     }
     frame.render_widget(
         theme::footer(if interaction.show_all_panes {
-            "f: show agents only\nj/k: panes | Enter/r: register | Ctrl+d/u: scroll | a/w/s | q: quit"
+            "f: show agents only\nj/k: panes | <enter>/r: register | <c-d>/<c-u>: scroll | a/w/s | q: quit"
         } else {
-            "f: show all panes\nj/k: panes | Enter/r: register | Ctrl+d/u: scroll | a/w/s | q: quit"
+            "f: show all panes\nj/k: panes | <enter>/r: register | <c-d>/<c-u>: scroll | a/w/s | q: quit"
         }),
         footer,
     );
@@ -797,7 +797,7 @@ mod tests {
             theme::GREEN,
             theme::SURFACE,
         );
-        assert!(text.contains("Enter/r: register"));
+        assert!(text.contains("<enter>/r: register"));
     }
 
     fn work_screen(state: &AppState, width: u16, height: u16, scroll: &mut u16) -> String {
@@ -889,25 +889,25 @@ mod tests {
         let state = AppState::default();
         for view in [View::Attention, View::Work] {
             let text = item_screen(&state, 80, 10, &mut 0, view);
-            let maintenance = "e: edit description | n: rename ID | u: unregister";
+            let maintenance = "e: edit description | n: rename ID | u: unregister | q: quit";
             if view == View::Work {
                 assert_eq!(text.lines().nth(8).unwrap().trim_end(), maintenance);
             } else {
                 assert!(!text.contains(maintenance));
                 assert_eq!(
                     text.lines().nth(8).unwrap().trim_end(),
-                    "x: acknowledge finished turn"
+                    "x: acknowledge finished turn | q: quit"
                 );
             }
             assert_eq!(
                 text.lines().last().unwrap().trim_end(),
-                "j/k | Enter: open | r: reply | d: review | Ctrl+d/u: scroll | a/w/s | q: quit"
+                "j/k | <enter>: open | r: reply | d: review | <c-d>/<c-u>: scroll | a/w/s"
             );
         }
         let text = screen(None, 80, 10, &mut 0);
         assert_eq!(
             text.lines().last().unwrap().trim_end(),
-            "j/k: panes | Enter/r: register | Ctrl+d/u: scroll | a/w/s | q: quit"
+            "j/k: panes | <enter>/r: register | <c-d>/<c-u>: scroll | a/w/s | q: quit"
         );
     }
 
@@ -938,9 +938,9 @@ mod tests {
             "3. No, and tell Codex what to do differently (esc)",
             "PR #1842  Review  TURN FINISHED",
             "1 UNKNOWN item(s)",
-            "Enter: open",
+            "<enter>: open",
             "r: reply",
-            "Ctrl+d/u: scroll",
+            "<c-d>/<c-u>: scroll",
         ] {
             assert!(text.contains(expected), "missing {expected:?}: {text}");
         }
@@ -994,7 +994,7 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains('…'));
-        assert!(text.contains("Ctrl+d/u: scroll"));
+        assert!(text.contains("<c-d>/<c-u>: scroll"));
 
         let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
         let mut interaction = Interaction::default();
@@ -1066,7 +1066,7 @@ mod tests {
             "Yes, approve B (y)",
             "No, reject B (esc)",
             "Reply to B",
-            "Enter: send",
+            "<enter>: send",
         ] {
             assert!(text.contains(expected), "missing {expected}: {text}");
         }
@@ -1099,20 +1099,20 @@ mod tests {
                 .unwrap();
             let buffer = terminal.backend().buffer();
             for (text, fg, bg) in [
-                ("Type:", theme::LAVENDER, theme::BASE),
+                ("Type:", theme::SUBTEXT, theme::BASE),
                 (label, color, theme::BASE),
-                ("Repository:", theme::LAVENDER, theme::BASE),
-                ("/work/repo", theme::SKY, theme::BASE),
-                ("Workspace:", theme::LAVENDER, theme::BASE),
-                ("/work/ABC-123", theme::SKY, theme::BASE),
-                ("Branch:", theme::LAVENDER, theme::BASE),
-                ("fix/retries", theme::PINK, theme::BASE),
+                ("Repository:", theme::SUBTEXT, theme::BASE),
+                ("/work/repo", theme::TEXT, theme::BASE),
+                ("Workspace:", theme::SUBTEXT, theme::BASE),
+                ("/work/ABC-123", theme::TEXT, theme::BASE),
+                ("Branch:", theme::SUBTEXT, theme::BASE),
+                ("fix/retries", theme::SUBTEXT, theme::BASE),
                 ("Fix retries", theme::TEXT, theme::BASE),
-                ("UNKNOWN", theme::PEACH, theme::SURFACE),
+                ("UNKNOWN", theme::SUBTEXT, theme::SURFACE),
             ] {
                 theme::assert_text_style(buffer, text, fg, bg);
             }
-            assert_eq!(buffer[(119, 0)].bg, theme::MAUVE);
+            assert_eq!(buffer[(119, 0)].bg, theme::MANTLE);
             assert_eq!(buffer[(119, 1)].bg, theme::SURFACE);
             assert_eq!(buffer[(119, 2)].bg, theme::BASE);
             let line = metadata("Branch", "feature/λ\x1b", Style::default().fg(theme::PINK));
@@ -1144,12 +1144,12 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         for (text, fg, bg) in [
-            ("AGENT WORKBENCH", theme::MANTLE, theme::MAUVE),
+            ("AGENT WORKBENCH", theme::LAVENDER, theme::MANTLE),
             ("> ABC-123", theme::TEAL, theme::SURFACE),
             ("WAITING_FOR_INPUT", theme::YELLOW, theme::SURFACE),
             ("TURN FINISHED", theme::GREEN, theme::BASE),
             ("Options:", theme::TEAL, theme::BASE),
-            ("› 1. Yes", theme::PEACH, theme::SURFACE),
+            ("› 1. Yes", theme::MAUVE, theme::BASE),
             ("$ cargo test", theme::TEAL, theme::BASE),
             ("Reason:", theme::PEACH, theme::BASE),
             ("Build", theme::BLUE, theme::SURFACE),
@@ -1175,12 +1175,12 @@ mod tests {
             .draw(|frame| render_sessions(frame, &state, &mut 0, &mut interaction))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        theme::assert_text_style(buffer, "AGENT WORKBENCH", theme::MANTLE, theme::MAUVE);
+        theme::assert_text_style(buffer, "AGENT WORKBENCH", theme::LAVENDER, theme::MANTLE);
         theme::assert_text_style(buffer, "codex", theme::TEXT, theme::SURFACE);
-        theme::assert_text_style(buffer, " main", theme::PINK, theme::BASE);
+        theme::assert_text_style(buffer, " main", theme::MAUVE, theme::BASE);
         theme::assert_text_style(buffer, " auth", theme::BLUE, theme::BASE);
         theme::assert_text_style(buffer, "", theme::TEAL, theme::SURFACE);
-        theme::assert_text_style(buffer, "/work/my repo", theme::SKY, theme::BASE);
+        theme::assert_text_style(buffer, "/work/my repo", theme::TEXT, theme::BASE);
         let failed = AppState::from_refresh(Err("test discovery error".into()), Ok(vec![]));
         terminal
             .draw(|frame| render_sessions(frame, &failed, &mut 0, &mut interaction))
@@ -1292,7 +1292,7 @@ mod tests {
             "> C  Build  WAITING_FOR_INPUT",
             "Reply to C",
             "yes λ🙂",
-            "Enter: send",
+            "<enter>: send",
         ] {
             assert!(text.contains(expected), "{text}");
         }
@@ -1343,7 +1343,7 @@ mod tests {
             let text = attention_screen(&state, 80, 4, &mut 0);
             let rows: Vec<_> = text.lines().map(str::trim_end).collect();
             assert_eq!(rows[1], format!("> ABC-123  {label}  TURN FINISHED"));
-            assert_eq!(rows[2], "x: acknowledge finished turn");
+            assert_eq!(rows[2], "x: acknowledge finished turn | q: quit");
             assert_eq!(state.items(), std::slice::from_ref(&original));
             assert_eq!(state.items()[0].item.kind.to_string(), full_name);
             let work = work_screen(&state, 100, 12, &mut 0);
@@ -1501,7 +1501,7 @@ mod tests {
         assert!(text.contains("Reply to ABC-123"));
         assert!(text.contains("yes λ🙂"));
         assert!(
-            text.contains("Enter: send | Esc/Ctrl-C: cancel | Backspace: edit | Ctrl-u: clear")
+            text.contains("<enter>: send | Esc/Ctrl-C: cancel | Backspace: edit | <c-u>: clear")
         );
         let mut terminal = Terminal::new(TestBackend::new(1, 1)).unwrap();
         terminal

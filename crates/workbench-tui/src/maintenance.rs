@@ -299,9 +299,9 @@ impl MaintenanceUi {
             theme::footer(if self.saving {
                 "Saving… | Please wait"
             } else if editing {
-                "Enter: save | Esc/Ctrl-C: cancel\nBackspace: edit | Ctrl+u: clear (q types text)"
+                "<enter>: save | Esc/Ctrl-C: cancel\nBackspace: edit | <c-u>: clear (q types text)"
             } else {
-                "Enter: unregister entry only | Esc/Ctrl-C: cancel"
+                "<enter>: unregister entry only | Esc/Ctrl-C: cancel"
             }),
             footer,
         );
@@ -508,7 +508,7 @@ mod tests {
                     ),
                     "{text}"
                 );
-                assert!(text.contains("Enter: unregister entry only"), "{text}");
+                assert!(text.contains("<enter>: unregister entry only"), "{text}");
             }
             for (width, height) in [(80, 12), (40, 8), (1, 1), (0, 1)] {
                 screen(&form, width, height);

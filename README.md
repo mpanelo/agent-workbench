@@ -105,10 +105,11 @@ and existing status-detection rules are unchanged.
 Discovery refreshes in the background every two seconds;
 errors replace the displayed snapshot and retry automatically. Each command has a
 three-second timeout. Quit with `q`, `Esc`, or `Ctrl-C` when not composing a reply.
-In ATTENTION and WORK, `j/k` or arrows move selection. `Ctrl+d`/`Ctrl+u` scroll
+In ATTENTION and WORK, `j/k` or arrows move selection. `<c-d>`/`<c-u>` scroll
 down/up half a page in all views; Page Down/Page Up still scroll a full page. Home
 selects the first item or pane. In SESSIONS, `j/k` or arrows select panes and
-`Enter`/`r` opens registration. Resize is handled automatically.
+`<enter>`/`r` opens registration. Hints use `<enter>` for the Enter key and `<c-d>`/
+`<c-u>` for Control+D/Control+U; these are labels, not text to type. Resize is handled automatically.
 Long metadata lines are clipped to terminal width; control characters are displayed
 as escapes. Repository, workspace, and session working-directory paths under the
 current `$HOME` are displayed with `~` (also in `workbench list`). Stored paths and
@@ -117,12 +118,13 @@ approval command text are unchanged; paths outside `$HOME` remain absolute.
 ## Appearance
 
 The TUI uses [Catppuccin Mocha](https://catppuccin.com/palette/#mocha), with a
-dark background, solid mauve header bars, teal focus accents, and brighter full-row
-selection highlights. `Build` is blue and `Review` is pink; metadata labels are lavender and paths
-are sky blue. Running is sky blue, waiting is yellow, idle is lavender,
-complete/reviewed is green, and unknown is peach. Errors and deletions are red;
-changes requiring re-review are peach. Shortcut keys and selected prompt choices
-use peach, while supporting text uses the brighter Subtext 1 shade. Diff additions/
+dark background, lavender text on dark header bars, teal focus accents, and subtle
+full-row selection highlights. `Build` is blue and `Review` is pink; metadata and
+paths use neutral text without extra bolding. Running is blue, waiting is yellow,
+idle is teal, complete/reviewed is green, and unknown is muted. Errors and deletions
+are red; changes requiring re-review are peach. Shortcut keys use peach and selected
+prompt choices use mauve without another background highlight. Supporting text
+retains the brighter Subtext 1 shade. Diff additions/
 deletions have subtle tinted backgrounds. Text labels and selection/review marks
 remain, so color is not the only cue.
 
@@ -143,7 +145,7 @@ shortened. The default kind is Implementation.
 
 Press Enter to accept the defaults, or Tab/Shift-Tab/↑/↓ to select a field and edit
 it. Space toggles the kind between Implementation and External Review; Backspace
-edits and `Ctrl+u` clears the current field. Single-line Unicode paste is supported.
+edits and `<c-u>` clears the current field. Single-line Unicode paste is supported.
 Short Description shows a character counter and accepts at most 120 Unicode
 characters (counted as Unicode scalar values, not UTF-8 bytes). Extra typing or
 an over-limit paste is rejected without partially changing the field.
@@ -170,7 +172,7 @@ offline registration, or deliberately mapping multiple items to one pane.
 In WORK, select a registered item with `j/k` or arrows:
 
 - `e` edits its Short Description. Enter saves; Esc/Ctrl-C cancels. The editor
-  shows the 120-character counter, supports Unicode paste, Backspace and Ctrl+u,
+  shows the 120-character counter, supports Unicode paste, Backspace and `<c-u>`,
   and leaves the ID, kind, repository, workspace, branch and pane mapping unchanged.
 - `n` renames its Work ID. Enter saves; Esc/Ctrl-C cancels. IDs must be nonempty,
   unique, and have no control characters or surrounding whitespace. Unicode and
@@ -207,12 +209,12 @@ In ATTENTION and WORK, the selected item is highlighted with `>`:
 | Key | Action |
 | --- | --- |
 | `j` / `↓`, `k` / `↑` | Select the next/previous work item. |
-| `Enter` | Open/focus the selected item's mapped pane. |
+| `<enter>` | Open/focus the selected item's mapped pane. |
 | `r` | Compose a reply to the selected item. |
 | `Tab` | Select the next `WAITING_FOR_INPUT` or `TURN FINISHED` item, wrapping around. |
 | `x` in ATTENTION | Acknowledge the selected finished turn for this Workbench run; leave work and review state unchanged. |
 | `a`, `w`, `s` | Switch to attention, all work items, or sessions. |
-| `Ctrl+d`, `Ctrl+u` | Scroll down/up half a page without changing selection (outside the reply editor). |
+| `<c-d>`, `<c-u>` | Scroll down/up half a page without changing selection (outside the reply editor). |
 | Page Down, Page Up | Scroll down/up a full page. |
 | `d` | Review the selected item's local Git diff, even if its pane is missing or its agent is unknown. |
 
@@ -224,8 +226,8 @@ Workbench restores terminal mode before opening and reinitializes it afterward.
 It never detaches other clients. tmux resolves the current client when more than
 one is attached; client selection is not configurable yet.
 
-In the reply editor, type or paste a single line, use Backspace to edit or `Ctrl-u`
-to clear it, and press `Enter` to submit. `Esc`/`Ctrl-C` cancels before submission.
+In the reply editor, type or paste a single line, use Backspace to edit or `<c-u>`
+to clear it, and press `<enter>` to submit. `Esc`/`Ctrl-C` cancels before submission.
 Replies are limited to 4096 UTF-8 bytes; multiline and control-character pastes are
 rejected without changing the draft. The editor captures the work-item ID, so a
 refresh or selection change cannot redirect the draft to another item. Replies
@@ -341,7 +343,7 @@ SHA yourself. The screen shows the chosen base and its resolved revision.
 | `j` / `↓`, `k` / `↑` | Select the next/previous changed file. |
 | Space | Save a reviewed/unreviewed mark; on ⚠, mark the current capture reviewed. |
 | `Tab` | Select the next unreviewed or changed-after-review file, wrapping around. |
-| `Ctrl+d`, `Ctrl+u` | Scroll the diff down/up half a page. |
+| `<c-d>`, `<c-u>` | Scroll the diff down/up half a page. |
 | Page Down, Page Up | Scroll the diff down/up a page. |
 | `h` / `←`, `l` / `→` | Pan long diff lines horizontally. |
 | Home | Reset vertical and horizontal diff scrolling. |
