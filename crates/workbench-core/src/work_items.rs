@@ -65,7 +65,7 @@ impl fmt::Display for AgentStatus {
             Self::Running => "RUNNING",
             Self::WaitingForInput => "WAITING_FOR_INPUT",
             Self::Idle => "IDLE",
-            Self::Complete => "COMPLETE",
+            Self::Complete => "TURN FINISHED",
             Self::Unknown => "UNKNOWN",
         })
     }
@@ -98,6 +98,9 @@ pub struct WorkItemState {
     /// Bounded visible approval context, only for a current detected input request.
     /// Ephemeral, not a full transcript; never persisted.
     pub attention_prompt: Option<String>,
+    /// Opaque hash of visible completion evidence, never terminal text or a
+    /// native agent turn ID. Used only for session-local acknowledgement.
+    pub completion_fingerprint: Option<u64>,
 }
 
 #[derive(Debug)]

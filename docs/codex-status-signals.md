@@ -28,7 +28,7 @@ to 20 nonempty rows between the prompt start and footer). Queued-question counts
 can carry an elapsed-time suffix. Pending-message previews are skipped only
 after their complete known UI title and an arrow-prefixed preview; activity must
 come from before that title, never arbitrary preview/draft text. If scrolling
-hides the activity row, the detector stays `UNKNOWN`, not `IDLE` or `COMPLETE`.
+hides the activity row, the detector stays `UNKNOWN`, not `IDLE` or `TURN FINISHED`.
 tmux copy mode still invalidates observation; Codex's own scroll UI is separate.
 
 The October 1 11:53 screenshot replaces the usual shortcut footer with
@@ -47,7 +47,7 @@ an absolute or home-relative workspace path, and a visible first-column composer
 marker within the same bounded composer window. Draft continuations retain their
 indentation so a typed `›` cannot expose draft text as activity evidence. A live
 timer still establishes `RUNNING`; without it, a ready composer is `IDLE` or
-`COMPLETE` only when immediately following a recognized completion marker.
+`TURN FINISHED` only when immediately following a recognized completion marker.
 The punctuated compaction detail still requires an adjacent valid compaction
 timer. Missing composers, malformed footers/timers, history without live
 activity, unsupported processes, dead panes and copy mode remain inconclusive.

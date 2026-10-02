@@ -26,6 +26,26 @@ struct AppState {
 }
 
 impl AppState {
+    fn apply_acknowledgement(&mut self, interaction: &mut interaction::Interaction) {
+        if let Some(target) = interaction.acknowledgement_requested.take() {
+            match interaction.attention_tracker.acknowledge(&target) {
+                Ok(()) => {
+                    self.attention = interaction.attention_tracker.items(self.items());
+                    interaction.sync(&self.attention);
+                    interaction.reveal_selection = true;
+                    interaction.message =
+                        Some("Turn acknowledged; work item and review state unchanged.".into());
+                }
+                Err(error) => interaction.message = Some(error.to_string()),
+            }
+        }
+    }
+    fn refresh_attention(&mut self, tracker: &mut workbench_core::AttentionTracker) {
+        self.attention = match &self.work_items {
+            Some(Ok(items)) => tracker.observe(items),
+            _ => Vec::new(), // Load errors are not evidence that registrations were removed.
+        };
+    }
     /// Reconcile fresh registration data against observations, preventing an
     /// in-flight discovery snapshot from resurrecting a removed/edited entry.
     fn reload_registry(&mut self, engine: &Engine) {
@@ -43,6 +63,7 @@ impl AppState {
                             current.status = old.status;
                             current.status_detail.clone_from(&old.status_detail);
                             current.attention_prompt.clone_from(&old.attention_prompt);
+                            current.completion_fingerprint = old.completion_fingerprint;
                         }
                     }
                     items
@@ -280,6 +301,7 @@ async fn event_loop(
                         maintenance.finish(result);
                         if success {
                             state.reload_registry(&engine);
+                            state.refresh_attention(&mut interaction.attention_tracker);
                             interaction.sync(state.items_for(*view));
                             interaction.reveal_selection = true;
                             interaction.message = Some(message);
@@ -305,6 +327,7 @@ async fn event_loop(
                         // Make the saved item immediately visible. Retain observations
                         // for unchanged existing items until the next normal refresh.
                         state.reload_registry(&engine);
+                        state.refresh_attention(&mut interaction.attention_tracker);
                         *view = ui::View::Work;
                         scroll = 0;
                         interaction.selected_id = Some(item.id.clone());
@@ -335,9 +358,11 @@ async fn event_loop(
                 changed.map_err(|_| io::Error::other("Discovery task stopped unexpectedly"))?;
                 let previous_position = state.items_for(*view).iter().position(|item| Some(&item.item.id) == interaction.selected_id.as_ref());
                 let updated = receiver.borrow_and_update().clone();
-                let attention_changed = state.attention != updated.attention;
+                let previous_attention = state.attention.clone();
                 state = updated;
                 state.reload_registry(&engine);
+                state.refresh_attention(&mut interaction.attention_tracker);
+                let attention_changed = previous_attention != state.attention;
                 if let Some(snapshot) = state.snapshot() { interaction.sync_panes(snapshot); }
                 interaction.sync(state.items_for(*view));
                 let position = state.items_for(*view).iter().position(|item| Some(&item.item.id) == interaction.selected_id.as_ref());
@@ -453,6 +478,7 @@ async fn event_loop(
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(RunExit::Quit),
                             _ => {
                                 if let Some(id) = navigate(key, &state, view, &mut scroll, interaction, terminal.size()?.height) { return Ok(RunExit::Focus(id)); }
+                                state.apply_acknowledgement(interaction);
                                 if let Some(request) = interaction.maintenance_requested.take() {
                                     interaction.message = None;
                                     maintenance.open(request);
@@ -511,6 +537,19 @@ fn navigate(
     }
     let items = state.items_for(*view);
     match key.code {
+        KeyCode::Char('x') if *view == ui::View::Attention => {
+            match interaction
+                .selected(items)
+                .map(|item| interaction.attention_tracker.capture(item))
+            {
+                Some(Ok(target)) => interaction.acknowledgement_requested = Some(target),
+                Some(Err(error)) => interaction.message = Some(error.to_string()),
+                None => {
+                    interaction.message =
+                        Some("Select a TURN FINISHED item in ATTENTION first.".into())
+                }
+            }
+        }
         KeyCode::Char('f') if *view == ui::View::Sessions => {
             interaction.show_all_panes = !interaction.show_all_panes;
             if let Some(snapshot) = state.snapshot() {
@@ -614,6 +653,182 @@ fn navigate(
 mod tests {
     use super::*;
     use workbench_core::{AgentStatus, PaneAvailability, WorkItem, WorkItemKind};
+
+    #[test]
+    fn acknowledgement_targets_visible_finished_turns_and_keeps_work_and_reply_safety() {
+        let mut state = state(&[
+            ("hidden", AgentStatus::Running),
+            ("finished", AgentStatus::Complete),
+            ("waiting", AgentStatus::WaitingForInput),
+        ]);
+        if let Some(Ok(items)) = &mut state.work_items {
+            items[1].completion_fingerprint = Some(99);
+        }
+        let original = state.items().to_vec();
+        let mut interaction = interaction::Interaction::default();
+        state.refresh_attention(&mut interaction.attention_tracker);
+        let mut view = ui::View::Attention;
+        interaction.sync(state.items_for(view));
+        navigate(
+            KeyCode::Char('x'),
+            &state,
+            &mut view,
+            &mut 0,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.acknowledgement_requested.is_some());
+        state.apply_acknowledgement(&mut interaction);
+        assert_eq!(state.attention.len(), 1);
+        assert_eq!(state.attention[0].item.id, "waiting");
+        assert_eq!(interaction.selected_id.as_deref(), Some("waiting"));
+        assert_eq!(state.items(), original);
+        state.refresh_attention(&mut interaction.attention_tracker);
+        assert_eq!(state.attention.len(), 1);
+        navigate(
+            KeyCode::Char('x'),
+            &state,
+            &mut view,
+            &mut 0,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.acknowledgement_requested.is_none());
+        assert!(
+            interaction
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("input requests cannot be dismissed")
+        );
+        interaction.begin_reply(&state.attention);
+        navigate(
+            KeyCode::Char('x'),
+            &state,
+            &mut view,
+            &mut 0,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.acknowledgement_requested.is_none());
+        assert_eq!(interaction.draft.as_ref().unwrap().item_id, "waiting");
+        interaction.draft = None;
+        for mut view in [ui::View::Work, ui::View::Sessions] {
+            navigate(
+                KeyCode::Char('x'),
+                &state,
+                &mut view,
+                &mut 0,
+                &mut interaction,
+                24,
+            );
+            assert!(interaction.acknowledgement_requested.is_none());
+        }
+        if let Some(Ok(items)) = &mut state.work_items {
+            items[1].completion_fingerprint = Some(100);
+        }
+        state.refresh_attention(&mut interaction.attention_tracker);
+        interaction.selected_id = Some("finished".into());
+        navigate(
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+            &state,
+            &mut view,
+            &mut 0,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.acknowledgement_requested.is_none());
+        navigate(
+            KeyCode::Char('x'),
+            &state,
+            &mut view,
+            &mut 0,
+            &mut interaction,
+            24,
+        );
+        if let Some(Ok(items)) = &mut state.work_items {
+            items[1].status = AgentStatus::WaitingForInput;
+            items[1].completion_fingerprint = None;
+        }
+        state.refresh_attention(&mut interaction.attention_tracker);
+        state.apply_acknowledgement(&mut interaction);
+        assert_eq!(state.attention.len(), 2);
+        assert!(
+            interaction
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("observed turn changed")
+        );
+        let empty = AppState::default();
+        navigate(
+            KeyCode::Char('x'),
+            &empty,
+            &mut view,
+            &mut 0,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.acknowledgement_requested.is_none());
+    }
+
+    #[test]
+    fn acknowledgement_survives_registry_reconciliation_load_errors_and_focus_refreshes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("items.json");
+        let engine = Engine::new(&path);
+        let mut state = state(&[("A", AgentStatus::Complete)]);
+        if let Some(Ok(items)) = &mut state.work_items {
+            items[0].completion_fingerprint = Some(42);
+        }
+        let original = state.items()[0].item.clone();
+        engine.register_work_item(original.clone()).unwrap();
+        let mut snapshot = Snapshot::default();
+        snapshot.sessions.push(workbench_core::Session {
+            id: "$1".into(),
+            name: "main".into(),
+            windows: vec![workbench_core::Window {
+                id: "@1".into(),
+                index: 0,
+                name: "agent".into(),
+                panes: vec![workbench_core::Pane {
+                    id: "%14".into(),
+                    index: 0,
+                    title: "Agent".into(),
+                    current_command: Some("codex".into()),
+                    working_directory: Some("/work".into()),
+                }],
+            }],
+        });
+        state.discovery = Some(Ok(snapshot));
+        let mut interaction = interaction::Interaction::default();
+        state.refresh_attention(&mut interaction.attention_tracker);
+        let target = interaction
+            .attention_tracker
+            .capture(&state.attention[0])
+            .unwrap();
+        interaction.attention_tracker.acknowledge(&target).unwrap();
+        engine
+            .update_work_item_description(&original, "New description")
+            .unwrap();
+        state.reload_registry(&engine);
+        state.refresh_attention(&mut interaction.attention_tracker);
+        assert!(state.attention.is_empty());
+        assert_eq!(state.items()[0].item.title, "New description");
+        let resumed_items = state.items().to_vec();
+        state.work_items = Some(Err("state busy".into()));
+        state.refresh_attention(&mut interaction.attention_tracker);
+        state.work_items = Some(Ok(resumed_items.clone()));
+        state.refresh_attention(&mut interaction.attention_tracker);
+        assert!(state.attention.is_empty());
+        // A fresh watcher after pane focus reuses the session-owned tracker.
+        let mut resumed =
+            AppState::from_refresh(state.discovery.clone().unwrap(), Ok(resumed_items));
+        resumed.refresh_attention(&mut interaction.attention_tracker);
+        assert!(resumed.attention.is_empty());
+        resumed.refresh_attention(&mut workbench_core::AttentionTracker::default());
+        assert_eq!(resumed.attention.len(), 1);
+    }
 
     #[test]
     fn work_maintenance_actions_capture_selection_and_never_target_hidden_items() {
@@ -973,6 +1188,7 @@ mod tests {
                     pane: PaneAvailability::Present,
                     status_detail: "Observed locally.".into(),
                     attention_prompt: None,
+                    completion_fingerprint: None,
                 })
                 .collect()),
         )

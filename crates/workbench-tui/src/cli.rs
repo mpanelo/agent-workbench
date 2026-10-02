@@ -13,6 +13,9 @@ Usage:
   workbench --help
 
 The TUI defaults to ATTENTION; a returns there, w shows all work, s shows sessions.
+In ATTENTION, x acknowledges the selected TURN FINISHED observation for this
+Workbench run. New activity/input or changed completion evidence requeues it.
+Acknowledgement does not finish work, mark code reviewed, or dismiss input requests.
 In REVIEW, Space saves file marks; r reloads while restoring unchanged marks.
 Marks persist across restarts; changed captured diffs require re-review.
 In SESSIONS, j/k or arrows select a pane; Enter or r opens registration with

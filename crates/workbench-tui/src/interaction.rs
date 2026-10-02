@@ -55,6 +55,8 @@ pub(crate) struct Interaction {
     pub reveal_pane: bool,
     pub registration_requested: Option<String>,
     pub maintenance_requested: Option<crate::maintenance::Request>,
+    pub attention_tracker: workbench_core::AttentionTracker,
+    pub acknowledgement_requested: Option<workbench_core::CompletionAcknowledgement>,
 }
 
 impl Interaction {
@@ -273,6 +275,7 @@ mod tests {
                 pane: PaneAvailability::Present,
                 status_detail: "Unsupported foreground command.".into(),
                 attention_prompt: None,
+                completion_fingerprint: None,
             })
             .collect()
     }

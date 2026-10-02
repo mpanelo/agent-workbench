@@ -192,7 +192,8 @@ In ATTENTION and WORK, the selected item is highlighted with `>`:
 | `j` / `↓`, `k` / `↑` | Select the next/previous work item. |
 | `Enter` | Open/focus the selected item's mapped pane. |
 | `r` | Compose a reply to the selected item. |
-| `Tab` | Select the next `WAITING_FOR_INPUT` or `COMPLETE` item, wrapping around. |
+| `Tab` | Select the next `WAITING_FOR_INPUT` or `TURN FINISHED` item, wrapping around. |
+| `x` in ATTENTION | Acknowledge the selected finished turn for this Workbench run; leave work and review state unchanged. |
 | `a`, `w`, `s` | Switch to attention, all work items, or sessions. |
 | `Ctrl+d`, `Ctrl+u` | Scroll down/up half a page without changing selection (outside the reply editor). |
 | Page Down, Page Up | Scroll down/up a full page. |
@@ -227,8 +228,8 @@ does not restrict open/reply actions. Exit tmux copy mode before sending a reply
 ## Attention queue (M5)
 
 ATTENTION is the primary supervision view. Its header displays the current queue
-count. It contains only live, `present` panes with `WAITING_FOR_INPUT` or `COMPLETE`
-status, in registration order. Running, idle, and unknown items remain in WORK;
+count. It contains only live, `present` panes with `WAITING_FOR_INPUT` or
+unacknowledged `TURN FINISHED` status, in registration order. Running, idle, and unknown items remain in WORK;
 unknowns are explicitly reported as unclassified, not assumed idle. WORK's header
 also shows the attention count. Store/discovery errors and empty queues are visible.
 
@@ -254,8 +255,30 @@ disappears. Selection follows work-item IDs, falling back to the first visible
 entry when the selected item leaves. An existing reply draft stays bound to its
 original item even if the queue changes. Empty queues cannot open or reply to hidden
 WORK items. Switching views or returning from a focused pane preserves the chosen
-view. Completed turns remain queued while their visible completion marker remains;
-there is no dismiss/acknowledge action yet.
+view. Press `x` on a `TURN FINISHED` item to acknowledge that observed turn and
+remove it from ATTENTION immediately. It remains in WORK with its actual observed
+status. This does not finish a task, unregister it, mark any code reviewed, close
+a pane, or send agent input. Input requests cannot be acknowledged. The displayed
+status is `TURN FINISHED`; the core enum remains `AgentStatus::Complete`.
+
+Acknowledgements are session-only: switching views or focusing an agent preserves
+them, but exiting/restarting Workbench resets them. The core tracks a generation
+and a fingerprint of the validated completion marker plus preceding visible output;
+it stores no terminal text or acknowledgement files. Repeated captures stay
+dismissed. Observed running activity, an input request, changed completion evidence,
+changed pane/workspace bindings, or a definitely missing pane invalidate the old
+acknowledgement. A transient `UNKNOWN`, idle composer, discovery failure, or
+registration-load failure does not by itself make the same turn reappear.
+Unregistering removes its tracking entry; editing Short Description does not.
+Captured acknowledgement actions are rejected if a newer observation supersedes them.
+
+This fingerprint is not a native agent turn ID. Whitespace-only wrapping and draft
+edits are ignored, but a changed visible history/viewport can conservatively show a
+reminder again. If a new turn starts and finishes between polls with identical
+visible completion evidence, Workbench cannot distinguish it from the acknowledged
+turn. Session-only scope limits stale suppression; a reliable hook-based identity
+would be needed to remove that ambiguity. `workbench list` reports status, not the
+TUI's session-local dismissal state.
 
 The attention queue itself does not poll Git or infer workspace changes. Use `d`
 to open M6's on-demand review screen; `Enter` still opens the full terminal session.
@@ -414,7 +437,7 @@ stay `UNKNOWN` and remain fully navigable/replyable.
 | `RUNNING` | Current Codex activity line with elapsed time and `esc to interrupt`, anchored by a composer and recognized footer or a recognized bottom rate-limit banner. |
 | `WAITING_FOR_INPUT` | Current command/edit/permission/terminal-input approval dialog: known title, selected Yes/No option, and confirmation footer. |
 | `IDLE` | Bottom-of-screen Codex composer and recognized ready footer, without an active indicator or explicit completion marker. |
-| `COMPLETE` | Ready composer immediately following Codex's `Worked for …` marker. **The turn finished; the overall task may not be done.** |
+| `TURN FINISHED` | Ready composer immediately following Codex's `Worked for …` marker. **The turn finished; the overall task may not be done.** |
 | `UNKNOWN` | Unsupported agent, missing/unavailable/dead pane, copy/view mode, failed capture, unrecognized menu, or inconclusive/truncated UI. |
 
 The work list shows a short explanation beside each status. Detection reads only
@@ -449,8 +472,8 @@ enough evidence; changed keybindings, localization, narrow panes, menus, and UI 
 can produce `UNKNOWN`. Free-form questions and structured question pickers are
 not reliably distinguished yet—open the full pane when uncertain. `IDLE` means a
 ready composer, not proof that no human response is desired. A visible completion
-marker remains `COMPLETE` until the screen changes; there is no acknowledgement
-action yet. No state is inferred solely from process
+marker remains `TURN FINISHED` until the screen changes; `x` can acknowledge that
+observation in ATTENTION without altering the status. No state is inferred solely from process
 presence, pane disappearance, a quiet terminal, or words such as “done” in prose.
 
 Codex lifecycle hooks are a potential opt-in status source, not installed or

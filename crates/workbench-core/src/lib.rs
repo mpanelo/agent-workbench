@@ -15,7 +15,7 @@ mod tmux;
 mod work_items;
 
 pub use actions::{ActionError, MAX_INPUT_BYTES, validate_agent_input};
-pub use attention::attention_items;
+pub use attention::{AttentionError, AttentionTracker, CompletionAcknowledgement, attention_items};
 pub use git::{ChangeKind, ChangedFile, GitError, WorkItemDiff};
 pub use model::{Pane, Session, Snapshot, Window};
 pub use registration::{RegistrationDraft, RegistrationError};
@@ -105,6 +105,7 @@ impl Engine {
                     }
                     .into(),
                     attention_prompt: None,
+                    completion_fingerprint: None,
                 }
             })
             .collect())

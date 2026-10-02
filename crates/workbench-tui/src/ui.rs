@@ -56,11 +56,7 @@ fn render_items(
         Constraint::Min(0),
         Constraint::Length(if interaction.message.is_some() { 2 } else { 0 }),
         Constraint::Length(if interaction.draft.is_some() { 3 } else { 0 }),
-        Constraint::Length(if view == View::Work && interaction.draft.is_none() {
-            2
-        } else {
-            1
-        }),
+        Constraint::Length(if interaction.draft.is_none() { 2 } else { 1 }),
     ])
     .areas(frame.area());
     let count = match &state.work_items {
@@ -266,7 +262,7 @@ fn render_items(
         } else if view == View::Work {
             "e: edit description | u: unregister\nj/k | Enter: open | r: reply | d: review | Ctrl+d/u: scroll | a/w/s | q: quit"
         } else {
-            "j/k | Enter: open | r: reply | d: review | Ctrl+d/u: scroll | a/w/s | q: quit"
+            "x: acknowledge finished turn\nj/k | Enter: open | r: reply | d: review | Ctrl+d/u: scroll | a/w/s | q: quit"
         }),
         footer,
     );
@@ -828,6 +824,7 @@ mod tests {
             pane,
             status_detail: "Unsupported foreground command.".into(),
             attention_prompt: None,
+            completion_fingerprint: None,
         }
     }
 
@@ -875,6 +872,10 @@ mod tests {
                 assert_eq!(text.lines().nth(8).unwrap().trim_end(), maintenance);
             } else {
                 assert!(!text.contains(maintenance));
+                assert_eq!(
+                    text.lines().nth(8).unwrap().trim_end(),
+                    "x: acknowledge finished turn"
+                );
             }
             assert_eq!(
                 text.lines().last().unwrap().trim_end(),
@@ -913,7 +914,7 @@ mod tests {
             "› 1. Yes, proceed (y)",
             "2. Yes, and don't ask again (p)",
             "3. No, and tell Codex what to do differently (esc)",
-            "PR #1842  COMPLETE",
+            "PR #1842  TURN FINISHED",
             "Agent turn completed.",
             "Overall task completion is unverified.",
             "Type: Implementation",
@@ -1070,7 +1071,7 @@ mod tests {
             ("AGENT WORKBENCH", theme::LAVENDER, theme::MANTLE),
             ("> ABC-123", theme::LAVENDER, theme::SURFACE),
             ("WAITING_FOR_INPUT", theme::YELLOW, theme::SURFACE),
-            ("COMPLETE", theme::GREEN, theme::BASE),
+            ("TURN FINISHED", theme::GREEN, theme::BASE),
             ("Options:", theme::LAVENDER, theme::BASE),
             ("› 1. Yes", theme::MAUVE, theme::BASE),
             ("$ cargo test", theme::TEAL, theme::BASE),

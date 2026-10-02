@@ -1,6 +1,9 @@
 //! Conservative, ephemeral terminal observations; no transcript discovery.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet, hash_map::DefaultHasher},
+    hash::{Hash, Hasher},
+};
 
 use tokio::task::JoinSet;
 
@@ -72,11 +75,17 @@ impl Engine {
                 let detected = match result {
                     Ok(observation) => {
                         let (status, detail) = infer(&observation);
-                        (status, detail, approval_prompt(&observation, status))
+                        (
+                            status,
+                            detail,
+                            approval_prompt(&observation, status),
+                            completion_fingerprint(&observation, status),
+                        )
                     }
                     Err(_) => (
                         AgentStatus::Unknown,
                         "Pane capture failed or changed; retrying next refresh.",
+                        None,
                         None,
                     ),
                 };
@@ -84,14 +93,47 @@ impl Engine {
             }
         }
         for state in &mut states {
-            if let Some((status, detail, prompt)) = observations.get(&state.item.pane_id) {
+            if let Some((status, detail, prompt, completion)) =
+                observations.get(&state.item.pane_id)
+            {
                 state.status = *status;
                 state.status_detail = (*detail).into();
                 state.attention_prompt.clone_from(prompt);
+                state.completion_fingerprint = *completion;
             }
         }
         Ok(states)
     }
+}
+
+// Exclude draft/footer/banner changes. Include visible output before the current
+// validated marker, so different answers with the same duration can requeue.
+// Whitespace normalization avoids requeueing solely due to line wrapping.
+// No screen text is retained. This is evidence, not a guaranteed native turn ID.
+fn completion_fingerprint(observation: &PaneObservation, status: AgentStatus) -> Option<u64> {
+    if status != AgentStatus::Complete {
+        return None;
+    }
+    let raw: Vec<_> = observation
+        .screen
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let composer = raw
+        .iter()
+        .rposition(|line| *line == "›" || line.starts_with("› "))?;
+    let lines: Vec<_> = raw[..composer].iter().map(|line| line.trim()).collect();
+    let marker = preceding_activity(&lines).filter(|line| completion_indicator(line))?;
+    let end = lines.iter().rposition(|line| *line == marker)?;
+    let mut hasher = DefaultHasher::new();
+    for word in lines[..=end]
+        .iter()
+        .flat_map(|line| line.trim_matches('─').split_whitespace())
+    {
+        word.hash(&mut hasher);
+    }
+    Some(hasher.finish())
 }
 
 fn supported(command: Option<&str>) -> bool {
@@ -539,6 +581,53 @@ mod tests {
             dead: false,
             in_mode: false,
             screen: screen.into(),
+        }
+    }
+
+    #[test]
+    fn completion_evidence_excludes_drafts_banners_and_wrapping_but_changes_with_output() {
+        let screen = format!("• Completed the task λ🙂\nWorked for 9s • 1:15 PM\n{FOOTER}");
+        let fingerprint = |screen: &str| {
+            let pane = observation(screen);
+            completion_fingerprint(&pane, infer(&pane).0)
+        };
+        let original = fingerprint(&screen).unwrap();
+        assert_eq!(
+            fingerprint(&screen.replace("›", "› draft λ🙂")),
+            Some(original)
+        );
+        assert_eq!(
+            fingerprint(&screen.replace("Completed the task", "Completed\n  the task")),
+            Some(original)
+        );
+        assert_eq!(
+            fingerprint(
+                &screen.replace("Worked for 9s • 1:15 PM", "── Worked for 9s • 1:15 PM ────")
+            ),
+            Some(original)
+        );
+        assert_eq!(
+            fingerprint(&screen.replace(
+                "Worked for 9s • 1:15 PM",
+                "Worked for 9s • 1:15 PM\n5h limit: 62% left · /status"
+            )),
+            Some(original)
+        );
+        assert_ne!(
+            fingerprint(&screen.replace("task", "next task")),
+            Some(original)
+        );
+        assert_ne!(
+            fingerprint(&screen.replace("1:15 PM", "1:16 PM")),
+            Some(original)
+        );
+        for text in [
+            APPROVAL.to_owned(),
+            format!("Working (9s • esc to interrupt)\n{FOOTER}"),
+            FOOTER.to_owned(),
+            screen.replace("Worked for 9s", "Worked for bogus"),
+        ] {
+            assert!(fingerprint(&text).is_none(), "{text}");
         }
     }
 
@@ -1010,7 +1099,7 @@ mod tests {
             (AgentStatus::Running, "RUNNING", false),
             (AgentStatus::WaitingForInput, "WAITING_FOR_INPUT", true),
             (AgentStatus::Idle, "IDLE", false),
-            (AgentStatus::Complete, "COMPLETE", true),
+            (AgentStatus::Complete, "TURN FINISHED", true),
             (AgentStatus::Unknown, "UNKNOWN", false),
         ] {
             assert_eq!(status.to_string(), label);
