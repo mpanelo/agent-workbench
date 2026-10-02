@@ -6,19 +6,21 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph},
 };
-use workbench_core::{AgentStatus, ReviewStatus};
+use workbench_core::{AgentStatus, ReviewStatus, WorkItemKind};
 
 pub const BASE: Color = Color::Rgb(30, 30, 46);
 pub const MANTLE: Color = Color::Rgb(24, 24, 37);
-pub const SURFACE: Color = Color::Rgb(49, 50, 68);
-pub const BORDER: Color = Color::Rgb(108, 112, 134);
+// Brighter focus surfaces, borders, and supporting text from the Mocha palette.
+pub const SURFACE: Color = Color::Rgb(69, 71, 90);
+pub const BORDER: Color = Color::Rgb(127, 132, 156);
 pub const TEXT: Color = Color::Rgb(205, 214, 244);
-pub const SUBTEXT: Color = Color::Rgb(166, 173, 200);
+pub const SUBTEXT: Color = Color::Rgb(186, 194, 222);
 pub const LAVENDER: Color = Color::Rgb(180, 190, 254);
 pub const BLUE: Color = Color::Rgb(137, 180, 250);
 pub const MAUVE: Color = Color::Rgb(203, 166, 247);
 pub const PINK: Color = Color::Rgb(245, 194, 231);
 pub const TEAL: Color = Color::Rgb(148, 226, 213);
+pub const SKY: Color = Color::Rgb(137, 220, 235);
 pub const GREEN: Color = Color::Rgb(166, 227, 161);
 pub const YELLOW: Color = Color::Rgb(249, 226, 175);
 pub const PEACH: Color = Color::Rgb(250, 179, 135);
@@ -31,25 +33,45 @@ pub fn muted() -> Style {
     Style::default().fg(SUBTEXT)
 }
 pub fn error() -> Style {
-    Style::default().fg(RED)
+    Style::default().fg(RED).add_modifier(Modifier::BOLD)
 }
 pub fn notice() -> Style {
-    Style::default().fg(YELLOW)
+    Style::default().fg(YELLOW).add_modifier(Modifier::BOLD)
 }
 pub fn accent() -> Style {
-    Style::default().fg(LAVENDER).add_modifier(Modifier::BOLD)
+    Style::default().fg(TEAL).add_modifier(Modifier::BOLD)
 }
 pub fn header() -> Style {
-    accent().bg(MANTLE)
+    Style::default()
+        .fg(MANTLE)
+        .bg(MAUVE)
+        .add_modifier(Modifier::BOLD)
 }
 pub fn selection() -> Style {
     Style::default().bg(SURFACE).add_modifier(Modifier::BOLD)
 }
 pub fn border(active: bool) -> Style {
-    Style::default().fg(if active { LAVENDER } else { BORDER })
+    Style::default().fg(if active { TEAL } else { BORDER })
 }
 pub fn panel() -> Style {
     Style::default().fg(TEXT).bg(MANTLE)
+}
+
+pub fn label() -> Style {
+    Style::default().fg(LAVENDER).add_modifier(Modifier::BOLD)
+}
+
+pub fn path() -> Style {
+    Style::default().fg(SKY)
+}
+
+pub fn work_kind(kind: WorkItemKind) -> Style {
+    Style::default()
+        .fg(match kind {
+            WorkItemKind::Implementation => BLUE,
+            WorkItemKind::ExternalReview => PINK,
+        })
+        .add_modifier(Modifier::BOLD)
 }
 
 pub fn paint(frame: &mut Frame<'_>) {
@@ -59,21 +81,23 @@ pub fn paint(frame: &mut Frame<'_>) {
 pub fn status(status: AgentStatus) -> Style {
     Style::default()
         .fg(match status {
-            AgentStatus::Running => BLUE,
+            AgentStatus::Running => SKY,
             AgentStatus::WaitingForInput => YELLOW,
-            AgentStatus::Idle => TEAL,
+            AgentStatus::Idle => LAVENDER,
             AgentStatus::Complete => GREEN,
-            AgentStatus::Unknown => SUBTEXT,
+            AgentStatus::Unknown => PEACH,
         })
         .add_modifier(Modifier::BOLD)
 }
 
 pub fn review_status(status: ReviewStatus) -> Style {
-    Style::default().fg(match status {
-        ReviewStatus::Reviewed => GREEN,
-        ReviewStatus::Unreviewed => SUBTEXT,
-        ReviewStatus::ChangedAfterReview => PEACH,
-    })
+    Style::default()
+        .fg(match status {
+            ReviewStatus::Reviewed => GREEN,
+            ReviewStatus::Unreviewed => BLUE,
+            ReviewStatus::ChangedAfterReview => PEACH,
+        })
+        .add_modifier(Modifier::BOLD)
 }
 
 /// Preserve shortcut text/separators exactly; emphasize keys, not descriptions.
@@ -84,16 +108,19 @@ pub fn footer(text: &str) -> Paragraph<'static> {
             let mut spans = Vec::new();
             for (index, shortcut) in line.split(" | ").enumerate() {
                 if index > 0 {
-                    spans.push(Span::styled(" | ", muted()));
+                    spans.push(Span::styled(" | ", Style::default().fg(BORDER)));
                 }
                 if let Some((key, description)) = shortcut.split_once(':') {
                     spans.push(Span::styled(
                         key.to_owned(),
-                        Style::default().fg(BLUE).add_modifier(Modifier::BOLD),
+                        Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
                     ));
                     spans.push(Span::styled(format!(":{description}"), muted()));
                 } else {
-                    spans.push(Span::styled(shortcut.to_owned(), Style::default().fg(BLUE)));
+                    spans.push(Span::styled(
+                        shortcut.to_owned(),
+                        Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                    ));
                 }
             }
             Line::from(spans)
@@ -107,9 +134,12 @@ pub fn prompt_line(line: &str) -> Style {
     if line == "Options:" {
         accent()
     } else if line.starts_with("› ") {
-        Style::default().fg(MAUVE).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(PEACH)
+            .bg(SURFACE)
+            .add_modifier(Modifier::BOLD)
     } else if line.starts_with("$ ") {
-        Style::default().fg(TEAL)
+        Style::default().fg(TEAL).add_modifier(Modifier::BOLD)
     } else if line.starts_with("Reason:") || line.starts_with("Environment:") {
         Style::default().fg(PEACH)
     } else {
@@ -170,13 +200,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn vivid_roles_keep_focus_types_and_prompt_choices_distinct() {
+        assert_eq!(header().fg, Some(MANTLE));
+        assert_eq!(header().bg, Some(MAUVE));
+        assert_eq!(accent().fg, Some(TEAL));
+        assert_eq!(border(true).fg, Some(TEAL));
+        assert_eq!(border(false).fg, Some(BORDER));
+        assert_eq!(selection().bg, Some(SURFACE));
+        assert_eq!(muted().fg, Some(SUBTEXT));
+        assert_eq!(work_kind(WorkItemKind::Implementation).fg, Some(BLUE));
+        assert_eq!(work_kind(WorkItemKind::ExternalReview).fg, Some(PINK));
+        assert_eq!(review_status(ReviewStatus::Unreviewed).fg, Some(BLUE));
+        let choice = prompt_line("  › 1. Yes, proceed (y)");
+        assert_eq!(choice.fg, Some(PEACH));
+        assert_eq!(choice.bg, Some(SURFACE));
+        assert!(choice.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(prompt_line("  2. No, cancel (esc)").fg, Some(TEXT));
+        assert_eq!(prompt_line("  2. No, cancel (esc)").bg, None);
+        assert_eq!(prompt_line("Options:").fg, Some(TEAL));
+        assert_eq!(prompt_line("$ cargo test").fg, Some(TEAL));
+    }
+
+    #[test]
     fn statuses_keep_distinct_semantic_colors_including_unknown() {
         for (state, color) in [
-            (AgentStatus::Running, BLUE),
+            (AgentStatus::Running, SKY),
             (AgentStatus::WaitingForInput, YELLOW),
-            (AgentStatus::Idle, TEAL),
+            (AgentStatus::Idle, LAVENDER),
             (AgentStatus::Complete, GREEN),
-            (AgentStatus::Unknown, SUBTEXT),
+            (AgentStatus::Unknown, PEACH),
         ] {
             assert_eq!(status(state).fg, Some(color));
         }
@@ -213,9 +265,10 @@ mod tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
-        assert_text_style(buffer, "Space", BLUE, MANTLE);
+        assert_text_style(buffer, "Space", PEACH, MANTLE);
         assert_text_style(buffer, "reviewed", SUBTEXT, MANTLE);
-        assert_text_style(buffer, "q", BLUE, MANTLE);
+        assert_text_style(buffer, "q", PEACH, MANTLE);
+        assert_text_style(buffer, " | ", BORDER, MANTLE);
         let rendered = buffer
             .content()
             .chunks(80)

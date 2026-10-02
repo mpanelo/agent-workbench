@@ -687,7 +687,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
         terminal.draw(|frame| review.render(frame)).unwrap();
         let buffer = terminal.backend().buffer();
-        theme::assert_text_style(buffer, "AGENT WORKBENCH", theme::LAVENDER, theme::MANTLE);
+        theme::assert_text_style(buffer, "AGENT WORKBENCH", theme::MANTLE, theme::MAUVE);
         theme::assert_text_style(buffer, "✓ source.rs", theme::GREEN, theme::SURFACE);
         theme::assert_text_style(buffer, "+++ b/source.rs", theme::PINK, theme::MANTLE);
         theme::assert_text_style(buffer, "@@ -1 +1 @@", theme::PEACH, theme::MANTLE);

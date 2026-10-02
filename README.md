@@ -117,10 +117,12 @@ approval command text are unchanged; paths outside `$HOME` remain absolute.
 ## Appearance
 
 The TUI uses [Catppuccin Mocha](https://catppuccin.com/palette/#mocha), with a
-dark background, lavender headers/focus accents, and muted workspace metadata.
-Running is blue, waiting is yellow, idle is teal, complete/reviewed is green,
-and unknown is muted. Errors and deletions are red; changes requiring re-review
-are peach. Prompt choices and shortcut keys are accented, and diff additions/
+dark background, solid mauve header bars, teal focus accents, and brighter full-row
+selection highlights. `Build` is blue and `Review` is pink; metadata labels are lavender and paths
+are sky blue. Running is sky blue, waiting is yellow, idle is lavender,
+complete/reviewed is green, and unknown is peach. Errors and deletions are red;
+changes requiring re-review are peach. Shortcut keys and selected prompt choices
+use peach, while supporting text uses the brighter Subtext 1 shade. Diff additions/
 deletions have subtle tinted backgrounds. Text labels and selection/review marks
 remain, so color is not the only cue.
 

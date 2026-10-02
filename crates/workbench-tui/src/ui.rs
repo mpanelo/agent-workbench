@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Paragraph, Wrap},
 };
@@ -132,20 +133,19 @@ fn render_items(
                 if view == View::Attention {
                     heading.push(Span::styled(
                         format!("{}  ", work_kind_label(item.kind)),
-                        theme::muted(),
+                        theme::work_kind(item.kind),
                     ));
                 }
                 heading.push(Span::styled(
                     state.status.to_string(),
                     theme::status(state.status),
                 ));
-                lines.push(Line::from(heading).style(if selected {
-                    theme::selection()
-                } else {
-                    theme::text()
-                }));
+                lines.push(selectable_line(Line::from(heading), selected, body.width));
                 if view == View::Work {
-                    lines.push(Line::from(format!("  {}", visible(&item.title))));
+                    lines.push(Line::styled(
+                        format!("  {}", visible(&item.title)),
+                        theme::text().add_modifier(ratatui::style::Modifier::BOLD),
+                    ));
                     lines.push(Line::styled(
                         format!("  Status: {}", visible(&state.status_detail)),
                         theme::muted(),
@@ -162,9 +162,10 @@ fn render_items(
                     }
                 }
                 if view == View::Work {
-                    lines.push(Line::styled(
-                        format!("  Type: {}", work_kind_label(item.kind)),
-                        theme::muted(),
+                    lines.push(metadata(
+                        "Type",
+                        work_kind_label(item.kind),
+                        theme::work_kind(item.kind),
                     ));
                     let warning = match state.pane {
                         workbench_core::PaneAvailability::Present => None,
@@ -178,24 +179,23 @@ fn render_items(
                     }
                 }
                 if view == View::Work {
-                    lines.push(Line::styled(
-                        format!("  Repository: {}", visible(&display_path(&item.repository))),
-                        theme::muted(),
+                    lines.push(metadata(
+                        "Repository",
+                        &display_path(&item.repository),
+                        theme::path(),
                     ));
                 }
                 if view == View::Work {
-                    lines.push(Line::styled(
-                        format!("  Workspace: {}", visible(&display_path(&item.workspace))),
-                        theme::muted(),
+                    lines.push(metadata(
+                        "Workspace",
+                        &display_path(&item.workspace),
+                        theme::path(),
                     ));
                 }
                 if view == View::Work
                     && let Some(branch) = &item.branch
                 {
-                    lines.push(Line::styled(
-                        format!("  Branch: {}", visible(branch)),
-                        theme::muted(),
-                    ));
+                    lines.push(metadata("Branch", branch, Style::default().fg(theme::PINK)));
                 }
                 if view == View::Work
                     || state.status == workbench_core::AgentStatus::WaitingForInput
@@ -274,6 +274,26 @@ fn work_kind_label(kind: workbench_core::WorkItemKind) -> &'static str {
     }
 }
 
+fn metadata(label: &str, value: &str, style: Style) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("  {label}: "), theme::label()),
+        Span::styled(visible(value), style),
+    ])
+}
+
+// Paint the full selected row, not just its glyphs. Span foregrounds retain
+// their status/type colors over the shared selection background.
+fn selectable_line(mut line: Line<'static>, selected: bool, width: u16) -> Line<'static> {
+    if selected {
+        line.spans.push(Span::raw(
+            " ".repeat(usize::from(width).saturating_sub(line.width())),
+        ));
+        line.style(theme::selection().fg(theme::TEXT))
+    } else {
+        line.style(theme::text())
+    }
+}
+
 // Wrap bounded prompt previews by display width while retaining exact rendered
 // row counts for selection/scrolling. Escaping happens before width measurement.
 fn push_prompt(lines: &mut Vec<Line<'static>>, text: &str, width: u16) {
@@ -349,7 +369,7 @@ pub(crate) fn render_sessions(
             for session in &snapshot.sessions {
                 lines.push(Line::styled(
                     format!(" {}", visible(&session.name)),
-                    theme::accent().fg(theme::MAUVE),
+                    theme::accent().fg(theme::PINK),
                 ));
                 for window in &session.windows {
                     lines.push(Line::styled(
@@ -386,11 +406,7 @@ pub(crate) fn render_sessions(
                         if !title.is_empty() {
                             row.push(Span::raw(format!(" — {}", visible(title))));
                         }
-                        lines.push(Line::from(row).style(if selected {
-                            theme::selection().fg(theme::LAVENDER)
-                        } else {
-                            theme::text()
-                        }));
+                        lines.push(selectable_line(Line::from(row), selected, body.width));
                         lines.push(Line::styled(
                             format!(
                                 "      {}",
@@ -399,7 +415,7 @@ pub(crate) fn render_sessions(
                                     .map(|path| visible(&display_path(path)))
                                     .unwrap_or_else(|| "Directory unavailable".to_owned())
                             ),
-                            theme::muted(),
+                            theme::path(),
                         ));
                     }
                 }
@@ -1066,6 +1082,50 @@ mod tests {
     }
 
     #[test]
+    fn work_metadata_uses_distinct_label_value_and_type_colors_without_changing_text() {
+        for (kind, label, color) in [
+            (WorkItemKind::Implementation, "Build", theme::BLUE),
+            (WorkItemKind::ExternalReview, "Review", theme::PINK),
+        ] {
+            let state = AppState::from_refresh(
+                Ok(snapshot()),
+                Ok(vec![registered(PaneAvailability::Present, kind)]),
+            );
+            let mut interaction = Interaction::default();
+            interaction.sync(state.items());
+            let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+            terminal
+                .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            for (text, fg, bg) in [
+                ("Type:", theme::LAVENDER, theme::BASE),
+                (label, color, theme::BASE),
+                ("Repository:", theme::LAVENDER, theme::BASE),
+                ("/work/repo", theme::SKY, theme::BASE),
+                ("Workspace:", theme::LAVENDER, theme::BASE),
+                ("/work/ABC-123", theme::SKY, theme::BASE),
+                ("Branch:", theme::LAVENDER, theme::BASE),
+                ("fix/retries", theme::PINK, theme::BASE),
+                ("Fix retries", theme::TEXT, theme::BASE),
+                ("UNKNOWN", theme::PEACH, theme::SURFACE),
+            ] {
+                theme::assert_text_style(buffer, text, fg, bg);
+            }
+            assert_eq!(buffer[(119, 0)].bg, theme::MAUVE);
+            assert_eq!(buffer[(119, 1)].bg, theme::SURFACE);
+            assert_eq!(buffer[(119, 2)].bg, theme::BASE);
+            let line = metadata("Branch", "feature/λ\x1b", Style::default().fg(theme::PINK));
+            let rendered: String = line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
+            assert_eq!(rendered, "  Branch: feature/λ\\u{1b}");
+        }
+    }
+
+    #[test]
     fn item_views_keep_status_colors_under_selection_and_style_prompt_options() {
         let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         waiting.status = AgentStatus::WaitingForInput;
@@ -1084,16 +1144,16 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         for (text, fg, bg) in [
-            ("AGENT WORKBENCH", theme::LAVENDER, theme::MANTLE),
-            ("> ABC-123", theme::LAVENDER, theme::SURFACE),
+            ("AGENT WORKBENCH", theme::MANTLE, theme::MAUVE),
+            ("> ABC-123", theme::TEAL, theme::SURFACE),
             ("WAITING_FOR_INPUT", theme::YELLOW, theme::SURFACE),
             ("TURN FINISHED", theme::GREEN, theme::BASE),
-            ("Options:", theme::LAVENDER, theme::BASE),
-            ("› 1. Yes", theme::MAUVE, theme::BASE),
+            ("Options:", theme::TEAL, theme::BASE),
+            ("› 1. Yes", theme::PEACH, theme::SURFACE),
             ("$ cargo test", theme::TEAL, theme::BASE),
             ("Reason:", theme::PEACH, theme::BASE),
-            ("Build", theme::SUBTEXT, theme::SURFACE),
-            ("Review", theme::SUBTEXT, theme::BASE),
+            ("Build", theme::BLUE, theme::SURFACE),
+            ("Review", theme::PINK, theme::BASE),
         ] {
             theme::assert_text_style(buffer, text, fg, bg);
         }
@@ -1115,12 +1175,12 @@ mod tests {
             .draw(|frame| render_sessions(frame, &state, &mut 0, &mut interaction))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        theme::assert_text_style(buffer, "AGENT WORKBENCH", theme::LAVENDER, theme::MANTLE);
-        theme::assert_text_style(buffer, "codex", theme::LAVENDER, theme::SURFACE);
-        theme::assert_text_style(buffer, " main", theme::MAUVE, theme::BASE);
+        theme::assert_text_style(buffer, "AGENT WORKBENCH", theme::MANTLE, theme::MAUVE);
+        theme::assert_text_style(buffer, "codex", theme::TEXT, theme::SURFACE);
+        theme::assert_text_style(buffer, " main", theme::PINK, theme::BASE);
         theme::assert_text_style(buffer, " auth", theme::BLUE, theme::BASE);
         theme::assert_text_style(buffer, "", theme::TEAL, theme::SURFACE);
-        theme::assert_text_style(buffer, "/work/my repo", theme::SUBTEXT, theme::BASE);
+        theme::assert_text_style(buffer, "/work/my repo", theme::SKY, theme::BASE);
         let failed = AppState::from_refresh(Err("test discovery error".into()), Ok(vec![]));
         terminal
             .draw(|frame| render_sessions(frame, &failed, &mut 0, &mut interaction))

@@ -579,7 +579,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
         terminal.draw(|frame| form.render(frame)).unwrap();
         let buffer = terminal.backend().buffer();
-        theme::assert_text_style(buffer, "REGISTER WORK ITEM", theme::LAVENDER, theme::MANTLE);
+        theme::assert_text_style(buffer, "REGISTER WORK ITEM", theme::MANTLE, theme::MAUVE);
         theme::assert_text_style(buffer, "feature-task", theme::TEXT, theme::SURFACE);
         theme::assert_text_style(buffer, "2 / 6", theme::SUBTEXT, theme::BASE);
         form.error = Some("test registration error".into());
