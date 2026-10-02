@@ -146,30 +146,21 @@ fn render_items(
                         theme::muted(),
                     ));
                 }
-                if view == View::Attention || selected {
-                    if state.status == workbench_core::AgentStatus::WaitingForInput {
-                        lines.push(Line::styled("  Agent requests input:", theme::notice()));
-                        if let Some(prompt) = &state.attention_prompt {
-                            push_prompt(&mut lines, prompt, body.width);
-                        } else {
-                            lines.push(Line::from(format!("  {}", visible(&state.status_detail))));
-                        }
-                    } else if view == View::Attention {
-                        lines.push(Line::styled(
-                            "  Agent turn completed.",
-                            theme::status(state.status),
-                        ));
-                        lines.push(Line::styled(
-                            "  Overall task completion is unverified.",
-                            theme::muted(),
-                        ));
+                if (view == View::Attention || selected)
+                    && state.status == workbench_core::AgentStatus::WaitingForInput
+                {
+                    lines.push(Line::styled("  Agent requests input:", theme::notice()));
+                    if let Some(prompt) = &state.attention_prompt {
+                        push_prompt(&mut lines, prompt, body.width);
+                    } else {
+                        lines.push(Line::from(format!("  {}", visible(&state.status_detail))));
                     }
                 }
+                lines.push(Line::styled(
+                    format!("  Type: {}", work_kind_label(item.kind)),
+                    theme::muted(),
+                ));
                 if view == View::Work {
-                    lines.push(Line::styled(
-                        format!("  Type: {}", item.kind),
-                        theme::muted(),
-                    ));
                     let warning = match state.pane {
                         workbench_core::PaneAvailability::Present => None,
                         workbench_core::PaneAvailability::Missing => Some("  Agent pane missing."),
@@ -180,11 +171,6 @@ fn render_items(
                     if let Some(warning) = warning {
                         lines.push(Line::styled(warning, theme::notice()));
                     }
-                } else {
-                    lines.push(Line::styled(
-                        format!("  Type: {}", item.kind),
-                        theme::muted(),
-                    ));
                 }
                 if view == View::Work {
                     lines.push(Line::styled(
@@ -266,6 +252,15 @@ fn render_items(
         }),
         footer,
     );
+}
+
+/// Compact card labels only; registration, CLI flags, and persisted kinds keep
+/// their full domain names.
+fn work_kind_label(kind: workbench_core::WorkItemKind) -> &'static str {
+    match kind {
+        workbench_core::WorkItemKind::Implementation => "IMPL",
+        workbench_core::WorkItemKind::ExternalReview => "CR",
+    }
 }
 
 // Wrap bounded prompt previews by display width while retaining exact rendered
@@ -890,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn attention_shows_only_queue_items_with_prompt_context_and_completion_caveat() {
+    fn attention_shows_only_queue_items_with_prompt_context_and_compact_completion() {
         let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         waiting.status = AgentStatus::WaitingForInput;
         waiting.attention_prompt = Some("Would you like to run the following command?\n$ cargo test -- λ🙂\n\nOptions:\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n  3. No, and tell Codex what to do differently (esc)".into());
@@ -915,10 +910,8 @@ mod tests {
             "2. Yes, and don't ask again (p)",
             "3. No, and tell Codex what to do differently (esc)",
             "PR #1842  TURN FINISHED",
-            "Agent turn completed.",
-            "Overall task completion is unverified.",
-            "Type: Implementation",
-            "Type: External Review",
+            "Type: IMPL",
+            "Type: CR",
             "Workspace: /work/ABC-123",
             "1 UNKNOWN item(s)",
             "Enter: open",
@@ -929,6 +922,11 @@ mod tests {
         }
         assert!(!text.contains("HIDDEN_UNKNOWN"));
         assert!(!text.contains("HIDDEN_RUNNING"));
+        assert!(!text.contains("Agent turn completed."), "{text}");
+        assert!(
+            !text.contains("Overall task completion is unverified."),
+            "{text}"
+        );
         assert!(!text.contains("Pane:"), "{text}");
         assert!(!text.contains("%14"), "{text}");
         assert!(!text.contains("(present)"), "{text}");
@@ -1253,6 +1251,31 @@ mod tests {
     }
 
     #[test]
+    fn finished_attention_cards_fit_four_rows_and_keep_kind_storage_unchanged() {
+        for (kind, label, full_name) in [
+            (WorkItemKind::Implementation, "IMPL", "Implementation"),
+            (WorkItemKind::ExternalReview, "CR", "External Review"),
+        ] {
+            let mut finished = registered(PaneAvailability::Present, kind);
+            finished.status = AgentStatus::Complete;
+            let original = finished.clone();
+            let state = AppState::from_refresh(Ok(snapshot()), Ok(vec![finished]));
+            // Header + four content rows + two shortcut rows, matching a compact card.
+            let text = attention_screen(&state, 80, 7, &mut 0);
+            let rows: Vec<_> = text.lines().map(str::trim_end).collect();
+            assert_eq!(rows[1], "> ABC-123  TURN FINISHED");
+            assert_eq!(rows[2], "  Fix retries");
+            assert_eq!(rows[3], format!("  Type: {label}"));
+            assert_eq!(rows[4], "  Workspace: /work/ABC-123");
+            assert_eq!(rows[5], "x: acknowledge finished turn");
+            assert_eq!(state.items(), std::slice::from_ref(&original));
+            assert_eq!(state.items()[0].item.kind.to_string(), full_name);
+            let work = work_screen(&state, 100, 12, &mut 0);
+            assert!(work.contains(&format!("Type: {label}")), "{work}");
+        }
+    }
+
+    #[test]
     fn work_view_shows_saved_metadata_and_unknown_status_for_both_types() {
         for kind in [WorkItemKind::Implementation, WorkItemKind::ExternalReview] {
             for pane in [
@@ -1273,7 +1296,7 @@ mod tests {
                     "/work/repo",
                     "/work/ABC-123",
                     "Branch: fix/retries",
-                    &kind.to_string(),
+                    work_kind_label(kind),
                 ] {
                     assert!(text.contains(expected), "missing {expected:?} in {text}");
                 }

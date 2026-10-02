@@ -73,6 +73,10 @@ unavailable because discovery failed.
 Pane availability is separate from agent status; a disappeared pane does not
 remove its registration.
 
+WORK and ATTENTION cards use compact type labels: `IMPL` for Implementation and
+`CR` for code review (the External Review kind). Registration forms, CLI arguments,
+and saved kinds retain their full names.
+
 The session view groups agents by session and window name, using mini.icons-style
 glyphs: `` for sessions (package), `` for windows (module), and `` for panes
 (shell). These are fixed glyphs from the [mini.icons palette](https://github.com/nvim-mini/mini.icons),
@@ -245,8 +249,9 @@ Dialog text is bounded at 16,384 Unicode characters and options have a separate
 explicit warning if clipped. Options are displayed, not automatically selected;
 use `r` to reply or `Enter` to open the pane. Text wraps to terminal width; use Page Up/Page Down to
 scroll long dialogs, or `Enter` for the full pane. Content already clipped by the
-agent's own screen cannot be recovered from a viewport capture. Completion cards say the **turn**
-finished, without claiming the whole task is done or inventing changed-file counts.
+agent's own screen cannot be recovered from a viewport capture. Finished cards
+show `TURN FINISHED` without repeating completion/caveat sentences. This means the
+agent's response ended, not that the whole task is done or the code has been reviewed.
 
 The core builds the queue from the same observation snapshot used by WORK, with no
 extra tmux captures. Queue entries and prompt previews are not persisted or logged.
