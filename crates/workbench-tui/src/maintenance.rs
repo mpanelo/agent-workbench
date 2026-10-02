@@ -7,7 +7,10 @@ use ratatui::{
     text::Line,
     widgets::{Block, Paragraph, Wrap},
 };
-use workbench_core::{Engine, MAX_SHORT_DESCRIPTION_CHARS, WorkItem, validate_short_description};
+use workbench_core::{
+    Engine, MAX_SHORT_DESCRIPTION_CHARS, WorkItem, validate_short_description,
+    validate_work_item_id,
+};
 
 use crate::{
     interaction::Draft,
@@ -18,19 +21,33 @@ use crate::{
 #[derive(Debug)]
 pub(crate) enum Request {
     Edit(WorkItem),
+    Rename(WorkItem),
     Unregister(WorkItem),
 }
 
 impl Request {
     fn item(&self) -> &WorkItem {
         match self {
-            Self::Edit(item) | Self::Unregister(item) => item,
+            Self::Edit(item) | Self::Rename(item) | Self::Unregister(item) => item,
         }
+    }
+
+    fn field_label(&self) -> &'static str {
+        if matches!(self, Self::Rename(_)) {
+            "Work ID"
+        } else {
+            "Short Description"
+        }
+    }
+
+    fn editing(&self) -> bool {
+        !matches!(self, Self::Unregister(_))
     }
 }
 
 pub(crate) enum Mutation {
     Description { expected: WorkItem, text: String },
+    Rename { expected: WorkItem, text: String },
     Unregister(WorkItem),
 }
 
@@ -40,6 +57,7 @@ impl Mutation {
             Self::Description { expected, text } => engine
                 .update_work_item_description(expected, text)
                 .map(|_| ()),
+            Self::Rename { expected, text } => engine.rename_work_item(expected, text).map(|_| ()),
             Self::Unregister(expected) => engine.unregister_work_item(expected),
         }
         .map_err(|error| error.to_string())
@@ -50,6 +68,10 @@ impl Mutation {
             Self::Description { expected, .. } => {
                 format!("Updated Short Description for {}.", expected.id)
             }
+            Self::Rename { expected, text } => format!(
+                "Renamed {} to {text}. Pane, workspace and review marks kept.",
+                expected.id
+            ),
             Self::Unregister(expected) => format!(
                 "Unregistered {}. Only the Workbench entry was removed; pane, branch, worktree and review history were kept.",
                 expected.id
@@ -81,7 +103,11 @@ impl MaintenanceUi {
         if self.is_open() {
             return;
         }
-        self.text = request.item().title.clone();
+        self.text = if matches!(request, Request::Rename(_)) {
+            request.item().id.clone()
+        } else {
+            request.item().title.clone()
+        };
         self.request = Some(request);
         self.saving = false;
         self.error = None;
@@ -118,26 +144,39 @@ impl MaintenanceUi {
                     }
                 }
                 Request::Unregister(item) => Mutation::Unregister(item.clone()),
+                Request::Rename(item) => {
+                    if let Err(error) = validate_work_item_id(&self.text) {
+                        self.error = Some(error.to_string());
+                        return Intent::None;
+                    }
+                    Mutation::Rename {
+                        expected: item.clone(),
+                        text: self.text.clone(),
+                    }
+                }
             };
             self.saving = true;
             self.error = None;
             return Intent::Save(Box::new(mutation));
         }
-        if matches!(self.request, Some(Request::Edit(_))) {
+        if self.request.as_ref().is_some_and(Request::editing) {
             let mut editor = Draft {
                 item_id: String::new(),
                 text: self.text.clone(),
             };
             match editor.edit(key) {
                 Ok(()) => self.apply_edit(editor.text),
-                Err(error) => self.error = Some(error.replace("Replies", "Short Description")),
+                Err(error) => {
+                    self.error =
+                        Some(error.replace("Replies", self.request.as_ref().unwrap().field_label()))
+                }
             }
         }
         Intent::None
     }
 
     pub fn paste(&mut self, text: &str) {
-        if self.saving || !matches!(self.request, Some(Request::Edit(_))) {
+        if self.saving || !self.request.as_ref().is_some_and(Request::editing) {
             return;
         }
         let mut editor = Draft {
@@ -146,7 +185,10 @@ impl MaintenanceUi {
         };
         match editor.append(text) {
             Ok(()) => self.apply_edit(editor.text),
-            Err(error) => self.error = Some(error.replace("Replies", "Short Description")),
+            Err(error) => {
+                self.error =
+                    Some(error.replace("Replies", self.request.as_ref().unwrap().field_label()))
+            }
         }
     }
 
@@ -154,7 +196,10 @@ impl MaintenanceUi {
         let count = text.chars().count();
         // Legacy descriptions may exceed the new limit: allow reducing them,
         // but never silently truncate existing data or permit further growth.
-        if count > MAX_SHORT_DESCRIPTION_CHARS && count >= self.text.chars().count() {
+        if matches!(self.request, Some(Request::Edit(_)))
+            && count > MAX_SHORT_DESCRIPTION_CHARS
+            && count >= self.text.chars().count()
+        {
             self.error = Some(format!(
                 "Short Description is limited to {MAX_SHORT_DESCRIPTION_CHARS} characters; input was not added."
             ));
@@ -169,7 +214,7 @@ impl MaintenanceUi {
             return;
         };
         theme::paint(frame);
-        let editing = matches!(request, Request::Edit(_));
+        let editing = request.editing();
         let item = request.item();
         let [header, body, error, footer] = Layout::vertical([
             Constraint::Length(1),
@@ -179,7 +224,9 @@ impl MaintenanceUi {
         ])
         .areas(frame.area());
         frame.render_widget(
-            Paragraph::new(if editing {
+            Paragraph::new(if matches!(request, Request::Rename(_)) {
+                "RENAME WORK ID"
+            } else if editing {
                 "EDIT WORK ITEM"
             } else {
                 "UNREGISTER WORK ITEM"
@@ -197,7 +244,9 @@ impl MaintenanceUi {
             visible(&item.id),
             visible(&display_path(&item.workspace))
         );
-        if editing {
+        if matches!(request, Request::Rename(_)) {
+            text.push_str("Only Work ID will change. Description, pane mapping, workspace and review marks stay unchanged. Old review history is retained.");
+        } else if editing {
             text.push_str(
                 "Only Short Description will change. ID and pane mapping stay unchanged.",
             );
@@ -212,10 +261,14 @@ impl MaintenanceUi {
         );
         if editing {
             let block = Block::bordered()
-                .title(format!(
-                    "Short Description ({}/{MAX_SHORT_DESCRIPTION_CHARS})",
-                    self.text.chars().count()
-                ))
+                .title(if matches!(request, Request::Rename(_)) {
+                    "Work ID".into()
+                } else {
+                    format!(
+                        "Short Description ({}/{MAX_SHORT_DESCRIPTION_CHARS})",
+                        self.text.chars().count()
+                    )
+                })
                 .style(theme::panel())
                 .border_style(theme::border(true))
                 .title_style(theme::accent());
@@ -286,6 +339,52 @@ mod tests {
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn id_rename_captures_target_validates_and_preserves_draft_on_errors() {
+        let mut form = MaintenanceUi::default();
+        let original = item("A");
+        form.open(Request::Rename(original.clone()));
+        assert_eq!(form.text, "A");
+        let text = screen(&form, 100, 20);
+        assert!(text.contains("RENAME WORK ID"), "{text}");
+        assert!(text.contains("review marks stay unchanged"), "{text}");
+        form.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        for invalid in ["", " ", " B"] {
+            form.text = invalid.into();
+            assert!(matches!(key(&mut form, KeyCode::Enter), Intent::None));
+            assert!(form.error.is_some());
+        }
+        form.text.clear();
+        form.paste("Task λ🙂");
+        form.paste("\nbad");
+        assert_eq!(form.text, "Task λ🙂");
+        let Intent::Save(mutation) = key(&mut form, KeyCode::Enter) else {
+            panic!("expected rename")
+        };
+        let Mutation::Rename { expected, text } = &*mutation else {
+            panic!("expected rename mutation")
+        };
+        assert_eq!(expected, &original);
+        assert_eq!(text, "Task λ🙂");
+        assert!(matches!(key(&mut form, KeyCode::Esc), Intent::None));
+        form.paste("must not change");
+        form.finish(Err("Duplicate ID; choose another".into()));
+        assert!(form.is_open());
+        assert_eq!(&form.text, text);
+        let directory = tempfile::tempdir().unwrap();
+        let engine = Engine::new(directory.path().join("items.json"));
+        engine.register_work_item(original.clone()).unwrap();
+        mutation.execute(&engine).unwrap();
+        let mut renamed = original;
+        renamed.id = text.clone();
+        assert_eq!(engine.work_items().unwrap(), [renamed]);
+        assert!(matches!(key(&mut form, KeyCode::Esc), Intent::Cancel));
+        for (width, height) in [(40, 8), (1, 1), (0, 1)] {
+            form.open(Request::Rename(item("A")));
+            screen(&form, width, height);
+        }
     }
 
     #[test]

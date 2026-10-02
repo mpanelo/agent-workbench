@@ -163,18 +163,29 @@ yourself. Detached HEAD leaves the optional branch blank. No tmux sessions,
 workspaces, or worktrees are created. The CLI remains available for scripting,
 offline registration, or deliberately mapping multiple items to one pane.
 
-## Edit or unregister work items
+## Edit, rename, or unregister work items
 
 In WORK, select a registered item with `j/k` or arrows:
 
 - `e` edits its Short Description. Enter saves; Esc/Ctrl-C cancels. The editor
   shows the 120-character counter, supports Unicode paste, Backspace and Ctrl+u,
   and leaves the ID, kind, repository, workspace, branch and pane mapping unchanged.
+- `n` renames its Work ID. Enter saves; Esc/Ctrl-C cancels. IDs must be nonempty,
+  unique, and have no control characters or surrounding whitespace. Unicode and
+  internal spaces are supported. Description, pane mapping, workspace and branch
+  stay unchanged; selection and local attention acknowledgements follow the new ID.
+  Saved review snapshots are copied to the new ID across all workspace/base contexts.
+  Old history is retained, as it is when unregistering; no snapshots are deleted.
+  Conflicting retained history under the destination ID blocks the rename rather
+  than combining review marks. The copy precedes the atomic registration save:
+  if that save fails, the old registration/history remain usable and the same
+  rename can be retried. Open review sessions in other Workbench instances must
+  be reopened using the new ID.
 - `u` opens an unregister confirmation. Enter removes only the Workbench entry;
   Esc/Ctrl-C cancels. The tmux pane, branch, worktree, files and review history are
   kept. This is not task completion, archiving, or workspace cleanup.
 
-Both actions work with missing panes or unavailable tmux. The dialog stays bound
+All three actions work with missing panes or unavailable tmux. The dialog stays bound
 to the captured item even when the list refreshes. Writes use the registration
 lock and atomic-save path; an externally changed or removed item is rejected
 instead of overwriting another process's work. Errors keep the dialog/draft open

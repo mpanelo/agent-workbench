@@ -51,6 +51,28 @@ fn same_target(left: &WorkItem, right: &WorkItem) -> bool {
 }
 
 impl AttentionTracker {
+    /// Preserve a local acknowledgement only for a successful ID-only rename.
+    /// Old captured acknowledgement tokens cannot target the new ID.
+    pub fn rename_work_item(&mut self, expected: &WorkItem, updated: &WorkItem) {
+        let mut renamed = expected.clone();
+        renamed.id.clone_from(&updated.id);
+        if renamed != *updated
+            || expected.id == updated.id
+            || self.completions.contains_key(&updated.id)
+        {
+            return;
+        }
+        if self
+            .completions
+            .get(&expected.id)
+            .is_some_and(|entry| same_target(&entry.item, expected))
+        {
+            let mut entry = self.completions.remove(&expected.id).unwrap();
+            entry.item = updated.clone();
+            self.completions.insert(updated.id.clone(), entry);
+        }
+    }
+
     /// Apply one successful registration/observation snapshot. On load failures,
     /// do not call this with an invented empty list: keep the tracker unchanged.
     pub fn observe(&mut self, states: &[WorkItemState]) -> Vec<WorkItemState> {
@@ -202,6 +224,26 @@ mod tests {
             attention_prompt: None,
             completion_fingerprint: None,
         }
+    }
+
+    #[test]
+    fn id_rename_preserves_acknowledgements_but_rejects_old_tokens_and_changed_targets() {
+        let mut finished = state("A", AgentStatus::Complete, PaneAvailability::Present);
+        finished.completion_fingerprint = Some(14);
+        let mut tracker = AttentionTracker::default();
+        tracker.observe(&[finished.clone()]);
+        let captured = tracker.capture(&finished).unwrap();
+        tracker.acknowledge(&captured).unwrap();
+        let mut renamed = finished.clone();
+        renamed.item.id = "New λ🙂".into();
+        tracker.rename_work_item(&finished.item, &renamed.item);
+        assert!(tracker.observe(&[renamed.clone()]).is_empty());
+        assert_eq!(tracker.acknowledge(&captured), Err(AttentionError::Changed));
+        let mut changed = renamed.clone();
+        changed.item.id = "Changed".into();
+        changed.item.pane_id = "%99".into();
+        tracker.rename_work_item(&renamed.item, &changed.item);
+        assert_eq!(tracker.observe(&[changed.clone()]), [changed]);
     }
 
     #[test]

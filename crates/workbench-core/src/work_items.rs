@@ -199,16 +199,23 @@ pub fn validate_short_description(value: &str) -> Result<(), WorkItemError> {
     Ok(())
 }
 
+/// Work IDs are user-defined labels, not paths or external tracker keys.
+pub fn validate_work_item_id(value: &str) -> Result<(), WorkItemError> {
+    if value.trim().is_empty() || value != value.trim() || value.chars().any(char::is_control) {
+        return Err(WorkItemError::Invalid(
+            "ID must be nonempty, with no control characters or surrounding whitespace".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate(item: &WorkItem) -> Result<(), WorkItemError> {
-    for (name, value) in [
-        ("ID", item.id.as_str()),
-        ("short description", item.title.as_str()),
-    ] {
-        if value.trim().is_empty() || value != value.trim() || value.chars().any(char::is_control) {
-            return Err(WorkItemError::Invalid(format!(
-                "{name} must be nonempty, with no control characters or surrounding whitespace"
-            )));
-        }
+    validate_work_item_id(&item.id)?;
+    let value = item.title.as_str();
+    if value.trim().is_empty() || value != value.trim() || value.chars().any(char::is_control) {
+        return Err(WorkItemError::Invalid(
+            "short description must be nonempty, with no control characters or surrounding whitespace".into(),
+        ));
     }
     if !item.repository.is_absolute() || !item.workspace.is_absolute() {
         return Err(WorkItemError::Invalid(
@@ -338,18 +345,34 @@ impl WorkItemStore {
         })
     }
 
-    /// Read/modify/write under the same stable lock for every registry mutation.
-    fn mutate<T>(
-        &self,
-        edit: impl FnOnce(&mut Vec<WorkItem>) -> Result<T, WorkItemError>,
-    ) -> Result<T, WorkItemError> {
+    pub(crate) fn rename(&self, expected: &WorkItem, id: &str) -> Result<WorkItem, WorkItemError> {
+        validate_work_item_id(id)?;
+        self.mutate(|work_items| {
+            let index = unchanged_item(work_items, expected)?;
+            if id == expected.id {
+                return Ok(work_items[index].clone());
+            }
+            if work_items.iter().any(|item| item.id == id) {
+                return Err(WorkItemError::DuplicateId(id.into()));
+            }
+            // Copy first, never delete the old snapshots. A failed registry save
+            // leaves the old item fully usable; retrying the same copy is safe.
+            crate::review_store::ReviewStore::new(self.review_path())
+                .copy_identity(&expected.id, id)
+                .map_err(|error| WorkItemError::Invalid(format!("ID was not renamed: {error}")))?;
+            work_items[index].id = id.into();
+            Ok(work_items[index].clone())
+        })
+    }
+
+    /// Registry writers and review marks acquire locks in registry/review order.
+    pub(crate) fn lock(&self) -> Result<StateLock, WorkItemError> {
         let parent = self
             .path
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
         fs::create_dir_all(parent).map_err(|error| self.io_error(error))?;
-        // A separate lock remains stable while the JSON inode is atomically replaced.
         let mut lock_path = self.path.as_os_str().to_owned();
         lock_path.push(".lock");
         let lock = OpenOptions::new()
@@ -366,7 +389,20 @@ impl WorkItemStore {
                 self.io_error(error)
             }
         })?;
-        let _lock = StateLock(lock);
+        Ok(StateLock(lock))
+    }
+
+    /// Read/modify/write under the same stable lock for every registry mutation.
+    fn mutate<T>(
+        &self,
+        edit: impl FnOnce(&mut Vec<WorkItem>) -> Result<T, WorkItemError>,
+    ) -> Result<T, WorkItemError> {
+        let _lock = self.lock()?;
+        let parent = self
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
         // Reload under the lock so independent engine instances cannot lose updates.
         let mut work_items = self.load()?;
         let result = edit(&mut work_items)?;
@@ -421,6 +457,70 @@ mod tests {
             kind,
             pane_id: "%14".into(),
         }
+    }
+
+    #[test]
+    fn renaming_preserves_order_metadata_and_rejects_invalid_duplicate_stale_and_missing_targets() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("items.json");
+        let engine = Engine::new(&path);
+        let a = item("A", WorkItemKind::Implementation);
+        let b = item("B", WorkItemKind::ExternalReview);
+        engine.register_work_item(a.clone()).unwrap();
+        engine.register_work_item(b.clone()).unwrap();
+        let before = fs::read(&path).unwrap();
+        for id in ["", " ", " A", "A ", "bad\nID", "bad\x1bID", "B"] {
+            assert!(engine.rename_work_item(&a, id).is_err());
+            assert_eq!(fs::read(&path).unwrap(), before);
+        }
+        assert_eq!(engine.rename_work_item(&a, "A").unwrap(), a);
+        let renamed = engine.rename_work_item(&a, "Task λ🙂 #42").unwrap();
+        let mut expected = a.clone();
+        expected.id = "Task λ🙂 #42".into();
+        assert_eq!(renamed, expected);
+        assert_eq!(
+            Engine::new(&path).work_items().unwrap(),
+            [expected.clone(), b]
+        );
+        let before = fs::read(&path).unwrap();
+        assert!(matches!(
+            engine.rename_work_item(&a, "C"),
+            Err(WorkItemError::NotFound(_))
+        ));
+        let mut stale = expected.clone();
+        stale.pane_id = "%99".into();
+        assert!(matches!(
+            engine.rename_work_item(&stale, "C"),
+            Err(WorkItemError::Changed(_))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), before);
+        let _lock = engine.store.lock().unwrap();
+        assert!(matches!(
+            engine.rename_work_item(&expected, "C"),
+            Err(WorkItemError::Busy(_))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn rename_review_errors_leave_the_registration_unchanged() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("items.json");
+        let engine = Engine::new(&path);
+        let a = item("A", WorkItemKind::Implementation);
+        engine.register_work_item(a.clone()).unwrap();
+        let review_path = engine.store.review_path();
+        fs::write(&review_path, "corrupt history").unwrap();
+        let before = fs::read(&path).unwrap();
+        assert!(
+            engine
+                .rename_work_item(&a, "New")
+                .unwrap_err()
+                .to_string()
+                .contains("ID was not renamed")
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(fs::read_to_string(&review_path).unwrap(), "corrupt history");
     }
 
     #[test]

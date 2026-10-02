@@ -25,6 +25,7 @@ use work_items::WorkItemStore;
 pub use work_items::{
     AgentStatus, MAX_SHORT_DESCRIPTION_CHARS, PaneAvailability, WorkItem, WorkItemError,
     WorkItemKind, WorkItemState, default_state_file, validate_short_description,
+    validate_work_item_id,
 };
 
 /// Discovery and work-item operations, without shell or rendering code in the API.
@@ -62,6 +63,16 @@ impl Engine {
         description: &str,
     ) -> Result<WorkItem, WorkItemError> {
         self.store.update_description(expected, description)
+    }
+
+    /// Rename an unchanged registration and copy its review snapshots to the
+    /// new ID. Retain old history; never alter pane, workspace, branch, or files.
+    pub fn rename_work_item(
+        &self,
+        expected: &WorkItem,
+        id: &str,
+    ) -> Result<WorkItem, WorkItemError> {
+        self.store.rename(expected, id)
     }
 
     /// Remove only an unchanged registration. Never touches tmux, Git, workspace

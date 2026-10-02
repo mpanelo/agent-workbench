@@ -257,7 +257,7 @@ fn render_items(
         theme::footer(if interaction.draft.is_some() {
             "Enter: send | Esc/Ctrl-C: cancel | Backspace: edit | Ctrl-u: clear"
         } else if view == View::Work {
-            "e: edit description | u: unregister\nj/k | Enter: open | r: reply | d: review | Ctrl+d/u: scroll | a/w/s | q: quit"
+            "e: edit description | n: rename ID | u: unregister\nj/k | Enter: open | r: reply | d: review | Ctrl+d/u: scroll | a/w/s | q: quit"
         } else {
             "x: acknowledge finished turn\nj/k | Enter: open | r: reply | d: review | Ctrl+d/u: scroll | a/w/s | q: quit"
         }),
@@ -873,7 +873,7 @@ mod tests {
         let state = AppState::default();
         for view in [View::Attention, View::Work] {
             let text = item_screen(&state, 80, 10, &mut 0, view);
-            let maintenance = "e: edit description | u: unregister";
+            let maintenance = "e: edit description | n: rename ID | u: unregister";
             if view == View::Work {
                 assert_eq!(text.lines().nth(8).unwrap().trim_end(), maintenance);
             } else {

@@ -166,6 +166,8 @@ impl Engine {
         path: &Path,
         reviewed: bool,
     ) -> Result<(), ReviewError> {
+        // Prevent a mark validated against the old ID racing a rename's copy.
+        let _registry_lock = self.store.lock().map_err(ReviewError::WorkItems)?;
         let item = self
             .work_items()
             .map_err(ReviewError::WorkItems)?
@@ -239,6 +241,52 @@ mod tests {
         git::tests::{fixture, git},
     };
     use std::fs;
+
+    #[tokio::test]
+    async fn renamed_items_restore_reviews_reject_old_sessions_and_keep_workspace_untouched() {
+        let (dir, engine) = fixture();
+        let source = dir.path().join("workspace/source.txt");
+        fs::write(&source, "reviewed code\n").unwrap();
+        let path = Path::new("source.txt");
+        let mut old_session = engine.open_review("A", None).await.unwrap();
+        engine
+            .set_file_reviewed(&mut old_session, path, true)
+            .unwrap();
+        let target = engine.work_items().unwrap().remove(0);
+        let disk = fs::read(&source).unwrap();
+        let status = git(&target.workspace, &["status", "--porcelain"]);
+        // Exercise a retry after review copying completed but registry saving did not.
+        ReviewStore::new(engine.store.review_path())
+            .copy_identity("A", "Renamed λ🙂")
+            .unwrap();
+        let updated = engine.rename_work_item(&target, "Renamed λ🙂").unwrap();
+        assert_eq!(updated.pane_id, target.pane_id);
+        assert_eq!(updated.workspace, target.workspace);
+        let restarted = Engine::new(dir.path().join("items.json"));
+        let mut fresh = restarted.open_review("Renamed λ🙂", None).await.unwrap();
+        assert_eq!(fresh.status(path), ReviewStatus::Reviewed);
+        let original = old_session.clone();
+        assert!(
+            engine
+                .set_file_reviewed(&mut old_session, path, false)
+                .unwrap_err()
+                .to_string()
+                .contains("no longer registered")
+        );
+        assert_eq!(old_session, original);
+        let registry_lock = engine.store.lock().unwrap();
+        assert!(matches!(
+            engine.set_file_reviewed(&mut fresh, path, false),
+            Err(ReviewError::WorkItems(crate::WorkItemError::Busy(_)))
+        ));
+        assert_eq!(fresh.status(path), ReviewStatus::Reviewed);
+        drop(registry_lock);
+        assert_eq!(fs::read(&source).unwrap(), disk);
+        assert_eq!(git(&target.workspace, &["status", "--porcelain"]), status);
+        fs::write(&source, "later agent edits\n").unwrap();
+        let changed = restarted.open_review("Renamed λ🙂", None).await.unwrap();
+        assert_eq!(changed.status(path), ReviewStatus::ChangedAfterReview);
+    }
 
     #[tokio::test]
     async fn marks_survive_restart_reload_and_unmark_without_changing_registrations() {

@@ -26,6 +26,29 @@ struct AppState {
 }
 
 impl AppState {
+    fn apply_rename(
+        &mut self,
+        mutation: &maintenance::Mutation,
+        interaction: &mut interaction::Interaction,
+    ) {
+        if let maintenance::Mutation::Rename { expected, text } = mutation {
+            let mut updated = expected.clone();
+            updated.id.clone_from(text);
+            if let Some(Ok(items)) = &mut self.work_items {
+                for state in items {
+                    if state.item == *expected {
+                        state.item = updated.clone();
+                    }
+                }
+            }
+            interaction
+                .attention_tracker
+                .rename_work_item(expected, &updated);
+            if interaction.selected_id.as_ref() == Some(&expected.id) {
+                interaction.selected_id = Some(text.clone());
+            }
+        }
+    }
     fn apply_acknowledgement(&mut self, interaction: &mut interaction::Interaction) {
         if let Some(target) = interaction.acknowledgement_requested.take() {
             match interaction.attention_tracker.acknowledge(&target) {
@@ -267,7 +290,7 @@ async fn event_loop(
     let mut registrations = JoinSet::<Result<workbench_core::WorkItem, String>>::new();
     let mut registration = registration::RegistrationUi::default();
     let mut maintenance = maintenance::MaintenanceUi::default();
-    let mut mutations = JoinSet::<(String, Result<(), String>)>::new();
+    let mut mutations = JoinSet::<(Box<maintenance::Mutation>, Result<(), String>)>::new();
     let mut input_tick = time::interval(Duration::from_millis(100));
     input_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
@@ -296,15 +319,16 @@ async fn event_loop(
         tokio::select! {
             completed = mutations.join_next(), if !mutations.is_empty() => {
                 match completed {
-                    Some(Ok((message, result))) => {
+                    Some(Ok((mutation, result))) => {
                         let success = result.is_ok();
                         maintenance.finish(result);
                         if success {
+                            state.apply_rename(&mutation, interaction);
                             state.reload_registry(&engine);
                             state.refresh_attention(&mut interaction.attention_tracker);
                             interaction.sync(state.items_for(*view));
                             interaction.reveal_selection = true;
-                            interaction.message = Some(message);
+                            interaction.message = Some(mutation.success_message());
                         }
                     }
                     _ => maintenance.finish(Err("Maintenance task stopped unexpectedly; inspect WORK before retrying.".into())),
@@ -354,7 +378,10 @@ async fn event_loop(
                 }
                 redraw = true;
             }
-            changed = receiver.changed() => {
+            // Apply a successful local rename before its watcher snapshot can
+            // prune the old ID's session acknowledgement. The watcher continues
+            // running; consume its latest snapshot immediately after the save.
+            changed = receiver.changed(), if mutations.is_empty() => {
                 changed.map_err(|_| io::Error::other("Discovery task stopped unexpectedly"))?;
                 let previous_position = state.items_for(*view).iter().position(|item| Some(&item.item.id) == interaction.selected_id.as_ref());
                 let updated = receiver.borrow_and_update().clone();
@@ -391,7 +418,7 @@ async fn event_loop(
                             Event::Key(key) if key.kind != KeyEventKind::Release => {
                                 if let maintenance::Intent::Save(mutation) = maintenance.key(key) {
                                     let engine = Arc::clone(&engine);
-                                    mutations.spawn_blocking(move || (mutation.success_message(), mutation.execute(&engine)));
+                                    mutations.spawn_blocking(move || { let result = mutation.execute(&engine); (mutation, result) });
                                 }
                             }
                             _ => {},
@@ -590,10 +617,12 @@ fn navigate(
             interaction.message = Some("Select an item in the current view first.".into());
         }
         KeyCode::Char('r') if view.is_item_view() => interaction.begin_reply(items),
-        KeyCode::Char('e' | 'u') if *view == ui::View::Work => {
+        KeyCode::Char('e' | 'n' | 'u') if *view == ui::View::Work => {
             interaction.maintenance_requested = interaction.selected(items).map(|selected| {
                 if key.code == KeyCode::Char('e') {
                     maintenance::Request::Edit(selected.item.clone())
+                } else if key.code == KeyCode::Char('n') {
+                    maintenance::Request::Rename(selected.item.clone())
                 } else {
                     maintenance::Request::Unregister(selected.item.clone())
                 }
@@ -831,6 +860,71 @@ mod tests {
     }
 
     #[test]
+    fn local_rename_keeps_selection_observed_status_and_acknowledgement() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = Engine::new(directory.path().join("items.json"));
+        let mut state = state(&[("A", AgentStatus::Complete)]);
+        if let Some(Ok(items)) = &mut state.work_items {
+            items[0].completion_fingerprint = Some(42);
+        }
+        let original = state.items()[0].item.clone();
+        engine.register_work_item(original.clone()).unwrap();
+        state.discovery = Some(Ok(Snapshot {
+            sessions: vec![workbench_core::Session {
+                id: "$1".into(),
+                name: "main".into(),
+                windows: vec![workbench_core::Window {
+                    id: "@1".into(),
+                    index: 0,
+                    name: "agent".into(),
+                    panes: vec![workbench_core::Pane {
+                        id: "%14".into(),
+                        index: 0,
+                        title: "Agent".into(),
+                        current_command: Some("codex".into()),
+                        working_directory: Some("/work".into()),
+                    }],
+                }],
+            }],
+        }));
+        let mut interaction = interaction::Interaction::default();
+        interaction.sync(state.items());
+        state.refresh_attention(&mut interaction.attention_tracker);
+        let captured = interaction
+            .attention_tracker
+            .capture(&state.items()[0])
+            .unwrap();
+        interaction
+            .attention_tracker
+            .acknowledge(&captured)
+            .unwrap();
+        let mutation = maintenance::Mutation::Rename {
+            expected: original.clone(),
+            text: "New λ🙂".into(),
+        };
+        mutation.execute(&engine).unwrap();
+        state.apply_rename(&mutation, &mut interaction);
+        state.reload_registry(&engine);
+        state.refresh_attention(&mut interaction.attention_tracker);
+        interaction.sync(state.items());
+        assert_eq!(interaction.selected_id.as_deref(), Some("New λ🙂"));
+        assert_eq!(state.items()[0].status, AgentStatus::Complete);
+        assert_eq!(state.items()[0].completion_fingerprint, Some(42));
+        assert_eq!(state.items()[0].item.title, original.title);
+        assert!(state.attention.is_empty());
+        assert!(
+            interaction
+                .attention_tracker
+                .acknowledge(&captured)
+                .is_err()
+        );
+        let mut resumed =
+            AppState::from_refresh(state.discovery.clone().unwrap(), Ok(state.items().to_vec()));
+        resumed.refresh_attention(&mut interaction.attention_tracker);
+        assert!(resumed.attention.is_empty());
+    }
+
+    #[test]
     fn work_maintenance_actions_capture_selection_and_never_target_hidden_items() {
         let state = state(&[
             ("hidden", AgentStatus::Running),
@@ -839,7 +933,7 @@ mod tests {
         for mut view in [ui::View::Work, ui::View::Attention, ui::View::Sessions] {
             let mut interaction = interaction::Interaction::default();
             interaction.sync(state.items_for(view));
-            for code in [KeyCode::Char('e'), KeyCode::Char('u')] {
+            for code in [KeyCode::Char('e'), KeyCode::Char('n'), KeyCode::Char('u')] {
                 navigate(code, &state, &mut view, &mut 0, &mut interaction, 24);
                 if view == ui::View::Work {
                     match interaction.maintenance_requested.take().unwrap() {
@@ -849,6 +943,10 @@ mod tests {
                         }
                         maintenance::Request::Unregister(item) => {
                             assert_eq!(code, KeyCode::Char('u'));
+                            assert_eq!(item.id, "hidden");
+                        }
+                        maintenance::Request::Rename(item) => {
+                            assert_eq!(code, KeyCode::Char('n'));
                             assert_eq!(item.id, "hidden");
                         }
                     }
@@ -871,7 +969,11 @@ mod tests {
         assert!(interaction.message.unwrap().contains("Select an item"));
         let mut interaction = interaction::Interaction::default();
         interaction.sync(state.items());
-        for (code, modifier) in [('e', KeyModifiers::CONTROL), ('u', KeyModifiers::ALT)] {
+        for (code, modifier) in [
+            ('e', KeyModifiers::CONTROL),
+            ('n', KeyModifiers::CONTROL),
+            ('u', KeyModifiers::ALT),
+        ] {
             navigate(
                 KeyEvent::new(KeyCode::Char(code), modifier),
                 &state,

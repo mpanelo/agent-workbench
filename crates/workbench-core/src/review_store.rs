@@ -18,7 +18,7 @@ struct StoredState {
     reviews: Vec<StoredReview>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredReview {
     work_item_id: String,
@@ -102,6 +102,75 @@ impl ReviewStore {
         file: &ChangedFile,
         reviewed: bool,
     ) -> Result<HashMap<PathBuf, ChangedFile>, ReviewError> {
+        self.mutate(|state| {
+            let index = match state.reviews.iter().position(|review| review.matches(diff)) {
+                Some(index) => index,
+                None => {
+                    state.reviews.push(StoredReview {
+                        work_item_id: diff.work_item_id.clone(),
+                        workspace: diff.workspace.clone(),
+                        base_revision: diff.base_revision.clone(),
+                        files: vec![],
+                    });
+                    state.reviews.len() - 1
+                }
+            };
+            let target = &mut state.reviews[index];
+            target.files.retain(|snapshot| snapshot.path != file.path);
+            if reviewed {
+                target.files.push(file.clone());
+            }
+            target.files.sort_by(|a, b| a.path.cmp(&b.path));
+            let restored = target
+                .files
+                .iter()
+                .map(|file| (file.path.clone(), file.clone()))
+                .collect();
+            if target.files.is_empty() {
+                state.reviews.remove(index);
+            }
+            Ok(restored)
+        })
+    }
+
+    /// Copy every retained workspace/base context without merging unrelated
+    /// history. Matching copies permit retry after a failed registry save.
+    pub(crate) fn copy_identity(&self, old: &str, new: &str) -> Result<(), ReviewError> {
+        self.mutate(|state| {
+            let copies: Vec<_> = state
+                .reviews
+                .iter()
+                .filter(|review| review.work_item_id == old)
+                .cloned()
+                .map(|mut review| {
+                    review.work_item_id = new.into();
+                    review
+                })
+                .collect();
+            let existing: Vec<_> = state
+                .reviews
+                .iter()
+                .filter(|review| review.work_item_id == new)
+                .collect();
+            if !existing.is_empty() {
+                if existing.len() != copies.len()
+                    || copies.iter().any(|copy| !existing.contains(&copy))
+                {
+                    return Err(ReviewError::Invalid(format!(
+                        "Work ID {new:?} has different retained review history; choose another ID."
+                    )));
+                }
+            } else {
+                state.reviews.extend(copies);
+            }
+            Ok(())
+        })
+    }
+
+    fn mutate<T>(
+        &self,
+        edit: impl FnOnce(&mut StoredState) -> Result<T, ReviewError>,
+    ) -> Result<T, ReviewError> {
         let parent = self
             .path
             .parent()
@@ -126,32 +195,7 @@ impl ReviewStore {
         })?;
         let _lock = StateLock(lock);
         let mut state = self.load()?;
-        let index = match state.reviews.iter().position(|review| review.matches(diff)) {
-            Some(index) => index,
-            None => {
-                state.reviews.push(StoredReview {
-                    work_item_id: diff.work_item_id.clone(),
-                    workspace: diff.workspace.clone(),
-                    base_revision: diff.base_revision.clone(),
-                    files: vec![],
-                });
-                state.reviews.len() - 1
-            }
-        };
-        let target = &mut state.reviews[index];
-        target.files.retain(|snapshot| snapshot.path != file.path);
-        if reviewed {
-            target.files.push(file.clone());
-        }
-        target.files.sort_by(|a, b| a.path.cmp(&b.path));
-        let restored = target
-            .files
-            .iter()
-            .map(|file| (file.path.clone(), file.clone()))
-            .collect();
-        if target.files.is_empty() {
-            state.reviews.remove(index);
-        }
+        let result = edit(&mut state)?;
         validate(&state)?;
         let bytes = serde_json::to_vec_pretty(&state)
             .map_err(|error| ReviewError::Invalid(error.to_string()))?;
@@ -171,7 +215,7 @@ impl ReviewStore {
         temporary
             .persist(&self.path)
             .map_err(|error| self.io_error(error.error))?;
-        Ok(restored)
+        Ok(result)
     }
 }
 
@@ -246,6 +290,61 @@ mod tests {
                 patch: "@@ -1 +1 @@\n-before\n+after\n".into(),
             }],
         }
+    }
+
+    #[test]
+    fn identity_copy_preserves_all_contexts_is_retryable_and_rejects_conflicts() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ReviewStore::new(dir.path().join("reviews.json"));
+        let capture = diff();
+        let mut second = capture.clone();
+        second.workspace = "/another/task".into();
+        second.base_revision = "b".repeat(40);
+        for diff in [&capture, &second] {
+            store.set(diff, &diff.files[0], true).unwrap();
+        }
+        store
+            .copy_identity(&capture.work_item_id, "Renamed λ🙂")
+            .unwrap();
+        store
+            .copy_identity(&capture.work_item_id, "Renamed λ🙂")
+            .unwrap();
+        for original in [capture.clone(), second] {
+            assert_eq!(store.restore(original.clone()).unwrap().progress(), (1, 1));
+            let mut renamed = original;
+            renamed.work_item_id = "Renamed λ🙂".into();
+            assert_eq!(store.restore(renamed).unwrap().progress(), (1, 1));
+        }
+        let mut conflicting = capture.clone();
+        conflicting.work_item_id = "Conflict".into();
+        conflicting.files[0].patch = "a different saved review".into();
+        store
+            .set(&conflicting, &conflicting.files[0], true)
+            .unwrap();
+        let before = fs::read(&store.path).unwrap();
+        assert!(
+            store
+                .copy_identity(&capture.work_item_id, "Conflict")
+                .unwrap_err()
+                .to_string()
+                .contains("different retained review history")
+        );
+        assert!(store.copy_identity("No history", "Conflict").is_err());
+        assert_eq!(fs::read(&store.path).unwrap(), before);
+        let mut lock_path = store.path.as_os_str().to_owned();
+        lock_path.push(".lock");
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(PathBuf::from(lock_path))
+            .unwrap();
+        fs2::FileExt::try_lock_exclusive(&lock).unwrap();
+        let _lock = StateLock(lock);
+        assert!(matches!(
+            store.copy_identity(&capture.work_item_id, "Busy"),
+            Err(ReviewError::Busy(_))
+        ));
+        assert_eq!(fs::read(&store.path).unwrap(), before);
     }
 
     #[test]
