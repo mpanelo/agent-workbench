@@ -73,8 +73,8 @@ unavailable because discovery failed.
 Pane availability is separate from agent status; a disappeared pane does not
 remove its registration.
 
-WORK and ATTENTION cards use compact type labels: `IMPL` for Implementation and
-`CR` for code review (the External Review kind). Registration forms, CLI arguments,
+WORK and ATTENTION use plain-language type labels: `Build` for Implementation and
+`Review` for code review (the External Review kind). Registration forms, CLI arguments,
 and saved kinds retain their full names.
 
 The session view groups agents by session and window name, using mini.icons-style
@@ -236,6 +236,10 @@ count. It contains only live, `present` panes with `WAITING_FOR_INPUT` or
 unacknowledged `TURN FINISHED` status, in registration order. Running, idle, and unknown items remain in WORK;
 unknowns are explicitly reported as unclassified, not assumed idle. WORK's header
 also shows the attention count. Store/discovery errors and empty queues are visible.
+
+Each ATTENTION entry starts with just the work ID, type, and status. Descriptions,
+workspace/repository paths, and branch details stay in WORK. Finished entries
+occupy one row; waiting entries expand to show the decision needed.
 
 Waiting cards show the full visible approval question, environment, reason,
 command, and an **Options** section when choices are available. Option numbers,
