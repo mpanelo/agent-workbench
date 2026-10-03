@@ -4,7 +4,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    text::Line,
     widgets::{Block, Paragraph, Wrap},
 };
 use workbench_core::{
@@ -13,7 +12,7 @@ use workbench_core::{
 };
 
 use crate::{
-    interaction::Draft,
+    interaction::{Draft, InputCursor},
     theme,
     ui::{display_path, visible},
 };
@@ -87,6 +86,7 @@ pub(crate) struct MaintenanceUi {
     text: String,
     id: String,
     field: Field,
+    cursors: [InputCursor; 2],
     saving: bool,
     error: Option<String>,
 }
@@ -99,6 +99,12 @@ enum Field {
 }
 
 impl Field {
+    fn index(self) -> usize {
+        match self {
+            Self::Id => 0,
+            Self::Description => 1,
+        }
+    }
     fn label(self) -> &'static str {
         match self {
             Self::Id => "Work ID",
@@ -128,6 +134,7 @@ impl MaintenanceUi {
         self.id = request.item().id.clone();
         self.text = request.item().title.clone();
         self.field = Field::Description;
+        self.cursors = [InputCursor::default(); 2];
         self.request = Some(request);
         self.saving = false;
         self.error = None;
@@ -194,9 +201,10 @@ impl MaintenanceUi {
             let mut editor = Draft {
                 item_id: String::new(),
                 text: self.field_text().into(),
+                cursor: self.cursors[self.field.index()],
             };
             match editor.edit(key) {
-                Ok(()) => self.apply_edit(editor.text),
+                Ok(()) => self.apply_edit(editor),
                 Err(error) => self.error = Some(error.replace("Replies", self.field.label())),
             }
         }
@@ -210,18 +218,20 @@ impl MaintenanceUi {
         let mut editor = Draft {
             item_id: String::new(),
             text: self.field_text().into(),
+            cursor: self.cursors[self.field.index()],
         };
-        match editor.append(text) {
-            Ok(()) => self.apply_edit(editor.text),
+        match editor.insert(text) {
+            Ok(()) => self.apply_edit(editor),
             Err(error) => self.error = Some(error.replace("Replies", self.field.label())),
         }
     }
 
-    fn apply_edit(&mut self, text: String) {
-        let count = text.chars().count();
+    fn apply_edit(&mut self, editor: Draft) {
+        let count = editor.text.chars().count();
         // Legacy descriptions may exceed the new limit: allow reducing them,
         // but never silently truncate existing data or permit further growth.
         if self.field == Field::Description
+            && editor.text != self.text
             && count > MAX_SHORT_DESCRIPTION_CHARS
             && count >= self.text.chars().count()
         {
@@ -230,10 +240,11 @@ impl MaintenanceUi {
             ));
         } else {
             if self.field == Field::Id {
-                self.id = text;
+                self.id = editor.text;
             } else {
-                self.text = text;
+                self.text = editor.text;
             }
+            self.cursors[self.field.index()] = editor.cursor;
             self.error = None;
         }
     }
@@ -271,8 +282,8 @@ impl MaintenanceUi {
             });
         let inner = block.inner(area);
         frame.render_widget(block, area);
+        let width = self.cursors[field.index()].column(text);
         let text = visible(text);
-        let width = Line::from(text.as_str()).width().min(u16::MAX as usize) as u16;
         let offset = width.saturating_sub(inner.width.saturating_sub(1));
         frame.render_widget(
             Paragraph::new(text)
@@ -626,6 +637,47 @@ mod tests {
             text.lines().last().unwrap().trim_end(),
             "Unregister entry: <enter> | Cancel: Esc/Ctrl-C | Help: ?"
         );
+    }
+
+    #[test]
+    fn details_edit_keeps_independent_cursors_and_rejects_growth_without_moving_them() {
+        let mut form = MaintenanceUi::default();
+        form.open(Request::Edit(item("A")));
+        form.text = "aλ🙂z".into();
+        key(&mut form, KeyCode::Left);
+        key(&mut form, KeyCode::Left);
+        form.paste("X");
+        assert_eq!(form.text, "aλX🙂z");
+        let cursor = form.cursors[1];
+        key(&mut form, KeyCode::Up);
+        key(&mut form, KeyCode::Left);
+        form.paste("B");
+        assert_eq!(form.id, "BA");
+        key(&mut form, KeyCode::Down);
+        assert_eq!(form.cursors[1], cursor);
+        key(&mut form, KeyCode::Backspace);
+        assert_eq!(form.text, "aλ🙂z");
+        let mut terminal = Terminal::new(TestBackend::new(24, 20)).unwrap();
+        terminal.draw(|frame| form.render(frame)).unwrap();
+        assert_eq!(terminal.backend().cursor_position().x, 3);
+        form.text = "a".repeat(MAX_SHORT_DESCRIPTION_CHARS + 10);
+        key(&mut form, KeyCode::Left); // Movement also works for legacy long text.
+        let cursor = form.cursors[1];
+        form.paste("x");
+        assert_eq!(form.cursors[1], cursor);
+        assert_eq!(form.text.len(), MAX_SHORT_DESCRIPTION_CHARS + 10);
+        key(&mut form, KeyCode::Backspace);
+        assert_eq!(form.text.len(), MAX_SHORT_DESCRIPTION_CHARS + 9);
+        form.finish(Err("save failed".into()));
+        assert_eq!(form.cursors[1], cursor);
+        for _ in 0..MAX_SHORT_DESCRIPTION_CHARS + 10 {
+            key(&mut form, KeyCode::Left);
+        }
+        terminal.draw(|frame| form.render(frame)).unwrap();
+        assert_eq!(terminal.backend().cursor_position().x, 1);
+        key(&mut form, KeyCode::Esc);
+        form.open(Request::Edit(item("C")));
+        assert_eq!(form.cursors, [InputCursor::default(); 2]);
     }
 
     #[test]

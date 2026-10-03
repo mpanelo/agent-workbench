@@ -464,7 +464,7 @@ async fn event_loop(
                     if let Event::Paste(text) = &event
                         && !interaction.sending
                         && let Some(draft) = &mut interaction.draft
-                        && let Err(error) = draft.append(text)
+                        && let Err(error) = draft.insert(text)
                     {
                         interaction.message = Some(error);
                     }
@@ -1408,7 +1408,7 @@ mod tests {
             assert!(interaction.draft.is_none());
         }
         interaction.begin_reply(state.items_for(view));
-        interaction.draft.as_mut().unwrap().append("yes").unwrap();
+        interaction.draft.as_mut().unwrap().insert("yes").unwrap();
         for ch in ['d', 'u'] {
             navigate(
                 KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL),

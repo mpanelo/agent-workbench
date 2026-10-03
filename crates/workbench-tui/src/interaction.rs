@@ -1,14 +1,41 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use workbench_core::{ActionError, MAX_INPUT_BYTES, Snapshot, WorkItemState};
 
+/// Cursor measured in Unicode characters before the end. A default cursor is
+/// at the end, including for prefilled fields; all edits stay on UTF-8 boundaries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct InputCursor {
+    from_end: usize,
+}
+
+impl InputCursor {
+    pub fn byte_index(self, text: &str) -> usize {
+        let position = text.chars().count().saturating_sub(self.from_end);
+        text.char_indices()
+            .nth(position)
+            .map_or(text.len(), |(index, _)| index)
+    }
+
+    pub fn column(self, text: &str) -> u16 {
+        ratatui::text::Line::from(crate::ui::visible(&text[..self.byte_index(text)]))
+            .width()
+            .min(usize::from(u16::MAX)) as u16
+    }
+
+    fn clamp(&mut self, text: &str) {
+        self.from_end = self.from_end.min(text.chars().count());
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Draft {
     pub item_id: String,
     pub text: String,
+    pub cursor: InputCursor,
 }
 
 impl Draft {
-    pub fn append(&mut self, text: &str) -> Result<(), String> {
+    pub fn insert(&mut self, text: &str) -> Result<(), String> {
         if text.chars().any(char::is_control) {
             return Err("Replies must be a single line with no control characters.".into());
         }
@@ -17,24 +44,46 @@ impl Draft {
                 "Replies are limited to {MAX_INPUT_BYTES} UTF-8 bytes."
             ));
         }
-        self.text.push_str(text);
+        self.cursor.clamp(&self.text);
+        self.text
+            .insert_str(self.cursor.byte_index(&self.text), text);
         Ok(())
     }
 
     pub fn edit(&mut self, key: KeyEvent) -> Result<(), String> {
         match key.code {
             KeyCode::Backspace => {
-                self.text.pop();
+                self.cursor.clamp(&self.text);
+                let position = self.cursor.byte_index(&self.text);
+                if let Some((previous, _)) = self.text[..position].char_indices().next_back() {
+                    self.text.replace_range(previous..position, "");
+                }
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.text.clear()
+                self.text.clear();
+                self.cursor = InputCursor::default();
+            }
+            KeyCode::Left | KeyCode::Right
+                if !key.modifiers.intersects(
+                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                ) =>
+            {
+                self.cursor.clamp(&self.text);
+                self.cursor.from_end = if key.code == KeyCode::Left {
+                    self.cursor
+                        .from_end
+                        .saturating_add(1)
+                        .min(self.text.chars().count())
+                } else {
+                    self.cursor.from_end.saturating_sub(1)
+                };
             }
             KeyCode::Char(ch)
                 if !key
                     .modifiers
                     .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
-                self.append(&ch.to_string())?
+                self.insert(&ch.to_string())?
             }
             _ => {}
         }
@@ -162,6 +211,7 @@ impl Interaction {
         self.draft = self.selected(items).map(|state| Draft {
             item_id: state.item.id.clone(),
             text: String::new(),
+            cursor: InputCursor::default(),
         });
         if self.draft.is_none() {
             self.message = Some("Select a registered work item first.".into());
@@ -335,15 +385,16 @@ mod tests {
         let mut draft = Draft {
             item_id: "A".into(),
             text: String::new(),
+            cursor: InputCursor::default(),
         };
-        draft.append("yes λ🙂").unwrap();
+        draft.insert("yes λ🙂").unwrap();
         draft
             .edit(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
             .unwrap();
         assert_eq!(draft.text, "yes λ");
-        assert!(draft.append("\nsubmit").is_err());
+        assert!(draft.insert("\nsubmit").is_err());
         assert_eq!(draft.text, "yes λ");
-        assert!(draft.append(&"a".repeat(MAX_INPUT_BYTES)).is_err());
+        assert!(draft.insert(&"a".repeat(MAX_INPUT_BYTES)).is_err());
         draft
             .edit(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL))
             .unwrap();
@@ -356,5 +407,73 @@ mod tests {
             .edit(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE))
             .unwrap();
         assert_eq!(draft.text, "q");
+    }
+
+    #[test]
+    fn arrows_insert_paste_and_backspace_at_utf8_boundaries() {
+        let mut draft = Draft {
+            item_id: "A".into(),
+            text: "aλ🙂z".into(),
+            cursor: InputCursor::default(),
+        };
+        let edit =
+            |draft: &mut Draft, code| draft.edit(KeyEvent::new(code, KeyModifiers::NONE)).unwrap();
+        edit(&mut draft, KeyCode::Left);
+        assert_eq!(draft.cursor.byte_index(&draft.text), "aλ🙂".len());
+        edit(&mut draft, KeyCode::Left);
+        assert_eq!(draft.cursor.column(&draft.text), 2);
+        edit(&mut draft, KeyCode::Char('X'));
+        assert_eq!(draft.text, "aλX🙂z");
+        edit(&mut draft, KeyCode::Backspace);
+        assert_eq!(draft.text, "aλ🙂z");
+        edit(&mut draft, KeyCode::Right);
+        draft.insert("YZ").unwrap();
+        assert_eq!(draft.text, "aλ🙂YZz");
+        assert_eq!(draft.cursor.byte_index(&draft.text), "aλ🙂YZ".len());
+        for _ in 0..20 {
+            edit(&mut draft, KeyCode::Left);
+        }
+        assert_eq!(draft.cursor.byte_index(&draft.text), 0);
+        edit(&mut draft, KeyCode::Backspace);
+        assert_eq!(draft.text, "aλ🙂YZz");
+        draft.insert("Q").unwrap();
+        assert_eq!(draft.text, "Qaλ🙂YZz");
+        assert_eq!(draft.cursor.byte_index(&draft.text), 1);
+        for _ in 0..20 {
+            edit(&mut draft, KeyCode::Right);
+        }
+        assert_eq!(draft.cursor.byte_index(&draft.text), draft.text.len());
+    }
+
+    #[test]
+    fn rejected_input_and_modified_arrows_preserve_cursor_and_clear_resets_it() {
+        let mut draft = Draft {
+            item_id: "A".into(),
+            text: "λ🙂".into(),
+            cursor: InputCursor::default(),
+        };
+        draft
+            .edit(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
+            .unwrap();
+        let cursor = draft.cursor;
+        assert!(draft.insert("\ninvalid").is_err());
+        assert!(draft.insert(&"x".repeat(MAX_INPUT_BYTES)).is_err());
+        for modifier in [
+            KeyModifiers::CONTROL,
+            KeyModifiers::ALT,
+            KeyModifiers::SUPER,
+        ] {
+            draft.edit(KeyEvent::new(KeyCode::Left, modifier)).unwrap();
+            draft.edit(KeyEvent::new(KeyCode::Right, modifier)).unwrap();
+        }
+        assert_eq!(draft.text, "λ🙂");
+        assert_eq!(draft.cursor, cursor);
+        draft
+            .edit(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert!(draft.text.is_empty());
+        assert_eq!(draft.cursor, InputCursor::default());
+        draft.insert("fresh").unwrap();
+        assert_eq!(draft.cursor.byte_index(&draft.text), 5);
     }
 }

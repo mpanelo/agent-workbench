@@ -67,13 +67,13 @@ impl Context {
                 "Select: j/k | Toggle mark: Space | Scroll: <c-d>/<c-u> | Pan: h/l | Reload: r | Full/since: c | Pending: Tab | Top: Home | Back: Esc | Quit: q | Help: ?"
             }
             Self::Reply => {
-                "Send: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear: <c-u> | Help: F1"
+                "Send: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear: <c-u> | Move cursor: ←/→ | Help: F1"
             }
             Self::Registration => {
-                "Field: Tab/Shift-Tab/↑/↓ | Toggle kind: Space | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Help: F1"
+                "Field: Tab/Shift-Tab/↑/↓ | Toggle kind: Space | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→ | Help: F1"
             }
             Self::Edit => {
-                "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Help: F1"
+                "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→ | Help: F1"
             }
             Self::Unregister => "Unregister entry: <enter> | Cancel: Esc/Ctrl-C | Help: ?",
         }
@@ -365,11 +365,16 @@ mod tests {
             let mut draft = crate::interaction::Draft {
                 item_id: "A".into(),
                 text: "Why".into(),
+                cursor: crate::interaction::InputCursor::default(),
             };
             let question = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT);
             assert!(!help.event(&Event::Key(question), context, 24));
             draft.edit(question).unwrap();
             assert_eq!(draft.text, "Why?");
+            draft
+                .edit(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
+                .unwrap();
+            let cursor = draft.cursor;
             assert!(help.event(&key(KeyCode::F(1)), context, 24));
             assert!(help.event(&Event::Paste("bad".into()), context, 24));
             assert!(help.event(&key(KeyCode::Enter), context, 24));
@@ -377,6 +382,7 @@ mod tests {
             assert!(!help.is_open());
             assert_eq!(draft.item_id, "A");
             assert_eq!(draft.text, "Why?");
+            assert_eq!(draft.cursor, cursor);
         }
     }
 

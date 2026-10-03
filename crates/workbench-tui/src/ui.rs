@@ -239,9 +239,7 @@ fn render_items(
             .title_style(theme::accent());
         let inner = block.inner(composer);
         frame.render_widget(block, composer);
-        let width = Line::from(draft.text.as_str())
-            .width()
-            .min(u16::MAX as usize) as u16;
+        let width = draft.cursor.column(&draft.text);
         let offset = width.saturating_sub(inner.width.saturating_sub(1));
         frame.render_widget(
             Paragraph::new(draft.text.as_str())
@@ -1050,7 +1048,7 @@ mod tests {
         interaction.sync(state.items_for(View::Work));
         interaction.move_selection(state.items_for(View::Work), 1);
         interaction.begin_reply(state.items_for(View::Work));
-        interaction.draft.as_mut().unwrap().append("y").unwrap();
+        interaction.draft.as_mut().unwrap().insert("y").unwrap();
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
         terminal
             .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
@@ -1277,7 +1275,7 @@ mod tests {
             .draft
             .as_mut()
             .unwrap()
-            .append("yes λ🙂")
+            .insert("yes λ🙂")
             .unwrap();
         let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
         let mut scroll = 0;
@@ -1491,7 +1489,7 @@ mod tests {
             .draft
             .as_mut()
             .unwrap()
-            .append("yes λ🙂")
+            .insert("yes λ🙂")
             .unwrap();
         let mut terminal = Terminal::new(TestBackend::new(80, 15)).unwrap();
         terminal
@@ -1506,13 +1504,73 @@ mod tests {
             .collect();
         assert!(text.contains("Reply to ABC-123"));
         assert!(text.contains("yes λ🙂"));
-        assert!(
-            text.contains("Send: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear: <c-u>")
-        );
+        assert!(text.contains("Send: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace"));
+        assert!(text.contains("… | Help: F1"));
         let mut terminal = Terminal::new(TestBackend::new(1, 1)).unwrap();
         terminal
             .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
             .unwrap();
+    }
+
+    #[test]
+    fn reply_cursor_tracks_unicode_and_scrolls_back_to_the_start_of_long_input() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let state = AppState::from_refresh(
+            Ok(snapshot()),
+            Ok(vec![registered(
+                PaneAvailability::Present,
+                WorkItemKind::Implementation,
+            )]),
+        );
+        let mut interaction = Interaction::default();
+        interaction.sync(state.items());
+        interaction.begin_reply(state.items());
+        interaction.draft.as_mut().unwrap().insert("aλ🙂z").unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(20, 10)).unwrap();
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        assert_eq!(terminal.backend().cursor_position().x, 6); // border + 5 display cells
+        interaction
+            .draft
+            .as_mut()
+            .unwrap()
+            .edit(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
+            .unwrap();
+        interaction
+            .draft
+            .as_mut()
+            .unwrap()
+            .edit(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
+            .unwrap();
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        assert_eq!(terminal.backend().cursor_position().x, 3); // border + aλ
+        interaction
+            .draft
+            .as_mut()
+            .unwrap()
+            .insert(&"x".repeat(100))
+            .unwrap();
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        assert_eq!(terminal.backend().cursor_position().x, 18);
+        for _ in 0..105 {
+            interaction
+                .draft
+                .as_mut()
+                .unwrap()
+                .edit(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
+                .unwrap();
+        }
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        assert_eq!(terminal.backend().cursor_position().x, 1);
+        assert_eq!(interaction.draft.as_ref().unwrap().item_id, "ABC-123");
+        assert!(terminal.backend().cursor_visible());
     }
 
     #[test]

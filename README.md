@@ -117,6 +117,10 @@ Press `?` for the full keybindings for the current view; `Esc`, `q`, or `?` clos
 help without leaving the view. Help scrolls with `j/k` or `<c-d>/<c-u>`.
 Inside reply/registration/edit text fields, `?` remains literal text; use `F1` for
 help instead (also available in every other view). Drafts and selections are preserved.
+Left/Right moves the input cursor one Unicode character at a time. Typing and
+paste insert there; Backspace removes the preceding character, and `<c-u>` clears
+the field. Each form field remembers its cursor position; Up/Down still switches
+fields. Long inputs scroll horizontally to keep the cursor visible.
 Long metadata lines are clipped to terminal width; control characters are displayed
 as escapes. Repository, workspace, and session working-directory paths under the
 current `$HOME` are displayed with `~` (also in `workbench list`). Stored paths and

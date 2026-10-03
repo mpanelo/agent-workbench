@@ -2,7 +2,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
-    text::Line,
     widgets::{Block, Paragraph, Wrap},
 };
 use workbench_core::{
@@ -10,7 +9,7 @@ use workbench_core::{
 };
 
 use crate::{
-    interaction::Draft,
+    interaction::{Draft, InputCursor},
     theme,
     ui::{display_path, visible},
 };
@@ -34,6 +33,7 @@ pub(crate) struct RegistrationUi {
     pub generation: u64,
     fields: Vec<String>,
     selected: usize,
+    cursors: [InputCursor; 6],
 }
 
 pub(crate) enum RegistrationIntent {
@@ -52,6 +52,7 @@ impl RegistrationUi {
         self.error = None;
         self.fields.clear();
         self.selected = 0;
+        self.cursors = [InputCursor::default(); 6];
         self.generation
     }
 
@@ -151,10 +152,11 @@ impl RegistrationUi {
                 let mut editor = Draft {
                     item_id: String::new(),
                     text: self.fields[self.selected].clone(),
+                    cursor: self.cursors[self.selected],
                 };
                 match editor.edit(key) {
                     Ok(()) => {
-                        self.apply_edit(editor.text);
+                        self.apply_edit(editor);
                     }
                     Err(error) => self.error = Some(error.replace("Replies", "Fields")),
                 }
@@ -171,22 +173,27 @@ impl RegistrationUi {
         let mut editor = Draft {
             item_id: String::new(),
             text: self.fields[self.selected].clone(),
+            cursor: self.cursors[self.selected],
         };
-        match editor.append(text) {
+        match editor.insert(text) {
             Ok(()) => {
-                self.apply_edit(editor.text);
+                self.apply_edit(editor);
             }
             Err(error) => self.error = Some(error.replace("Replies", "Fields")),
         }
     }
 
-    fn apply_edit(&mut self, text: String) {
-        if self.selected == 1 && text.chars().count() > MAX_SHORT_DESCRIPTION_CHARS {
+    fn apply_edit(&mut self, editor: Draft) {
+        if self.selected == 1
+            && editor.text != self.fields[self.selected]
+            && editor.text.chars().count() > MAX_SHORT_DESCRIPTION_CHARS
+        {
             self.error = Some(format!(
                 "Short Description is limited to {MAX_SHORT_DESCRIPTION_CHARS} characters; input was not added."
             ));
         } else {
-            self.fields[self.selected] = text;
+            self.fields[self.selected] = editor.text;
+            self.cursors[self.selected] = editor.cursor;
             self.error = None;
         }
     }
@@ -303,7 +310,7 @@ impl RegistrationUi {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let text = visible(&self.fields[index]);
-        let width = Line::from(text.as_str()).width().min(u16::MAX as usize) as u16;
+        let width = self.cursors[index].column(&self.fields[index]);
         let offset = if selected {
             width.saturating_sub(inner.width.saturating_sub(1))
         } else {
@@ -585,6 +592,45 @@ mod tests {
             rows[23],
             "Field: Tab/Shift-Tab/↑/↓ | Toggle kind: Space | Save: <enter> | … | Help: F1"
         );
+    }
+
+    #[test]
+    fn field_cursors_survive_switches_failed_paste_and_render_at_the_cursor() {
+        let mut form = ready();
+        form.fields[0] = "aλ🙂z".into();
+        key(&mut form, KeyCode::Left);
+        key(&mut form, KeyCode::Left);
+        form.paste("X");
+        assert_eq!(form.fields[0], "aλX🙂z");
+        let cursor = form.cursors[0];
+        form.paste("\ninvalid");
+        assert_eq!(form.cursors[0], cursor);
+        assert_eq!(form.fields[0], "aλX🙂z");
+        key(&mut form, KeyCode::Down);
+        key(&mut form, KeyCode::Left);
+        let description_cursor = form.cursors[1];
+        key(&mut form, KeyCode::Up);
+        assert_eq!(form.cursors[0], cursor);
+        key(&mut form, KeyCode::Backspace);
+        assert_eq!(form.fields[0], "aλ🙂z");
+        let mut terminal = Terminal::new(TestBackend::new(24, 24)).unwrap();
+        terminal.draw(|frame| form.render(frame)).unwrap();
+        assert_eq!(terminal.backend().cursor_position().x, 3); // border + aλ
+        key(&mut form, KeyCode::Down);
+        assert_eq!(form.cursors[1], description_cursor);
+        form.fields[1] = "a".repeat(MAX_SHORT_DESCRIPTION_CHARS);
+        let cursor = form.cursors[1];
+        form.paste("x");
+        assert_eq!(form.cursors[1], cursor);
+        assert_eq!(form.fields[1].len(), MAX_SHORT_DESCRIPTION_CHARS);
+        for _ in 0..MAX_SHORT_DESCRIPTION_CHARS {
+            key(&mut form, KeyCode::Left);
+        }
+        terminal.draw(|frame| form.render(frame)).unwrap();
+        assert_eq!(terminal.backend().cursor_position().x, 1);
+        form.close();
+        form.open("%14".into());
+        assert_eq!(form.cursors, [InputCursor::default(); 6]);
     }
 
     #[test]
