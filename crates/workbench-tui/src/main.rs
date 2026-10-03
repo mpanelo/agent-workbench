@@ -723,16 +723,6 @@ fn navigate(
         }
         KeyCode::Down => *scroll = scroll.saturating_add(1),
         KeyCode::Up => *scroll = scroll.saturating_sub(1),
-        KeyCode::Home => {
-            *scroll = 0;
-            if view.is_item_view() {
-                interaction.selected_id = None;
-                interaction.sync(items);
-            } else if let Some(snapshot) = state.snapshot() {
-                interaction.selected_pane = None;
-                interaction.sync_panes(snapshot);
-            }
-        }
         KeyCode::Char('a' | 'w' | 's') => {
             *view = match key.code {
                 KeyCode::Char('a') => ui::View::Attention,
@@ -1275,7 +1265,7 @@ mod tests {
         );
         assert_eq!(
             interaction.registration_requested.take().as_deref(),
-            Some("%1")
+            Some("%3")
         );
         navigate(
             KeyCode::Char('f'),
@@ -1285,7 +1275,7 @@ mod tests {
             &mut interaction,
             24,
         );
-        assert_eq!(interaction.selected_pane.as_deref(), Some("%2"));
+        assert_eq!(interaction.selected_pane.as_deref(), Some("%3"));
         assert_eq!(state.items().len(), 1);
         assert_eq!(
             state.snapshot().unwrap().sessions[0].windows[0].panes.len(),
@@ -1488,6 +1478,11 @@ mod tests {
                 24,
             );
             assert_eq!(scroll, 7);
+            for code in [KeyCode::Home, KeyCode::F(1)] {
+                navigate(code, &state, &mut view, &mut scroll, &mut interaction, 24);
+                assert_eq!(scroll, 7);
+                assert_eq!(interaction.selected_id, selected);
+            }
         }
     }
 
@@ -1634,7 +1629,7 @@ mod tests {
             &mut interaction,
             24,
         );
-        assert_eq!(interaction.selected_id.as_deref(), Some("hidden"));
+        assert_eq!(interaction.selected_id.as_deref(), Some("B"));
         navigate(
             KeyCode::Char('a'),
             &state,

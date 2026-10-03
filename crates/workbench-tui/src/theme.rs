@@ -405,11 +405,11 @@ mod tests {
             let text = context.hints();
             let narrow = compact_footer(text, 40);
             assert!(narrow.contains('…'));
-            assert!(narrow.ends_with(if context.text_input() {
-                "Help: F1"
+            if context.text_input() {
+                assert!(narrow.ends_with('…'));
             } else {
-                "Help: ?"
-            }));
+                assert!(narrow.ends_with("Help: ?"));
+            }
             assert_eq!(compact_footer(text, 240), text);
             for width in 0..240 {
                 assert!(Line::from(compact_footer(text, width)).width() <= width);

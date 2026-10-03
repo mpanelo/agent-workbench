@@ -285,6 +285,8 @@ This is not required in the first milestone.
 
 The TUI should be keyboard-first.
 
+Ask the user before adding any new keybindings, including alternative bindings.
+
 Long-term primary views:
 
 ```text

@@ -216,10 +216,6 @@ impl ReviewUi {
                     };
                 }
             }
-            KeyCode::Home => {
-                self.scroll = 0;
-                self.horizontal = 0;
-            }
             KeyCode::Char('h') | KeyCode::Left => {
                 self.horizontal = self.horizontal.saturating_sub(8)
             }
@@ -724,6 +720,12 @@ mod tests {
         key(&mut review, KeyCode::Char('l'));
         assert!(review.scroll > 0 && review.horizontal > 0);
         assert_eq!(review.selected, 0);
+        let offsets = (review.scroll, review.horizontal);
+        for code in [KeyCode::Home, KeyCode::F(1)] {
+            key(&mut review, code);
+            assert_eq!((review.scroll, review.horizontal), offsets);
+            assert_eq!(review.selected, 0);
+        }
         key(&mut review, KeyCode::Char('j'));
         assert_eq!(
             (review.selected, review.scroll, review.horizontal),

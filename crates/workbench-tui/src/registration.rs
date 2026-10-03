@@ -217,11 +217,11 @@ impl RegistrationUi {
         );
         frame.render_widget(
             theme::footer(if self.loading {
-                "Reading metadata… | Cancel: Esc | Help: F1"
+                "Reading metadata… | Cancel: Esc"
             } else if self.saving {
-                "Saving… | Please wait | Help: F1"
+                "Saving… | Please wait"
             } else if self.draft.is_none() {
-                "Sessions: Esc | Help: F1"
+                "Sessions: Esc"
             } else {
                 crate::help::Context::Registration.hints()
             }),
@@ -590,7 +590,7 @@ mod tests {
         let rows: Vec<_> = text.lines().map(str::trim_end).collect();
         assert_eq!(
             rows[23],
-            "Field: Tab/Shift-Tab/↑/↓ | Toggle kind: Space | Save: <enter> | … | Help: F1"
+            "Field: Tab/Shift-Tab/↑/↓ | Toggle kind: Space | Save: <enter> | …"
         );
     }
 

@@ -356,7 +356,7 @@ impl MaintenanceUi {
         }
         frame.render_widget(
             theme::footer(if self.saving {
-                "Saving… | Please wait | Help: F1"
+                "Saving… | Please wait"
             } else if editing {
                 crate::help::Context::Edit.hints()
             } else {
@@ -628,7 +628,7 @@ mod tests {
         let rows: Vec<_> = text.lines().map(str::trim_end).collect();
         assert_eq!(
             rows[19],
-            "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | … | Help: F1"
+            "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | …"
         );
         key(&mut form, KeyCode::Esc);
         form.open(Request::Unregister(item("A")));

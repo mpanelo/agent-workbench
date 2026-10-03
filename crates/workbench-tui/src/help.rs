@@ -66,16 +66,16 @@ impl Context {
                 "Agents only: f | Views: a/w/s | Quit: q | Select: j/k | Register: <enter>/r | Scroll: <c-d>/<c-u> | Help: ?"
             }
             Self::Review => {
-                "Select: j/k | Toggle mark: Space | Scroll: <c-d>/<c-u> | Pan: h/l | Reload: r | Full/since: c | Pending: Tab | Top: Home | Back: Esc | Quit: q | Help: ?"
+                "Select: j/k | Toggle mark: Space | Scroll: <c-d>/<c-u> | Pan: h/l | Reload: r | Full/since: c | Pending: Tab | Back: Esc | Quit: q | Help: ?"
             }
             Self::Reply => {
-                "Send: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear: <c-u> | Move cursor: ←/→ | Help: F1"
+                "Send: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear: <c-u> | Move cursor: ←/→"
             }
             Self::Registration => {
-                "Field: Tab/Shift-Tab/↑/↓ | Toggle kind: Space | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→ | Help: F1"
+                "Field: Tab/Shift-Tab/↑/↓ | Toggle kind: Space | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→"
             }
             Self::Edit => {
-                "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→ | Help: F1"
+                "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→"
             }
             Self::Unregister => "Unregister entry: <enter> | Cancel: Esc/Ctrl-C | Help: ?",
             Self::Cleanup => {
@@ -94,7 +94,6 @@ impl Context {
             Self::Work | Self::Attention => &[
                 "Select (arrows): ↑/↓",
                 "Next attention item: Tab",
-                "Top / first item: Home",
                 "Attention: a",
                 "Work: w",
                 "Sessions: s",
@@ -102,7 +101,6 @@ impl Context {
             ],
             Self::Sessions { .. } => &[
                 "Select (arrows): ↑/↓",
-                "Top / first pane: Home",
                 "Attention: a",
                 "Work: w",
                 "Sessions: s",
@@ -116,12 +114,9 @@ impl Context {
             _ => &[],
         };
         lines.extend(extras.iter().map(|hint| theme::shortcut_line(hint)));
-        if !self.text_input() {
-            lines.push(theme::shortcut_line("Help (alternative): F1"));
-        }
         if self.text_input() {
             lines.push(Line::styled(
-                "? and q type text; F1 opens help without changing the draft.",
+                "? and q type text while editing.",
                 theme::muted(),
             ));
         }
@@ -153,9 +148,7 @@ impl HelpUi {
             let plain = !key
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
-            let toggle = plain
-                && (key.code == KeyCode::F(1)
-                    || key.code == KeyCode::Char('?') && !context.text_input());
+            let toggle = plain && key.code == KeyCode::Char('?') && !context.text_input();
             if self.is_open() {
                 if toggle
                     || plain && matches!(key.code, KeyCode::Esc | KeyCode::Char('q' | '?'))
@@ -178,7 +171,6 @@ impl HelpUi {
                         KeyCode::Char('u') if !plain => {
                             self.scroll = self.scroll.saturating_sub((page / 2).max(1))
                         }
-                        KeyCode::Home if plain => self.scroll = 0,
                         _ => {}
                     }
                 }
@@ -218,7 +210,7 @@ impl HelpUi {
             body,
         );
         frame.render_widget(
-            theme::footer("Close: Esc/q/F1/? | Scroll: j/k/<c-d>/<c-u> | Top: Home"),
+            theme::footer("Close: Esc/q/? | Scroll: j/k/<c-d>/<c-u>"),
             footer,
         );
     }
@@ -308,12 +300,16 @@ mod tests {
                 "Clear field: <c-u>",
             ),
         ] {
-            let mut help = HelpUi::default();
-            assert!(help.event(&key(KeyCode::F(1)), context, 40));
+            let mut help = HelpUi {
+                context: Some(context),
+                scroll: 0,
+            };
             let text = screen(&mut help, 80, 40);
             assert!(text.contains(&format!("KEYBINDINGS — {}", context.title())));
             assert!(text.contains(required), "{text}");
             assert!(!text.contains(excluded), "{text}");
+            assert!(!text.contains("Home"));
+            assert!(!text.contains("F1"));
             for hint in context.hints().split(" | ") {
                 assert!(text.contains(hint), "missing {hint}: {text}");
             }
@@ -333,7 +329,6 @@ mod tests {
             key(KeyCode::Esc),
             key(KeyCode::Char('q')),
             key(KeyCode::Char('?')),
-            key(KeyCode::F(1)),
             Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
         ] {
             let mut help = HelpUi::default();
@@ -348,6 +343,7 @@ mod tests {
                 key(KeyCode::Char('e')),
                 key(KeyCode::Char('u')),
                 key(KeyCode::Char('w')),
+                key(KeyCode::F(1)),
                 Event::Paste("do not insert".into()),
             ] {
                 assert!(help.event(&event, context, 24));
@@ -369,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn question_mark_is_literal_in_text_fields_and_f1_keeps_reply_drafts_intact() {
+    fn question_mark_is_literal_in_text_fields_and_f1_is_unbound() {
         for context in [Context::Reply, Context::Registration, Context::Edit] {
             let mut help = HelpUi::default();
             let mut draft = crate::interaction::Draft {
@@ -385,14 +381,25 @@ mod tests {
                 .edit(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
                 .unwrap();
             let cursor = draft.cursor;
-            assert!(help.event(&key(KeyCode::F(1)), context, 24));
-            assert!(help.event(&Event::Paste("bad".into()), context, 24));
-            assert!(help.event(&key(KeyCode::Enter), context, 24));
-            assert!(help.event(&key(KeyCode::Char('?')), context, 24));
+            let f1 = KeyEvent::from(KeyCode::F(1));
+            assert!(!help.event(&Event::Key(f1), context, 24));
+            draft.edit(f1).unwrap();
             assert!(!help.is_open());
             assert_eq!(draft.item_id, "A");
             assert_eq!(draft.text, "Why?");
             assert_eq!(draft.cursor, cursor);
+        }
+        for context in [
+            Context::Work,
+            Context::Attention,
+            Context::Sessions { all: false },
+            Context::Review,
+            Context::Cleanup,
+            Context::Unregister,
+        ] {
+            let mut help = HelpUi::default();
+            assert!(!help.event(&key(KeyCode::F(1)), context, 24));
+            assert!(!help.is_open());
         }
     }
 
@@ -423,8 +430,9 @@ mod tests {
             context,
             8,
         );
+        let before = help.scroll;
         help.event(&key(KeyCode::Home), context, 8);
-        assert_eq!(help.scroll, 0);
+        assert_eq!(help.scroll, before);
         help.scroll = u16::MAX;
         screen(&mut help, 80, 40);
         assert_eq!(help.scroll, 0);

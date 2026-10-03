@@ -106,8 +106,7 @@ Discovery refreshes in the background every two seconds;
 errors replace the displayed snapshot and retry automatically. Each command has a
 three-second timeout. Quit with `q`, `Esc`, or `Ctrl-C` when not composing a reply.
 In ATTENTION and WORK, `j/k` or arrows move selection. `<c-d>`/`<c-u>` scroll
-down/up half a page in all views. Home
-selects the first item or pane. In SESSIONS, `j/k` or arrows select panes and
+down/up half a page in all views. In SESSIONS, `j/k` or arrows select panes and
 `<enter>`/`r` opens registration. Hints use `<enter>` for the Enter key and `<c-d>`/
 `<c-u>` for Control+D/Control+U; these are labels, not text to type. Resize is handled automatically.
 Bottom help bars put actions first, for example `Edit: e | Unregister: u | Quit: q`.
@@ -115,8 +114,8 @@ Keys remain accented, and action labels stay neutral. The bar stays on one line,
 truncating whole hints with `…` when necessary and keeping the help key visible.
 Press `?` for the full keybindings for the current view; `Esc`, `q`, or `?` closes
 help without leaving the view. Help scrolls with `j/k` or `<c-d>/<c-u>`.
-Inside reply/registration/edit text fields, `?` remains literal text; use `F1` for
-help instead (also available in every other view). Drafts and selections are preserved.
+Inside reply/registration/edit text fields, `?` remains literal text; help is not
+opened while editing. Drafts and selections are preserved.
 Left/Right moves the input cursor one Unicode character at a time. Typing and
 paste insert there; Backspace removes the preceding character, and `<c-u>` clears
 the field. Each form field remembers its cursor position; Up/Down still switches
@@ -392,7 +391,6 @@ SHA yourself. The screen shows the chosen base and its resolved revision.
 | `Tab` | Select the next unreviewed or changed-after-review file, wrapping around. |
 | `<c-d>`, `<c-u>` | Scroll the diff down/up half a page. |
 | `h` / `←`, `l` / `→` | Pan long diff lines horizontally. |
-| Home | Reset vertical and horizontal diff scrolling. |
 | `r` | Reload the diff, restoring unchanged marks and flagging changed snapshots. |
 | `c` | Switch between the full base diff and changes since the saved review. |
 | `Esc` | Return to the originating ATTENTION/WORK view. |

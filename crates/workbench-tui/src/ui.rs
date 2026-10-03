@@ -1505,7 +1505,7 @@ mod tests {
         assert!(text.contains("Reply to ABC-123"));
         assert!(text.contains("yes λ🙂"));
         assert!(text.contains("Send: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace"));
-        assert!(text.contains("… | Help: F1"));
+        assert!(text.contains("Clear: <c-u> | …"));
         let mut terminal = Terminal::new(TestBackend::new(1, 1)).unwrap();
         terminal
             .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
