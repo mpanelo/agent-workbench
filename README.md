@@ -106,10 +106,17 @@ Discovery refreshes in the background every two seconds;
 errors replace the displayed snapshot and retry automatically. Each command has a
 three-second timeout. Quit with `q`, `Esc`, or `Ctrl-C` when not composing a reply.
 In ATTENTION and WORK, `j/k` or arrows move selection. `<c-d>`/`<c-u>` scroll
-down/up half a page in all views; Page Down/Page Up still scroll a full page. Home
+down/up half a page in all views. Home
 selects the first item or pane. In SESSIONS, `j/k` or arrows select panes and
 `<enter>`/`r` opens registration. Hints use `<enter>` for the Enter key and `<c-d>`/
 `<c-u>` for Control+D/Control+U; these are labels, not text to type. Resize is handled automatically.
+Bottom help bars put actions first, for example `Edit: e | Unregister: u | Quit: q`.
+Keys remain accented, and action labels stay neutral. The bar stays on one line,
+truncating whole hints with `…` when necessary and keeping the help key visible.
+Press `?` for the full keybindings for the current view; `Esc`, `q`, or `?` closes
+help without leaving the view. Help scrolls with `j/k` or `<c-d>/<c-u>`.
+Inside reply/registration/edit text fields, `?` remains literal text; use `F1` for
+help instead (also available in every other view). Drafts and selections are preserved.
 Long metadata lines are clipped to terminal width; control characters are displayed
 as escapes. Repository, workspace, and session working-directory paths under the
 current `$HOME` are displayed with `~` (also in `workbench list`). Stored paths and
@@ -217,7 +224,6 @@ In ATTENTION and WORK, the selected item is highlighted with `>`:
 | `x` in ATTENTION | Acknowledge the selected finished turn for this Workbench run; leave work and review state unchanged. |
 | `a`, `w`, `s` | Switch to attention, all work items, or sessions. |
 | `<c-d>`, `<c-u>` | Scroll down/up half a page without changing selection (outside the reply editor). |
-| Page Down, Page Up | Scroll down/up a full page. |
 | `d` | Review the selected item's local Git diff, even if its pane is missing or its agent is unknown. |
 
 Opening from inside tmux switches its current client to the target session/window/
@@ -268,7 +274,7 @@ are preserved; reasons and commands are not cut off after a fixed number of line
 Dialog text is bounded at 16,384 Unicode characters and options have a separate
 4,096-character budget so a long reason cannot hide all choices. Both have an
 explicit warning if clipped. Options are displayed, not automatically selected;
-use `r` to reply or `Enter` to open the pane. Text wraps to terminal width; use Page Up/Page Down to
+use `r` to reply or `Enter` to open the pane. Text wraps to terminal width; use `<c-d>/<c-u>` to
 scroll long dialogs, or `Enter` for the full pane. Content already clipped by the
 agent's own screen cannot be recovered from a viewport capture. Finished cards
 show `TURN FINISHED` without repeating completion/caveat sentences. This means the
@@ -346,7 +352,6 @@ SHA yourself. The screen shows the chosen base and its resolved revision.
 | Space | Save a reviewed/unreviewed mark; on ⚠, mark the current capture reviewed. |
 | `Tab` | Select the next unreviewed or changed-after-review file, wrapping around. |
 | `<c-d>`, `<c-u>` | Scroll the diff down/up half a page. |
-| Page Down, Page Up | Scroll the diff down/up a page. |
 | `h` / `←`, `l` / `→` | Pan long diff lines horizontally. |
 | Home | Reset vertical and horizontal diff scrolling. |
 | `r` | Reload the diff, restoring unchanged marks and flagging changed snapshots. |

@@ -57,7 +57,7 @@ fn render_items(
         Constraint::Min(0),
         Constraint::Length(if interaction.message.is_some() { 2 } else { 0 }),
         Constraint::Length(if interaction.draft.is_some() { 3 } else { 0 }),
-        Constraint::Length(if interaction.draft.is_none() { 2 } else { 1 }),
+        Constraint::Length(1),
     ])
     .areas(frame.area());
     let count = match &state.work_items {
@@ -255,11 +255,9 @@ fn render_items(
     }
     frame.render_widget(
         theme::footer(if interaction.draft.is_some() {
-            "<enter>: send | Esc/Ctrl-C: cancel | Backspace: edit | <c-u>: clear"
-        } else if view == View::Work {
-            "e: edit details | u: unregister | q: quit\nj/k | <enter>: open | r: reply | d: review | <c-d>/<c-u>: scroll | a/w/s"
+            crate::help::Context::Reply.hints()
         } else {
-            "x: acknowledge finished turn | q: quit\nj/k | <enter>: open | r: reply | d: review | <c-d>/<c-u>: scroll | a/w/s"
+            crate::help::Context::view(view, false).hints()
         }),
         footer,
     );
@@ -327,7 +325,7 @@ pub(crate) fn render_sessions(
         Constraint::Length(1),
         Constraint::Min(0),
         Constraint::Length(if interaction.message.is_some() { 2 } else { 0 }),
-        Constraint::Length(2),
+        Constraint::Length(1),
     ])
     .areas(frame.area());
     frame.render_widget(
@@ -455,11 +453,12 @@ pub(crate) fn render_sessions(
         );
     }
     frame.render_widget(
-        theme::footer(if interaction.show_all_panes {
-            "f: show agents only\nj/k: panes | <enter>/r: register | <c-d>/<c-u>: scroll | a/w/s | q: quit"
-        } else {
-            "f: show all panes\nj/k: panes | <enter>/r: register | <c-d>/<c-u>: scroll | a/w/s | q: quit"
-        }),
+        theme::footer(
+            crate::help::Context::Sessions {
+                all: interaction.show_all_panes,
+            }
+            .hints(),
+        ),
         footer,
     );
 }
@@ -618,7 +617,7 @@ mod tests {
         let text = draw(&state, &mut interaction);
         assert!(text.contains("SESSIONS (agents only)"));
         assert!(text.contains("codex — Agent"));
-        assert!(text.contains("f: show all panes"));
+        assert!(text.contains("All panes: f"));
         for hidden in ["fish", "hidden-shell-window", "hidden-shell-session"] {
             assert!(!text.contains(hidden), "{text}");
         }
@@ -629,7 +628,7 @@ mod tests {
             "fish — Shell named codex",
             "hidden-shell-window",
             "hidden-shell-session",
-            "f: show agents only",
+            "Agents only: f",
         ] {
             assert!(text.contains(expected), "{text}");
         }
@@ -797,7 +796,7 @@ mod tests {
             theme::GREEN,
             theme::SURFACE,
         );
-        assert!(text.contains("<enter>/r: register"));
+        assert!(text.contains("Register: <enter>/r"));
     }
 
     fn work_screen(state: &AppState, width: u16, height: u16, scroll: &mut u16) -> String {
@@ -885,29 +884,29 @@ mod tests {
     }
 
     #[test]
-    fn shortcut_footers_have_separators_and_fit_an_80_column_terminal() {
+    fn shortcut_footers_use_one_row_with_overflow_and_help_at_80_columns() {
         let state = AppState::default();
         for view in [View::Attention, View::Work] {
             let text = item_screen(&state, 80, 10, &mut 0, view);
-            let maintenance = "e: edit details | u: unregister | q: quit";
+            let maintenance = "Edit: e | Unregister: u | Views: a/w/s | Quit: q";
             if view == View::Work {
-                assert_eq!(text.lines().nth(8).unwrap().trim_end(), maintenance);
+                assert_eq!(
+                    text.lines().last().unwrap().trim_end(),
+                    format!("{maintenance} | Select: j/k | … | Help: ?")
+                );
             } else {
                 assert!(!text.contains(maintenance));
                 assert_eq!(
-                    text.lines().nth(8).unwrap().trim_end(),
-                    "x: acknowledge finished turn | q: quit"
+                    text.lines().last().unwrap().trim_end(),
+                    "Acknowledge finished turn: x | Views: a/w/s | Quit: q | … | Help: ?"
                 );
             }
-            assert_eq!(
-                text.lines().last().unwrap().trim_end(),
-                "j/k | <enter>: open | r: reply | d: review | <c-d>/<c-u>: scroll | a/w/s"
-            );
+            assert_eq!(text.lines().nth(8).unwrap().trim_end(), "");
         }
         let text = screen(None, 80, 10, &mut 0);
         assert_eq!(
             text.lines().last().unwrap().trim_end(),
-            "j/k: panes | <enter>/r: register | <c-d>/<c-u>: scroll | a/w/s | q: quit"
+            "Agents only: f | Views: a/w/s | Quit: q | Select: j/k | … | Help: ?"
         );
     }
 
@@ -938,9 +937,9 @@ mod tests {
             "3. No, and tell Codex what to do differently (esc)",
             "PR #1842  Review  TURN FINISHED",
             "1 UNKNOWN item(s)",
-            "<enter>: open",
-            "r: reply",
-            "<c-d>/<c-u>: scroll",
+            "Open: <enter>",
+            "Reply: r",
+            "Help: ?",
         ] {
             assert!(text.contains(expected), "missing {expected:?}: {text}");
         }
@@ -973,7 +972,7 @@ mod tests {
         assert!(work.contains("attention: 2 (a)"));
         assert!(work.contains("Options:"));
         assert!(work.contains("› 1. Yes, proceed (y)"));
-        assert!(attention_screen(&state, 80, 24, &mut 0).contains("q: quit"));
+        assert!(attention_screen(&state, 80, 24, &mut 0).contains("Quit: q"));
     }
 
     #[test]
@@ -993,8 +992,9 @@ mod tests {
                 .contains("$git-ccommit.gpgsign=falsecommit-m\"RemoveobsoletePackerinstallation\""),
             "{text}"
         );
-        assert!(!text.contains('…'));
-        assert!(text.contains("<c-d>/<c-u>: scroll"));
+        // Prompt content is still complete; only the compact footer truncates.
+        assert!(!text.lines().take(44).any(|line| line.contains('…')));
+        assert!(text.lines().last().unwrap().contains("… | Help: ?"));
 
         let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
         let mut interaction = Interaction::default();
@@ -1002,7 +1002,7 @@ mod tests {
         let mut scroll = 0;
         let mut pages = String::new();
         let mut view = View::Attention;
-        for _ in 0..8 {
+        for _ in 0..20 {
             terminal
                 .draw(|frame| render_attention(frame, &state, &mut scroll, &mut interaction))
                 .unwrap();
@@ -1015,7 +1015,10 @@ mod tests {
                     .map(|cell| cell.symbol()),
             );
             crate::navigate(
-                crossterm::event::KeyCode::PageDown,
+                crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Char('d'),
+                    crossterm::event::KeyModifiers::CONTROL,
+                ),
                 &state,
                 &mut view,
                 &mut scroll,
@@ -1066,7 +1069,7 @@ mod tests {
             "Yes, approve B (y)",
             "No, reject B (esc)",
             "Reply to B",
-            "<enter>: send",
+            "Send: <enter>",
         ] {
             assert!(text.contains(expected), "missing {expected}: {text}");
         }
@@ -1292,7 +1295,7 @@ mod tests {
             "> C  Build  WAITING_FOR_INPUT",
             "Reply to C",
             "yes λ🙂",
-            "<enter>: send",
+            "Send: <enter>",
         ] {
             assert!(text.contains(expected), "{text}");
         }
@@ -1339,11 +1342,14 @@ mod tests {
             finished.status = AgentStatus::Complete;
             let original = finished.clone();
             let state = AppState::from_refresh(Ok(snapshot()), Ok(vec![finished]));
-            // Header + one content row + two shortcut rows.
-            let text = attention_screen(&state, 80, 4, &mut 0);
+            // Header + one content row + one compact shortcut row.
+            let text = attention_screen(&state, 80, 3, &mut 0);
             let rows: Vec<_> = text.lines().map(str::trim_end).collect();
             assert_eq!(rows[1], format!("> ABC-123  {label}  TURN FINISHED"));
-            assert_eq!(rows[2], "x: acknowledge finished turn | q: quit");
+            assert_eq!(
+                rows[2],
+                "Acknowledge finished turn: x | Views: a/w/s | Quit: q | … | Help: ?"
+            );
             assert_eq!(state.items(), std::slice::from_ref(&original));
             assert_eq!(state.items()[0].item.kind.to_string(), full_name);
             let work = work_screen(&state, 100, 12, &mut 0);
@@ -1501,7 +1507,7 @@ mod tests {
         assert!(text.contains("Reply to ABC-123"));
         assert!(text.contains("yes λ🙂"));
         assert!(
-            text.contains("<enter>: send | Esc/Ctrl-C: cancel | Backspace: edit | <c-u>: clear")
+            text.contains("Send: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear: <c-u>")
         );
         let mut terminal = Terminal::new(TestBackend::new(1, 1)).unwrap();
         terminal
@@ -1564,7 +1570,7 @@ mod tests {
     fn clamps_scroll_when_snapshot_shrinks_and_handles_small_terminals() {
         let mut scroll = u16::MAX;
         let text = screen(Some(Ok(snapshot())), 100, 5, &mut scroll);
-        assert_eq!(scroll, 3);
+        assert_eq!(scroll, 2);
         assert!(text.contains("/work/my repo"));
         screen(Some(Ok(Snapshot::default())), 10, 2, &mut scroll);
         assert_eq!(scroll, 1);

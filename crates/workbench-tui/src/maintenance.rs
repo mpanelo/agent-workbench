@@ -108,6 +108,15 @@ impl Field {
 }
 
 impl MaintenanceUi {
+    pub fn help_context(&self) -> Option<crate::help::Context> {
+        self.request.as_ref().map(|request| {
+            if request.editing() {
+                crate::help::Context::Edit
+            } else {
+                crate::help::Context::Unregister
+            }
+        })
+    }
     pub fn is_open(&self) -> bool {
         self.request.is_some()
     }
@@ -287,7 +296,7 @@ impl MaintenanceUi {
             Constraint::Length(1),
             Constraint::Min(0),
             Constraint::Length(3),
-            Constraint::Length(2),
+            Constraint::Length(1),
         ])
         .areas(frame.area());
         frame.render_widget(
@@ -336,11 +345,11 @@ impl MaintenanceUi {
         }
         frame.render_widget(
             theme::footer(if self.saving {
-                "Saving… | Please wait"
+                "Saving… | Please wait | Help: F1"
             } else if editing {
-                "Tab/Shift-Tab/↑/↓: field | <enter>: save | Esc/Ctrl-C: cancel\nBackspace: edit | <c-u>: clear field (q types text)"
+                crate::help::Context::Edit.hints()
             } else {
-                "<enter>: unregister entry only | Esc/Ctrl-C: cancel"
+                crate::help::Context::Unregister.hints()
             }),
             footer,
         );
@@ -601,6 +610,25 @@ mod tests {
     }
 
     #[test]
+    fn maintenance_shortcuts_truncate_on_one_row_at_80_columns() {
+        let mut form = MaintenanceUi::default();
+        form.open(Request::Edit(item("A")));
+        let text = screen(&form, 80, 20);
+        let rows: Vec<_> = text.lines().map(str::trim_end).collect();
+        assert_eq!(
+            rows[19],
+            "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | … | Help: F1"
+        );
+        key(&mut form, KeyCode::Esc);
+        form.open(Request::Unregister(item("A")));
+        let text = screen(&form, 80, 20);
+        assert_eq!(
+            text.lines().last().unwrap().trim_end(),
+            "Unregister entry: <enter> | Cancel: Esc/Ctrl-C | Help: ?"
+        );
+    }
+
+    #[test]
     fn dialogs_show_target_scope_counter_and_safe_controls_at_small_sizes() {
         for request in [Request::Edit(item("A")), Request::Unregister(item("A"))] {
             let mut form = MaintenanceUi::default();
@@ -608,7 +636,7 @@ mod tests {
             let text = screen(&form, 100, 20);
             assert!(text.contains("Work ID: A"), "{text}");
             assert!(text.contains("Workspace: /work/task"), "{text}");
-            assert!(text.contains("Esc/Ctrl-C: cancel"), "{text}");
+            assert!(text.contains("Cancel: Esc/Ctrl-C"), "{text}");
             if matches!(form.request, Some(Request::Edit(_))) {
                 assert!(text.contains("Short Description (6/120)"), "{text}");
                 assert!(text.contains("review marks stay unchanged"), "{text}");
@@ -620,7 +648,7 @@ mod tests {
                     ),
                     "{text}"
                 );
-                assert!(text.contains("<enter>: unregister entry only"), "{text}");
+                assert!(text.contains("Unregister entry: <enter>"), "{text}");
             }
             for (width, height) in [(80, 12), (40, 8), (1, 1), (0, 1)] {
                 screen(&form, width, height);

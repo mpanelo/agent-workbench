@@ -197,7 +197,7 @@ impl RegistrationUi {
             Constraint::Length(1),
             Constraint::Min(0),
             Constraint::Length(3),
-            Constraint::Length(2),
+            Constraint::Length(1),
         ])
         .areas(frame.area());
         frame.render_widget(
@@ -208,18 +208,21 @@ impl RegistrationUi {
             .style(theme::header()),
             header,
         );
-        frame.render_widget(theme::footer(if self.loading {
-            "Reading metadata… | Esc: cancel"
-        } else if self.saving {
-            "Saving… | Please wait"
-        } else if self.draft.is_none() {
-            "Esc: return to SESSIONS"
-        } else {
-            "Tab/↑/↓: field | Space: toggle kind | <enter>: save | Esc: cancel\nBackspace: edit | <c-u>: clear field (q types text)"
-        }), footer);
+        frame.render_widget(
+            theme::footer(if self.loading {
+                "Reading metadata… | Cancel: Esc | Help: F1"
+            } else if self.saving {
+                "Saving… | Please wait | Help: F1"
+            } else if self.draft.is_none() {
+                "Sessions: Esc | Help: F1"
+            } else {
+                crate::help::Context::Registration.hints()
+            }),
+            footer,
+        );
         if self.loading {
             frame.render_widget(
-                Paragraph::new("Reading pane and Git metadata… Esc: cancel."),
+                Paragraph::new("Reading pane and Git metadata… Cancel: Esc."),
                 body,
             );
             return;
@@ -542,7 +545,7 @@ mod tests {
         form.finish(current, Ok(draft()));
         assert!(form.draft.is_none());
         assert!(form.error.as_ref().unwrap().contains("another pane"));
-        assert!(!screen(&form, 80, 12).contains("<enter>: save"));
+        assert!(!screen(&form, 80, 12).contains("Save: <enter>"));
         key(&mut form, KeyCode::Esc);
         form.finish(current, Ok(draft()));
         assert!(form.pane.is_none());
@@ -558,7 +561,7 @@ mod tests {
             "Repository",
             "Workspace",
             "feature/task",
-            "<enter>: save",
+            "Save: <enter>",
         ] {
             assert!(wide.contains(text), "{wide}");
         }
@@ -571,6 +574,17 @@ mod tests {
         for (width, height) in [(40, 8), (1, 1), (0, 1)] {
             screen(&form, width, height);
         }
+    }
+
+    #[test]
+    fn registration_shortcuts_truncate_on_one_row_at_80_columns() {
+        let form = ready();
+        let text = screen(&form, 80, 24);
+        let rows: Vec<_> = text.lines().map(str::trim_end).collect();
+        assert_eq!(
+            rows[23],
+            "Field: Tab/Shift-Tab/↑/↓ | Toggle kind: Space | Save: <enter> | … | Help: F1"
+        );
     }
 
     #[test]

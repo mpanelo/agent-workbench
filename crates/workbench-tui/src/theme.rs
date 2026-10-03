@@ -2,9 +2,11 @@
 //! Palette: https://catppuccin.com/palette/#mocha
 use ratatui::{
     Frame,
+    buffer::Buffer,
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph},
+    widgets::{Block, Paragraph, Widget},
 };
 use workbench_core::{AgentStatus, ReviewStatus, WorkItemKind};
 
@@ -95,33 +97,75 @@ pub fn review_status(status: ReviewStatus) -> Style {
     })
 }
 
-/// Preserve shortcut text/separators exactly; emphasize keys, not descriptions.
-pub fn footer(text: &str) -> Paragraph<'static> {
-    let lines: Vec<_> = text
-        .lines()
-        .map(|line| {
-            let mut spans = Vec::new();
-            for (index, shortcut) in line.split(" | ").enumerate() {
-                if index > 0 {
-                    spans.push(Span::styled(" | ", Style::default().fg(BORDER)));
-                }
-                if let Some((key, description)) = shortcut.split_once(':') {
-                    spans.push(Span::styled(
-                        key.to_owned(),
-                        Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
-                    ));
-                    spans.push(Span::styled(format!(":{description}"), muted()));
-                } else {
-                    spans.push(Span::styled(
-                        shortcut.to_owned(),
-                        Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
-                    ));
-                }
-            }
-            Line::from(spans)
-        })
-        .collect();
-    Paragraph::new(lines).style(Style::default().bg(MANTLE))
+/// Action-first hints, with keys accented independently of action labels.
+pub fn shortcut_line(text: &str) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (index, shortcut) in text.split(" | ").enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" | ", Style::default().fg(BORDER)));
+        }
+        if let Some((action, key)) = shortcut.split_once(':') {
+            spans.push(Span::styled(format!("{action}:"), muted()));
+            spans.push(Span::styled(
+                key.to_owned(),
+                Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::styled(shortcut.to_owned(), muted()));
+        }
+    }
+    Line::from(spans)
+}
+
+pub fn footer(text: &str) -> Footer {
+    Footer(text.lines().collect::<Vec<_>>().join(" | "))
+}
+
+pub struct Footer(String);
+
+impl Widget for Footer {
+    fn render(self, area: Rect, buffer: &mut Buffer) {
+        let line = compact_footer(&self.0, usize::from(area.width));
+        Paragraph::new(shortcut_line(&line))
+            .style(Style::default().bg(MANTLE))
+            .render(area, buffer);
+    }
+}
+
+/// Hide whole hints, not half a key binding. Keep help discoverable on overflow.
+fn compact_footer(text: &str, width: usize) -> String {
+    if Line::from(text).width() <= width {
+        return text.to_owned();
+    }
+    let hints: Vec<_> = text.split(" | ").collect();
+    let help = hints
+        .last()
+        .copied()
+        .filter(|hint| hint.starts_with("Help:"));
+    let suffix = help.map_or_else(|| "…".to_owned(), |hint| format!("… | {hint}"));
+    if Line::from(suffix.as_str()).width() > width {
+        return help
+            .filter(|hint| Line::from(*hint).width() <= width)
+            .unwrap_or(if width == 0 { "" } else { "…" })
+            .to_owned();
+    }
+    let mut shown = String::new();
+    for hint in hints.iter().take(hints.len() - usize::from(help.is_some())) {
+        let next = if shown.is_empty() {
+            (*hint).to_owned()
+        } else {
+            format!("{shown} | {hint}")
+        };
+        if Line::from(format!("{next} | {suffix}")).width() > width {
+            break;
+        }
+        shown = next;
+    }
+    if shown.is_empty() {
+        suffix
+    } else {
+        format!("{shown} | {suffix}")
+    }
 }
 
 pub fn prompt_line(line: &str) -> Style {
@@ -261,8 +305,8 @@ mod tests {
     #[test]
     fn footer_preserves_shortcut_text_and_uses_surface_and_key_colors() {
         use ratatui::{Terminal, backend::TestBackend};
-        let mut terminal = Terminal::new(TestBackend::new(80, 2)).unwrap();
-        let text = "<enter>: open | <c-d>/<c-u>: scroll | Space: reviewed\nq: quit";
+        let mut terminal = Terminal::new(TestBackend::new(120, 1)).unwrap();
+        let text = "Open: <enter> | Scroll: <c-d>/<c-u> | Toggle mark: Space | Quit: q | Saving… | q types text";
         terminal
             .draw(|frame| {
                 paint(frame);
@@ -271,14 +315,19 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         assert_text_style(buffer, "Space", PEACH, MANTLE);
-        assert_text_style(buffer, "reviewed", SUBTEXT, MANTLE);
+        assert_text_style(buffer, "Open:", SUBTEXT, MANTLE);
+        assert_text_style(buffer, "Scroll:", SUBTEXT, MANTLE);
+        assert_text_style(buffer, "Toggle mark:", SUBTEXT, MANTLE);
+        assert_text_style(buffer, "Quit:", SUBTEXT, MANTLE);
+        assert_text_style(buffer, "Saving…", SUBTEXT, MANTLE);
+        assert_text_style(buffer, "q types text", SUBTEXT, MANTLE);
         assert_text_style(buffer, "q", PEACH, MANTLE);
         assert_text_style(buffer, " | ", BORDER, MANTLE);
         assert_text_style(buffer, "<enter>", PEACH, MANTLE);
         assert_text_style(buffer, "<c-d>/<c-u>", PEACH, MANTLE);
         let rendered = buffer
             .content()
-            .chunks(80)
+            .chunks(120)
             .map(|row| {
                 row.iter()
                     .map(|cell| cell.symbol())
@@ -289,5 +338,81 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert_eq!(rendered, text);
+    }
+
+    #[test]
+    fn footer_truncates_whole_hints_preserves_help_and_measures_display_width() {
+        let text = "Edit: e | Unregister: u | Quit: q | Help: ?";
+        assert_eq!(compact_footer(text, 80), text);
+        assert_eq!(compact_footer(text, Line::from(text).width()), text);
+        assert_eq!(compact_footer(text, 30), "Edit: e | … | Help: ?");
+        assert_eq!(compact_footer(text, 12), "… | Help: ?");
+        assert_eq!(compact_footer(text, 8), "Help: ?");
+        assert_eq!(compact_footer(text, 1), "…");
+        assert_eq!(compact_footer(text, 0), "");
+        assert_eq!(
+            compact_footer("界: 🙂 | Clear: <c-u> | Help: ?", 20),
+            "界: 🙂 | … | Help: ?"
+        );
+        assert_eq!(
+            compact_footer("Busy | Very long status message", 8),
+            "Busy | …"
+        );
+        for width in 0..100 {
+            assert!(Line::from(compact_footer(text, width)).width() <= width);
+        }
+    }
+
+    #[test]
+    fn compact_footer_renders_on_one_row_with_styled_help_and_no_wrapping() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut terminal = Terminal::new(TestBackend::new(30, 2)).unwrap();
+        terminal
+            .draw(|frame| {
+                paint(frame);
+                frame.render_widget(
+                    footer("Edit: e\nUnregister: u | Quit: q | Help: ?"),
+                    frame.area(),
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_text_style(buffer, "Edit:", SUBTEXT, MANTLE);
+        assert_text_style(buffer, "Help:", SUBTEXT, MANTLE);
+        assert_text_style(buffer, "?", PEACH, MANTLE);
+        assert!(
+            buffer.content()[30..]
+                .iter()
+                .all(|cell| cell.symbol() == " ")
+        );
+    }
+
+    #[test]
+    fn view_footers_restore_all_hints_when_resized_wider() {
+        use crate::help::Context;
+        for context in [
+            Context::Work,
+            Context::Attention,
+            Context::Sessions { all: false },
+            Context::Sessions { all: true },
+            Context::Review,
+            Context::Reply,
+            Context::Registration,
+            Context::Edit,
+            Context::Unregister,
+        ] {
+            let text = context.hints();
+            let narrow = compact_footer(text, 40);
+            assert!(narrow.contains('…'));
+            assert!(narrow.ends_with(if context.text_input() {
+                "Help: F1"
+            } else {
+                "Help: ?"
+            }));
+            assert_eq!(compact_footer(text, 240), text);
+            for width in 0..240 {
+                assert!(Line::from(compact_footer(text, width)).width() <= width);
+            }
+        }
     }
 }

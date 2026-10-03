@@ -27,7 +27,8 @@ removes only the Workbench entry, keeping pane, branch, worktree and review hist
 Short descriptions are limited to 120 Unicode characters; --title is a legacy
 alias for --short-description. When omitted, the description defaults to the ID.
 j/k or arrows select; <enter> opens the pane; r composes a single-line reply.
-<c-d>/<c-u> scroll down/up half a page; Page Down/Page Up scroll a full page.
+<c-d>/<c-u> scroll down/up half a page. ? shows the current view's keybindings.
+F1 opens help in text fields, where ? remains literal text.
 <enter> submits a reply and Esc cancels. Tab selects known waiting/completed items.
 While composing a reply, <c-u> clears the draft instead of scrolling.
 d opens local diff review; j/k select files, Space toggles reviewed, Esc returns.

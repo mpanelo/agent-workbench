@@ -9,6 +9,7 @@ use tokio::{
 use workbench_core::{Engine, Snapshot, WorkItemState, attention_items, validate_agent_input};
 
 mod cli;
+mod help;
 mod interaction;
 mod maintenance;
 mod registration;
@@ -296,13 +297,16 @@ async fn event_loop(
     let mut registrations = JoinSet::<Result<workbench_core::WorkItem, String>>::new();
     let mut registration = registration::RegistrationUi::default();
     let mut maintenance = maintenance::MaintenanceUi::default();
+    let mut help = help::HelpUi::default();
     let mut mutations = JoinSet::<(Box<maintenance::Mutation>, Result<(), String>)>::new();
     let mut input_tick = time::interval(Duration::from_millis(100));
     input_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         if redraw {
             terminal.draw(|frame| {
-                if maintenance.is_open() {
+                if help.is_open() {
+                    help.render(frame);
+                } else if maintenance.is_open() {
                     maintenance.render(frame);
                 } else if registration.pane.is_some() {
                     registration.render(frame);
@@ -418,6 +422,15 @@ async fn event_loop(
                     redraw = true;
                     let event = event::read()?;
                     if matches!(event, Event::Resize(_, _)) { interaction.reveal_selection = true; interaction.reveal_pane = true; }
+                    let context = maintenance.help_context().unwrap_or_else(|| {
+                        if registration.pane.is_some() { help::Context::Registration }
+                        else if reviews.is_open() { help::Context::Review }
+                        else if interaction.draft.is_some() { help::Context::Reply }
+                        else { help::Context::view(*view, interaction.show_all_panes) }
+                    });
+                    if help.event(&event, context, terminal.size()?.height) {
+                        continue;
+                    }
                     if maintenance.is_open() {
                         match event {
                             Event::Paste(text) => maintenance.paste(&text),
@@ -649,8 +662,6 @@ fn navigate(
         }
         KeyCode::Down => *scroll = scroll.saturating_add(1),
         KeyCode::Up => *scroll = scroll.saturating_sub(1),
-        KeyCode::PageDown => *scroll = scroll.saturating_add(height.saturating_sub(3)),
-        KeyCode::PageUp => *scroll = scroll.saturating_sub(height.saturating_sub(3)),
         KeyCode::Home => {
             *scroll = 0;
             if view.is_item_view() {
@@ -1325,6 +1336,7 @@ mod tests {
                 assert!(interaction.draft.is_none());
                 assert!(!interaction.reveal_selection);
             }
+            scroll = 7;
             navigate(
                 KeyCode::PageDown,
                 &state,
@@ -1333,7 +1345,7 @@ mod tests {
                 &mut interaction,
                 24,
             );
-            assert_eq!(scroll, 21);
+            assert_eq!(scroll, 7);
             navigate(
                 KeyCode::PageUp,
                 &state,
@@ -1342,7 +1354,7 @@ mod tests {
                 &mut interaction,
                 24,
             );
-            assert_eq!(scroll, 0);
+            assert_eq!(scroll, 7);
         }
     }
 

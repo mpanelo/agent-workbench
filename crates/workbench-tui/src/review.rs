@@ -216,12 +216,6 @@ impl ReviewUi {
                     };
                 }
             }
-            KeyCode::PageDown => {
-                self.scroll = self.scroll.saturating_add(height.saturating_sub(4).max(1))
-            }
-            KeyCode::PageUp => {
-                self.scroll = self.scroll.saturating_sub(height.saturating_sub(4).max(1))
-            }
             KeyCode::Home => {
                 self.scroll = 0;
                 self.horizontal = 0;
@@ -248,7 +242,7 @@ impl ReviewUi {
             Constraint::Length(2),
             Constraint::Length(if self.save_error.is_some() { 3 } else { 0 }),
             Constraint::Min(0),
-            Constraint::Length(2),
+            Constraint::Length(1),
         ])
         .areas(frame.area());
         let id = self.current.as_deref().unwrap_or("—");
@@ -272,10 +266,7 @@ impl ReviewUi {
             .style(theme::header()),
             header,
         );
-        frame.render_widget(
-            theme::footer("j/k: files | Space: reviewed | <c-d>/<c-u>: scroll | h/l: pan | r: reload\nc: full/since | Tab: unreviewed | PgUp/Dn: page | Home: top | Esc: back | q: quit"),
-            footer,
-        );
+        frame.render_widget(theme::footer(crate::help::Context::Review.hints()), footer);
         if self.loading {
             frame.render_widget(
                 Paragraph::new("Loading local Git diff… Esc returns without waiting."),
@@ -334,7 +325,7 @@ impl ReviewUi {
                 Line::from(if self.saving {
                     "Saving review mark… Please wait (input temporarily disabled).".to_owned()
                 } else if self.save_error.is_some() {
-                    "Save failed; previous marks unchanged. Space: retry | r: reload".to_owned()
+                    "Save failed; previous marks unchanged. Retry: Space | Reload: r".to_owned()
                 } else {
                     format!(
                         "Saved marks • {} changed after review • {}",
@@ -363,8 +354,8 @@ impl ReviewUi {
         if files.is_empty() {
             frame.render_widget(
                 Paragraph::new(
-                    if self.since_review { "No changes since review. c: full diff (includes never-reviewed files). Esc: back." }
-                    else { "No changes against this base (including untracked files). Esc: back." },
+                    if self.since_review { "No changes since review. Full diff: c (includes never-reviewed files). Back: Esc." }
+                    else { "No changes against this base (including untracked files). Back: Esc." },
                 ),
                 body,
             );
@@ -660,8 +651,8 @@ mod tests {
             "@@ -1 +1 @@",
             "-before",
             "+after",
-            "Space: reviewed",
-            "Esc: back",
+            "Toggle mark: Space",
+            "Help: ?",
             "Saved marks",
         ] {
             assert!(text.contains(expected), "missing {expected:?}: {text}");
@@ -678,6 +669,17 @@ mod tests {
         let scrolled = screen(&mut review, 45, 12);
         assert!(scrolled.contains("@@ -1 +1 @@"));
         assert!(scrolled.contains("+after"));
+    }
+
+    #[test]
+    fn review_shortcuts_truncate_on_one_row_at_80_columns() {
+        let mut review = ready();
+        let text = screen(&mut review, 80, 24);
+        let rows: Vec<_> = text.lines().map(str::trim_end).collect();
+        assert_eq!(
+            rows[23],
+            "Select: j/k | Toggle mark: Space | Scroll: <c-d>/<c-u> | Pan: h/l | … | Help: ?"
+        );
     }
 
     #[test]
@@ -716,6 +718,9 @@ mod tests {
         review.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL), 10);
         assert_eq!(review.scroll, 0);
         key(&mut review, KeyCode::PageDown);
+        key(&mut review, KeyCode::PageUp);
+        assert_eq!(review.scroll, 0);
+        review.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL), 10);
         key(&mut review, KeyCode::Char('l'));
         assert!(review.scroll > 0 && review.horizontal > 0);
         assert_eq!(review.selected, 0);
@@ -910,7 +915,7 @@ mod tests {
             "+1 -1 since review",
             "-fix this",
             "+corrected",
-            "c: full/since",
+            "Full/since: c",
         ] {
             assert!(text.contains(expected), "missing {expected}: {text}");
         }
