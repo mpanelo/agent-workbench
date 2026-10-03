@@ -259,9 +259,12 @@ mod tests {
         ReviewStore::new(engine.store.review_path())
             .copy_identity("A", "Renamed λ🙂")
             .unwrap();
-        let updated = engine.rename_work_item(&target, "Renamed λ🙂").unwrap();
+        let updated = engine
+            .update_work_item_details(&target, "Renamed λ🙂", "Updated description")
+            .unwrap();
         assert_eq!(updated.pane_id, target.pane_id);
         assert_eq!(updated.workspace, target.workspace);
+        assert_eq!(updated.title, "Updated description");
         let restarted = Engine::new(dir.path().join("items.json"));
         let mut fresh = restarted.open_review("Renamed λ🙂", None).await.unwrap();
         assert_eq!(fresh.status(path), ReviewStatus::Reviewed);

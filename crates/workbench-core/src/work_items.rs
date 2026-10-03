@@ -346,21 +346,37 @@ impl WorkItemStore {
     }
 
     pub(crate) fn rename(&self, expected: &WorkItem, id: &str) -> Result<WorkItem, WorkItemError> {
+        self.update_details(expected, id, None)
+    }
+
+    pub(crate) fn update_details(
+        &self,
+        expected: &WorkItem,
+        id: &str,
+        description: Option<&str>,
+    ) -> Result<WorkItem, WorkItemError> {
         validate_work_item_id(id)?;
+        if let Some(description) = description {
+            validate_short_description(description)?;
+        }
         self.mutate(|work_items| {
             let index = unchanged_item(work_items, expected)?;
-            if id == expected.id {
-                return Ok(work_items[index].clone());
+            if id != expected.id {
+                if work_items.iter().any(|item| item.id == id) {
+                    return Err(WorkItemError::DuplicateId(id.into()));
+                }
+                // Copy first, never delete the old snapshots. A failed registry save
+                // leaves the old item fully usable; retrying the same copy is safe.
+                crate::review_store::ReviewStore::new(self.review_path())
+                    .copy_identity(&expected.id, id)
+                    .map_err(|error| {
+                        WorkItemError::Invalid(format!("ID was not renamed: {error}"))
+                    })?;
             }
-            if work_items.iter().any(|item| item.id == id) {
-                return Err(WorkItemError::DuplicateId(id.into()));
-            }
-            // Copy first, never delete the old snapshots. A failed registry save
-            // leaves the old item fully usable; retrying the same copy is safe.
-            crate::review_store::ReviewStore::new(self.review_path())
-                .copy_identity(&expected.id, id)
-                .map_err(|error| WorkItemError::Invalid(format!("ID was not renamed: {error}")))?;
             work_items[index].id = id.into();
+            if let Some(description) = description {
+                work_items[index].title = description.into();
+            }
             Ok(work_items[index].clone())
         })
     }
@@ -457,6 +473,64 @@ mod tests {
             kind,
             pane_id: "%14".into(),
         }
+    }
+
+    #[test]
+    fn details_save_both_fields_together_and_never_leave_a_partial_edit() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("items.json");
+        let engine = Engine::new(&path);
+        let original = item("A", WorkItemKind::Implementation);
+        engine.register_work_item(original.clone()).unwrap();
+        engine
+            .register_work_item(item("Duplicate", WorkItemKind::ExternalReview))
+            .unwrap();
+        let before = fs::read(&path).unwrap();
+        for (id, description) in [
+            ("New", ""),
+            ("Duplicate", "New description"),
+            (" invalid ", "New description"),
+        ] {
+            assert!(
+                engine
+                    .update_work_item_details(&original, id, description)
+                    .is_err()
+            );
+            assert_eq!(fs::read(&path).unwrap(), before);
+            assert!(!engine.store.review_path().exists());
+        }
+        fs::write(engine.store.review_path(), "corrupt history").unwrap();
+        assert!(
+            engine
+                .update_work_item_details(&original, "New", "New description")
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        // Description-only changes do not need to read or modify review history.
+        let updated = engine
+            .update_work_item_details(&original, "A", "New description")
+            .unwrap();
+        let mut expected = original.clone();
+        expected.title = "New description".into();
+        assert_eq!(updated, expected);
+        assert_eq!(
+            fs::read_to_string(engine.store.review_path()).unwrap(),
+            "corrupt history"
+        );
+        let before = fs::read(&path).unwrap();
+        assert!(matches!(
+            engine.update_work_item_details(&original, "New", "Stale edit"),
+            Err(WorkItemError::Changed(_))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), before);
+        fs::write(engine.store.review_path(), "{\"version\":1,\"reviews\":[]}").unwrap();
+        let saved = engine
+            .update_work_item_details(&updated, "New λ🙂", "Combined description")
+            .unwrap();
+        expected.id = "New λ🙂".into();
+        expected.title = "Combined description".into();
+        assert_eq!(saved, expected);
+        assert_eq!(Engine::new(&path).work_items().unwrap()[0], expected);
     }
 
     #[test]

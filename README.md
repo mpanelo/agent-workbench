@@ -171,13 +171,14 @@ offline registration, or deliberately mapping multiple items to one pane.
 
 In WORK, select a registered item with `j/k` or arrows:
 
-- `e` edits its Short Description. Enter saves; Esc/Ctrl-C cancels. The editor
-  shows the 120-character counter, supports Unicode paste, Backspace and `<c-u>`,
-  and leaves the ID, kind, repository, workspace, branch and pane mapping unchanged.
-- `n` renames its Work ID. Enter saves; Esc/Ctrl-C cancels. IDs must be nonempty,
-  unique, and have no control characters or surrounding whitespace. Unicode and
-  internal spaces are supported. Description, pane mapping, workspace and branch
-  stay unchanged; selection and local attention acknowledgements follow the new ID.
+- `e` opens one form for Work ID and Short Description. The description is focused
+  initially; Tab/Shift-Tab or ↑/↓ switches fields. `<enter>` saves both fields
+  together; Esc/Ctrl-C cancels. Unicode paste, Backspace, and `<c-u>` to clear the
+  current field are supported. Description has a 120-character counter. IDs must
+  be nonempty, unique, and have no control characters or surrounding whitespace;
+  Unicode and internal spaces are supported. Kind, repository, workspace, branch
+  and pane mapping stay unchanged; selection and local attention acknowledgements
+  follow a renamed ID. There is no separate `n` rename shortcut.
   Saved review snapshots are copied to the new ID across all workspace/base contexts.
   Old history is retained, as it is when unregistering; no snapshots are deleted.
   Conflicting retained history under the destination ID blocks the rename rather
@@ -189,10 +190,11 @@ In WORK, select a registered item with `j/k` or arrows:
   Esc/Ctrl-C cancels. The tmux pane, branch, worktree, files and review history are
   kept. This is not task completion, archiving, or workspace cleanup.
 
-All three actions work with missing panes or unavailable tmux. The dialog stays bound
+Both actions work with missing panes or unavailable tmux. The dialog stays bound
 to the captured item even when the list refreshes. Writes use the registration
 lock and atomic-save path; an externally changed or removed item is rejected
-instead of overwriting another process's work. Errors keep the dialog/draft open
+instead of overwriting another process's work. A validation, duplicate-ID, or
+review-history error leaves both registered fields unchanged. Errors keep both drafts open
 for retry; cancel and reopen after a stale-item error. Controls are disabled while
 saving to prevent duplicate writes. Existing longer descriptions can be shortened
 or cleared, but must fit the limit before saving.

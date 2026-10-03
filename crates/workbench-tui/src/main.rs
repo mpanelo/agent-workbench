@@ -26,14 +26,20 @@ struct AppState {
 }
 
 impl AppState {
-    fn apply_rename(
+    fn apply_detail_edit(
         &mut self,
         mutation: &maintenance::Mutation,
         interaction: &mut interaction::Interaction,
     ) {
-        if let maintenance::Mutation::Rename { expected, text } = mutation {
+        if let maintenance::Mutation::Details {
+            expected,
+            id,
+            description,
+        } = mutation
+        {
             let mut updated = expected.clone();
-            updated.id.clone_from(text);
+            updated.id.clone_from(id);
+            updated.title.clone_from(description);
             if let Some(Ok(items)) = &mut self.work_items {
                 for state in items {
                     if state.item == *expected {
@@ -45,7 +51,7 @@ impl AppState {
                 .attention_tracker
                 .rename_work_item(expected, &updated);
             if interaction.selected_id.as_ref() == Some(&expected.id) {
-                interaction.selected_id = Some(text.clone());
+                interaction.selected_id = Some(id.clone());
             }
         }
     }
@@ -323,7 +329,7 @@ async fn event_loop(
                         let success = result.is_ok();
                         maintenance.finish(result);
                         if success {
-                            state.apply_rename(&mutation, interaction);
+                            state.apply_detail_edit(&mutation, interaction);
                             state.reload_registry(&engine);
                             state.refresh_attention(&mut interaction.attention_tracker);
                             interaction.sync(state.items_for(*view));
@@ -617,12 +623,10 @@ fn navigate(
             interaction.message = Some("Select an item in the current view first.".into());
         }
         KeyCode::Char('r') if view.is_item_view() => interaction.begin_reply(items),
-        KeyCode::Char('e' | 'n' | 'u') if *view == ui::View::Work => {
+        KeyCode::Char('e' | 'u') if *view == ui::View::Work => {
             interaction.maintenance_requested = interaction.selected(items).map(|selected| {
                 if key.code == KeyCode::Char('e') {
                     maintenance::Request::Edit(selected.item.clone())
-                } else if key.code == KeyCode::Char('n') {
-                    maintenance::Request::Rename(selected.item.clone())
                 } else {
                     maintenance::Request::Unregister(selected.item.clone())
                 }
@@ -898,19 +902,20 @@ mod tests {
             .attention_tracker
             .acknowledge(&captured)
             .unwrap();
-        let mutation = maintenance::Mutation::Rename {
+        let mutation = maintenance::Mutation::Details {
             expected: original.clone(),
-            text: "New λ🙂".into(),
+            id: "New λ🙂".into(),
+            description: "Updated description".into(),
         };
         mutation.execute(&engine).unwrap();
-        state.apply_rename(&mutation, &mut interaction);
+        state.apply_detail_edit(&mutation, &mut interaction);
         state.reload_registry(&engine);
         state.refresh_attention(&mut interaction.attention_tracker);
         interaction.sync(state.items());
         assert_eq!(interaction.selected_id.as_deref(), Some("New λ🙂"));
         assert_eq!(state.items()[0].status, AgentStatus::Complete);
         assert_eq!(state.items()[0].completion_fingerprint, Some(42));
-        assert_eq!(state.items()[0].item.title, original.title);
+        assert_eq!(state.items()[0].item.title, "Updated description");
         assert!(state.attention.is_empty());
         assert!(
             interaction
@@ -935,7 +940,7 @@ mod tests {
             interaction.sync(state.items_for(view));
             for code in [KeyCode::Char('e'), KeyCode::Char('n'), KeyCode::Char('u')] {
                 navigate(code, &state, &mut view, &mut 0, &mut interaction, 24);
-                if view == ui::View::Work {
+                if view == ui::View::Work && code != KeyCode::Char('n') {
                     match interaction.maintenance_requested.take().unwrap() {
                         maintenance::Request::Edit(item) => {
                             assert_eq!(code, KeyCode::Char('e'));
@@ -943,10 +948,6 @@ mod tests {
                         }
                         maintenance::Request::Unregister(item) => {
                             assert_eq!(code, KeyCode::Char('u'));
-                            assert_eq!(item.id, "hidden");
-                        }
-                        maintenance::Request::Rename(item) => {
-                            assert_eq!(code, KeyCode::Char('n'));
                             assert_eq!(item.id, "hidden");
                         }
                     }

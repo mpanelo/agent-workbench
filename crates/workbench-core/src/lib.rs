@@ -75,6 +75,17 @@ impl Engine {
         self.store.rename(expected, id)
     }
 
+    /// Save ID and short description together under the registry lock. If the
+    /// ID changes, preserve review marks using the same safe copy as renaming.
+    pub fn update_work_item_details(
+        &self,
+        expected: &WorkItem,
+        id: &str,
+        description: &str,
+    ) -> Result<WorkItem, WorkItemError> {
+        self.store.update_details(expected, id, Some(description))
+    }
+
     /// Remove only an unchanged registration. Never touches tmux, Git, workspace
     /// files, or saved review snapshots. Those are separate lifecycle decisions.
     pub fn unregister_work_item(&self, expected: &WorkItem) -> Result<(), WorkItemError> {

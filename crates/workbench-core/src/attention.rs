@@ -51,11 +51,12 @@ fn same_target(left: &WorkItem, right: &WorkItem) -> bool {
 }
 
 impl AttentionTracker {
-    /// Preserve a local acknowledgement only for a successful ID-only rename.
+    /// Preserve a local acknowledgement for a successful ID/description edit.
     /// Old captured acknowledgement tokens cannot target the new ID.
     pub fn rename_work_item(&mut self, expected: &WorkItem, updated: &WorkItem) {
         let mut renamed = expected.clone();
         renamed.id.clone_from(&updated.id);
+        renamed.title.clone_from(&updated.title);
         if renamed != *updated
             || expected.id == updated.id
             || self.completions.contains_key(&updated.id)
@@ -236,6 +237,7 @@ mod tests {
         tracker.acknowledge(&captured).unwrap();
         let mut renamed = finished.clone();
         renamed.item.id = "New λ🙂".into();
+        renamed.item.title = "Updated description".into();
         tracker.rename_work_item(&finished.item, &renamed.item);
         assert!(tracker.observe(&[renamed.clone()]).is_empty());
         assert_eq!(tracker.acknowledge(&captured), Err(AttentionError::Changed));
