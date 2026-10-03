@@ -215,6 +215,41 @@ register the same item again; using the same ID, workspace and review base lets
 its retained review snapshots be reused. There is no automatic review-history
 pruning or worktree deletion.
 
+## Clean up a workmux workspace
+
+In WORK, `c` opens a cleanup preview for the selected item. Unlike `u`, cleanup
+removes the linked worktree and closes the **entire workmux window**, including
+the agent and companion shell panes. The local branch (including unmerged
+commits) and Workbench review history are kept. Nothing is merged or pushed.
+
+The preview lists the worktree path, branch, window/session names, every pane's
+title/command/directory, and ignored files/directories that will also be deleted
+(for example `.env` or build caches). Workmux's configured cleanup hooks and
+managed-resource cleanup run as part of removal. Stop ongoing work before
+cleanup: confirmation terminates every program in that window.
+
+Cancel is selected by default. Use `Tab` or Left/Right to select
+**Clean up window + worktree**, then `<enter>` to confirm. `<enter>` on Cancel, `Esc`, `q`, or
+`<c-c>` cancels without deletion. `<c-d>/<c-u>` scrolls long previews, and `?`
+shows the dialog's bindings. Controls are disabled while removal is in progress.
+
+Cleanup requires workmux on PATH with `list --json` and persisted window ownership
+tokens. This first version supports one live, explicitly managed **window-mode**
+worktree only. It blocks dirty tracked/untracked files, locked or detached
+worktrees, the main checkout, symlink targets, shared registrations, duplicate
+owned windows, panes outside the worktree, and Workbench's own window/workspace/
+executable/state. Legacy/unmanaged, headless, session-mode, closed, missing or
+ambiguous targets must be handled manually with the owning tools and `u`.
+
+The core rechecks the captured preview under the registry lock, stages the
+unregister update, and invokes `workmux remove --keep-branch -- <handle>`—never
+`--force`. It verifies that the worktree and window are gone and the branch
+remains before atomically unregistering. Changed targets require a new preview.
+Failures, timeouts, or incomplete cleanup retain the registration and disable
+blind retries; inspect what remains before reopening cleanup or using `u`.
+External agents and workmux hooks can still change resources during removal;
+this is not an atomic transaction across Git, tmux, and the filesystem.
+
 ## Navigation and replies
 
 In ATTENTION and WORK, the selected item is highlighted with `>`:

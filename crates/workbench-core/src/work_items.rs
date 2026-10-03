@@ -266,6 +266,25 @@ impl Drop for StateLock {
 }
 
 impl WorkItemStore {
+    pub(crate) fn state_path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Stage the final registry update before external cleanup starts. Caller
+    /// holds the registry lock until cleanup and this atomic replacement finish.
+    pub(crate) fn stage_unregister(
+        &self,
+        expected: &WorkItem,
+        _lock: &StateLock,
+    ) -> Result<PendingUnregister, WorkItemError> {
+        let mut items = self.load()?;
+        let index = unchanged_item(&items, expected)?;
+        items.remove(index);
+        Ok(PendingUnregister {
+            temporary: self.stage_state(items)?,
+            path: self.path.clone(),
+        })
+    }
     pub(crate) fn new(path: PathBuf) -> Self {
         Self { path }
     }
@@ -414,14 +433,25 @@ impl WorkItemStore {
         edit: impl FnOnce(&mut Vec<WorkItem>) -> Result<T, WorkItemError>,
     ) -> Result<T, WorkItemError> {
         let _lock = self.lock()?;
+        // Reload under the lock so independent engine instances cannot lose updates.
+        let mut work_items = self.load()?;
+        let result = edit(&mut work_items)?;
+        let temporary = self.stage_state(work_items)?;
+        temporary
+            .persist(&self.path)
+            .map_err(|error| self.io_error(error.error))?;
+        Ok(result)
+    }
+
+    fn stage_state(
+        &self,
+        work_items: Vec<WorkItem>,
+    ) -> Result<tempfile::NamedTempFile, WorkItemError> {
         let parent = self
             .path
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        // Reload under the lock so independent engine instances cannot lose updates.
-        let mut work_items = self.load()?;
-        let result = edit(&mut work_items)?;
         let bytes = serde_json::to_vec_pretty(&StoredState {
             version: 1,
             work_items,
@@ -439,11 +469,24 @@ impl WorkItemStore {
             .as_file()
             .sync_all()
             .map_err(|error| self.io_error(error))?;
-        temporary
+        Ok(temporary)
+    }
+}
+
+pub(crate) struct PendingUnregister {
+    temporary: tempfile::NamedTempFile,
+    path: PathBuf,
+}
+
+impl PendingUnregister {
+    pub(crate) fn commit(self) -> Result<(), WorkItemError> {
+        self.temporary
             .persist(&self.path)
-            .map_err(|error| self.io_error(error.error))?;
-        // StateLock releases the advisory lock, including on any error above.
-        Ok(result)
+            .map_err(|error| WorkItemError::Io {
+                path: self.path,
+                source: error.error,
+            })?;
+        Ok(())
     }
 }
 

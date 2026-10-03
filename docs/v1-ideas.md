@@ -38,4 +38,13 @@ Potential scope, to decide before implementation:
 - Prefer a dry-run preview and recoverable actions; explain which data/history
   will be lost and how removal relates to archiving or future re-registration.
 
-This is a v1 candidate only; no cleanup or automatic deletion is implemented.
+Implemented workspace cleanup: in WORK, `c` previews and confirms removal of one
+verified workmux window and its linked worktree, keeping branch and review history.
+Cancel is selected by default; dirty, shared, own-workbench, legacy/unmanaged,
+duplicate-window, and unsupported targets are blocked. Removal is delegated to
+workmux without `--force`; the registry entry is removed only after verified success.
+See the README's cleanup section for safeguards and partial-failure behavior.
+
+Still potential follow-ups: orphaned review-history pruning, stale-registration
+bulk selection, archiving, and broader owner/session/duplicate-window support.
+No automatic cleanup or review-history deletion is implemented.

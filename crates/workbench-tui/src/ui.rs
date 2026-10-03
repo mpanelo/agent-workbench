@@ -886,11 +886,11 @@ mod tests {
         let state = AppState::default();
         for view in [View::Attention, View::Work] {
             let text = item_screen(&state, 80, 10, &mut 0, view);
-            let maintenance = "Edit: e | Unregister: u | Views: a/w/s | Quit: q";
+            let maintenance = "Edit: e | Unregister: u | Clean up: c | Views: a/w/s | Quit: q";
             if view == View::Work {
                 assert_eq!(
                     text.lines().last().unwrap().trim_end(),
-                    format!("{maintenance} | Select: j/k | … | Help: ?")
+                    format!("{maintenance} | … | Help: ?")
                 );
             } else {
                 assert!(!text.contains(maintenance));

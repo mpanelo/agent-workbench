@@ -104,6 +104,7 @@ pub(crate) struct Interaction {
     pub reveal_pane: bool,
     pub registration_requested: Option<String>,
     pub maintenance_requested: Option<crate::maintenance::Request>,
+    pub cleanup_requested: Option<workbench_core::WorkItem>,
     pub attention_tracker: workbench_core::AttentionTracker,
     pub acknowledgement_requested: Option<workbench_core::CompletionAcknowledgement>,
 }

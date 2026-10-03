@@ -19,6 +19,7 @@ pub enum Context {
     Registration,
     Edit,
     Unregister,
+    Cleanup,
 }
 
 impl Context {
@@ -44,6 +45,7 @@ impl Context {
             Self::Registration => "REGISTER",
             Self::Edit => "EDIT DETAILS",
             Self::Unregister => "UNREGISTER",
+            Self::Cleanup => "CLEAN UP",
         }
     }
 
@@ -52,7 +54,7 @@ impl Context {
     pub fn hints(self) -> &'static str {
         match self {
             Self::Work => {
-                "Edit: e | Unregister: u | Views: a/w/s | Quit: q | Select: j/k | Open: <enter> | Reply: r | Review: d | Scroll: <c-d>/<c-u> | Help: ?"
+                "Edit: e | Unregister: u | Clean up: c | Views: a/w/s | Quit: q | Select: j/k | Open: <enter> | Reply: r | Review: d | Scroll: <c-d>/<c-u> | Help: ?"
             }
             Self::Attention => {
                 "Acknowledge finished turn: x | Views: a/w/s | Quit: q | Select: j/k | Open: <enter> | Reply: r | Review: d | Scroll: <c-d>/<c-u> | Help: ?"
@@ -76,6 +78,9 @@ impl Context {
                 "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→ | Help: F1"
             }
             Self::Unregister => "Unregister entry: <enter> | Cancel: Esc/Ctrl-C | Help: ?",
+            Self::Cleanup => {
+                "Choose: Tab/←/→ | Confirm: <enter> | Cancel: Esc/q/<c-c> | Scroll: <c-d>/<c-u> | Help: ?"
+            }
         }
     }
 
@@ -221,7 +226,7 @@ impl HelpUi {
 
 // Explicit display-width wrapping keeps scroll bounds exact, including at
 // narrow widths, without enabling Ratatui's unstable line-count API.
-fn wrapped_lines(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
+pub(crate) fn wrapped_lines(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
     if width == 0 {
         return Vec::new();
     }
@@ -273,6 +278,11 @@ mod tests {
     fn every_view_shows_its_own_complete_bindings_including_hidden_footer_hints() {
         for (context, required, excluded) in [
             (Context::Work, "Unregister: u", "Toggle mark: Space"),
+            (
+                Context::Cleanup,
+                "Choose: Tab/←/→",
+                "Unregister entry: <enter>",
+            ),
             (
                 Context::Attention,
                 "Acknowledge finished turn: x",

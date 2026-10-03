@@ -8,6 +8,7 @@ use tokio::{
 };
 use workbench_core::{Engine, Snapshot, WorkItemState, attention_items, validate_agent_input};
 
+mod cleanup;
 mod cli;
 mod help;
 mod interaction;
@@ -298,6 +299,9 @@ async fn event_loop(
     let mut registration = registration::RegistrationUi::default();
     let mut maintenance = maintenance::MaintenanceUi::default();
     let mut help = help::HelpUi::default();
+    let mut cleanup = cleanup::CleanupUi::default();
+    let mut cleanup_preparations = JoinSet::new();
+    let mut cleanups = JoinSet::<(u64, String, Result<(), String>)>::new();
     let mut mutations = JoinSet::<(Box<maintenance::Mutation>, Result<(), String>)>::new();
     let mut input_tick = time::interval(Duration::from_millis(100));
     input_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -306,6 +310,8 @@ async fn event_loop(
             terminal.draw(|frame| {
                 if help.is_open() {
                     help.render(frame);
+                } else if cleanup.is_open() {
+                    cleanup.render(frame);
                 } else if maintenance.is_open() {
                     maintenance.render(frame);
                 } else if registration.pane.is_some() {
@@ -327,6 +333,31 @@ async fn event_loop(
             redraw = false;
         }
         tokio::select! {
+            completed = cleanup_preparations.join_next(), if !cleanup_preparations.is_empty() => {
+                match completed {
+                    Some(Ok((ticket, result))) => cleanup.finish_preview(ticket, result),
+                    Some(Err(error)) if !error.is_cancelled() => cleanup.fail("Cleanup preview stopped; cancel and reopen.".into()),
+                    _ => {},
+                }
+                redraw = true;
+            }
+            completed = cleanups.join_next(), if !cleanups.is_empty() => {
+                match completed {
+                    Some(Ok((ticket, id, result))) => {
+                        let success = result.is_ok();
+                        cleanup.finish_execution(ticket, result);
+                        if success {
+                            state.reload_registry(&engine);
+                            state.refresh_attention(&mut interaction.attention_tracker);
+                            interaction.sync(state.items_for(*view));
+                            interaction.reveal_selection = true;
+                            interaction.message = Some(format!("Cleaned up {id}: workmux window and worktree removed; branch and review history kept."));
+                        }
+                    }
+                    _ => cleanup.fail("Cleanup task stopped. Resources may be partly removed; inspect them before retrying. Registration was kept.".into()),
+                }
+                redraw = true;
+            }
             completed = mutations.join_next(), if !mutations.is_empty() => {
                 match completed {
                     Some(Ok((mutation, result))) => {
@@ -422,13 +453,28 @@ async fn event_loop(
                     redraw = true;
                     let event = event::read()?;
                     if matches!(event, Event::Resize(_, _)) { interaction.reveal_selection = true; interaction.reveal_pane = true; }
-                    let context = maintenance.help_context().unwrap_or_else(|| {
+                    let context = if cleanup.is_open() { help::Context::Cleanup } else { maintenance.help_context().unwrap_or_else(|| {
                         if registration.pane.is_some() { help::Context::Registration }
                         else if reviews.is_open() { help::Context::Review }
                         else if interaction.draft.is_some() { help::Context::Reply }
                         else { help::Context::view(*view, interaction.show_all_panes) }
-                    });
+                    }) };
                     if help.event(&event, context, terminal.size()?.height) {
+                        continue;
+                    }
+                    if cleanup.is_open() {
+                        if let Event::Key(key) = event && key.kind != KeyEventKind::Release {
+                            match cleanup.key(key, terminal.size()?.height) {
+                                cleanup::Intent::Cancel => cleanup_preparations.abort_all(),
+                                cleanup::Intent::Confirm(preview) => {
+                                    let ticket = cleanup.generation;
+                                    let id = preview.details.work_id.clone();
+                                    let engine = Arc::clone(&engine);
+                                    cleanups.spawn(async move { (ticket, id, engine.cleanup_work_item(&preview).await.map_err(|e| e.to_string())) });
+                                }
+                                cleanup::Intent::None => {},
+                            }
+                        }
                         continue;
                     }
                     if maintenance.is_open() {
@@ -528,6 +574,12 @@ async fn event_loop(
                                 if let Some(request) = interaction.maintenance_requested.take() {
                                     interaction.message = None;
                                     maintenance.open(request);
+                                }
+                                if let Some(item) = interaction.cleanup_requested.take() {
+                                    interaction.message = None;
+                                    let ticket = cleanup.open(item.clone());
+                                    let engine = Arc::clone(&engine);
+                                    cleanup_preparations.spawn(async move { (ticket, engine.prepare_cleanup(&item).await.map_err(|e| e.to_string())) });
                                 }
                                 if let Some(id) = interaction.review_requested.take()
                                     && let Some(ticket) = reviews.open(id.clone()) {
@@ -636,6 +688,15 @@ fn navigate(
             interaction.message = Some("Select an item in the current view first.".into());
         }
         KeyCode::Char('r') if view.is_item_view() => interaction.begin_reply(items),
+        KeyCode::Char('c') if *view == ui::View::Work => {
+            interaction.cleanup_requested = interaction
+                .selected(items)
+                .map(|selected| selected.item.clone());
+            interaction.message = interaction
+                .cleanup_requested
+                .is_none()
+                .then(|| "Select an item in WORK first.".into());
+        }
         KeyCode::Char('e' | 'u') if *view == ui::View::Work => {
             interaction.maintenance_requested = interaction.selected(items).map(|selected| {
                 if key.code == KeyCode::Char('e') {
@@ -1006,6 +1067,78 @@ mod tests {
             24,
         );
         assert!(interaction.maintenance_requested.is_none());
+    }
+
+    #[test]
+    fn cleanup_key_captures_work_selection_only_and_ignores_drafts_and_modifiers() {
+        let state = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
+        for mut view in [ui::View::Work, ui::View::Attention, ui::View::Sessions] {
+            let mut interaction = interaction::Interaction {
+                selected_id: Some("B".into()),
+                ..Default::default()
+            };
+            navigate(
+                KeyCode::Char('c'),
+                &state,
+                &mut view,
+                &mut 0,
+                &mut interaction,
+                24,
+            );
+            if view == ui::View::Work {
+                assert_eq!(
+                    interaction.cleanup_requested.take(),
+                    Some(state.items()[1].item.clone())
+                );
+            } else {
+                assert!(interaction.cleanup_requested.is_none());
+            }
+        }
+        let mut view = ui::View::Work;
+        let mut interaction = interaction::Interaction::default();
+        interaction.sync(state.items());
+        for modifier in [
+            KeyModifiers::CONTROL,
+            KeyModifiers::ALT,
+            KeyModifiers::SUPER,
+        ] {
+            navigate(
+                KeyEvent::new(KeyCode::Char('c'), modifier),
+                &state,
+                &mut view,
+                &mut 0,
+                &mut interaction,
+                24,
+            );
+            assert!(interaction.cleanup_requested.is_none());
+        }
+        interaction.begin_reply(state.items());
+        navigate(
+            KeyCode::Char('c'),
+            &state,
+            &mut view,
+            &mut 0,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.cleanup_requested.is_none());
+        interaction.draft = None;
+        navigate(
+            KeyCode::Char('c'),
+            &AppState::default(),
+            &mut view,
+            &mut 0,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.cleanup_requested.is_none());
+        assert!(
+            interaction
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("Select an item")
+        );
     }
 
     #[test]

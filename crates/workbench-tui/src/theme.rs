@@ -400,6 +400,7 @@ mod tests {
             Context::Registration,
             Context::Edit,
             Context::Unregister,
+            Context::Cleanup,
         ] {
             let text = context.hints();
             let narrow = compact_footer(text, 40);

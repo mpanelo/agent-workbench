@@ -86,6 +86,11 @@ impl Default for TmuxClient {
 }
 
 impl TmuxClient {
+    pub(crate) async fn query(&self, args: &[&str]) -> Result<String, DiscoveryError> {
+        let output = run_command(self.command().args(args), COMMAND_TIMEOUT).await?;
+        ensure_success(&output)?;
+        String::from_utf8(output.stdout).map_err(|_| invalid_output(0, "tmux output is not UTF-8"))
+    }
     pub(crate) fn command(&self) -> Command {
         let mut command = Command::new(&self.executable);
         // Actions must never implicitly start a new server.

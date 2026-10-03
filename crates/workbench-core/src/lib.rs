@@ -5,6 +5,7 @@ use std::path::PathBuf;
 mod actions;
 mod agent_state;
 mod attention;
+mod cleanup;
 mod git;
 mod model;
 mod registration;
@@ -16,6 +17,7 @@ mod work_items;
 
 pub use actions::{ActionError, MAX_INPUT_BYTES, validate_agent_input};
 pub use attention::{AttentionError, AttentionTracker, CompletionAcknowledgement, attention_items};
+pub use cleanup::{CleanupDetails, CleanupError, CleanupPreview};
 pub use git::{ChangeKind, ChangedFile, GitError, WorkItemDiff};
 pub use model::{Pane, Session, Snapshot, Window};
 pub use registration::{RegistrationDraft, RegistrationError};
@@ -34,6 +36,7 @@ pub struct Engine {
     store: WorkItemStore,
     tmux: tmux::TmuxClient,
     git: git::GitClient,
+    workmux: cleanup::WorkmuxClient,
 }
 
 impl Engine {
@@ -43,6 +46,7 @@ impl Engine {
             store: WorkItemStore::new(state_file.into()),
             tmux: tmux::TmuxClient::default(),
             git: git::GitClient::default(),
+            workmux: cleanup::WorkmuxClient::default(),
         }
     }
 
