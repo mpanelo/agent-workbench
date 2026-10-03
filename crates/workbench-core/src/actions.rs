@@ -3,11 +3,17 @@ use std::{
     fmt,
     io::{self, IsTerminal},
     process::Stdio,
+    time::Duration,
 };
 
 use crate::{DiscoveryError, Engine, Snapshot, WorkItem, WorkItemError};
 
 pub const MAX_INPUT_BYTES: usize = 4096;
+
+// Coding-agent composers can classify rapid character input as a paste and
+// treat an immediate Enter as a newline. Allow that burst to settle before
+// sending the one submission key (Codex 0.159.3 suppresses Enter for 120 ms).
+const REPLY_SETTLE_DELAY: Duration = Duration::from_millis(250);
 
 #[derive(Debug)]
 pub enum ActionError {
@@ -15,6 +21,7 @@ pub enum ActionError {
     Transport(DiscoveryError),
     UnknownWorkItem(String),
     MissingPane { item: String, pane: String },
+    ChangedWorkItem(String),
     InvalidInput(String),
     NotInteractive,
 }
@@ -30,6 +37,10 @@ impl fmt::Display for ActionError {
                 "Pane {pane} for {item:?} is missing. Its registration is preserved."
             ),
             Self::InvalidInput(reason) => write!(f, "Cannot send input: {reason}"),
+            Self::ChangedWorkItem(id) => write!(
+                f,
+                "Work item {id:?} changed after reply text was delivered. Enter was not sent; inspect the original pane before retrying."
+            ),
             Self::NotInteractive => {
                 write!(f, "Opening a work item requires an interactive terminal.")
             }
@@ -93,6 +104,14 @@ impl Engine {
         let snapshot = self.discover().await?;
         target_for(&item, &snapshot)?;
         self.tmux.execute(&input_args(&item.pane_id, input)).await?;
+        tokio::time::sleep(REPLY_SETTLE_DELAY).await;
+        // Do not silently send Enter to a remapped/replaced registration after
+        // the pause. A partial text delivery is not retried or rolled back.
+        if self.registered_item(id)? != item {
+            return Err(ActionError::ChangedWorkItem(id.into()));
+        }
+        target_for(&item, &self.discover().await?)?;
+        self.tmux.execute(&submit_args(&item.pane_id)).await?;
         Ok(())
     }
 
@@ -170,14 +189,11 @@ fn input_args(pane: &str, input: &str) -> Vec<String> {
     // cannot become tmux commands, flags, formats, or key names.
     let mut args = vec!["send-keys".into(), "-H".into(), "-t".into(), pane.into()];
     args.extend(input.as_bytes().iter().map(|byte| format!("{byte:02x}")));
-    args.extend([
-        ";".into(),
-        "send-keys".into(),
-        "-t".into(),
-        pane.into(),
-        "Enter".into(),
-    ]);
     args
+}
+
+fn submit_args(pane: &str) -> Vec<String> {
+    vec!["send-keys".into(), "-t".into(), pane.into(), "Enter".into()]
 }
 
 #[cfg(test)]
@@ -247,15 +263,12 @@ mod tests {
         ] {
             let args = input_args("%14", input);
             assert_eq!(&args[..4], ["send-keys", "-H", "-t", "%14"]);
-            let decoded: Vec<u8> = args[4..args.len() - 5]
+            let decoded: Vec<u8> = args[4..]
                 .iter()
                 .map(|value| u8::from_str_radix(value, 16).unwrap())
                 .collect();
             assert_eq!(decoded, input.as_bytes());
-            assert_eq!(
-                &args[args.len() - 5..],
-                [";", "send-keys", "-t", "%14", "Enter"]
-            );
+            assert_eq!(submit_args("%14"), ["send-keys", "-t", "%14", "Enter"]);
         }
     }
 
@@ -323,6 +336,198 @@ mod tests {
         assert_eq!(engine.work_items().unwrap(), [item()]);
     }
 
+    #[cfg(unix)]
+    struct ReplyFixture {
+        directory: tempfile::TempDir,
+        engine: Engine,
+    }
+
+    #[cfg(unix)]
+    impl ReplyFixture {
+        fn new() -> Self {
+            use std::{fs, os::unix::fs::PermissionsExt};
+            let directory = tempfile::tempdir().unwrap();
+            let executable = directory.path().join("fake-tmux");
+            fs::write(
+                &executable,
+                format!(
+                    r#"#!/bin/sh
+set -eu
+base='{}'
+[ "$1" = '-N' ] && shift
+printf 'CALL\n' >> "$base/log"
+case "$1" in
+list-panes)
+  [ ! -e "$base/discovery-failure" ] || exit 31
+  exec /bin/cat "$base/snapshot" ;;
+send-keys)
+  if [ "$2" = '-H' ]; then
+    printf '%s\n' "$@" > "$base/text"
+    [ ! -e "$base/text-failure" ] || exit 32
+  else
+    printf '%s\n' "$@" >> "$base/submit"
+    [ ! -e "$base/submit-failure" ] || exit 33
+  fi ;;
+*) exit 99 ;;
+esac
+"#,
+                    directory.path().display()
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+            fs::write(
+                directory.path().join("snapshot"),
+                "$1\x1fmain\x1f@2\x1f7\x1fauth\x1f%14\x1f1\x1fAgent\x1fcodex\x1f/work/task\x1e\n",
+            )
+            .unwrap();
+            let mut engine = Engine::new(directory.path().join("state.json"));
+            engine.tmux.executable = executable.into_os_string();
+            engine.register_work_item(item()).unwrap();
+            Self { directory, engine }
+        }
+        fn path(&self, name: &str) -> std::path::PathBuf {
+            self.directory.path().join(name)
+        }
+        async fn text_delivered(&self) {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while !self.path("text").exists() {
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+            })
+            .await
+            .expect("text command was not reached");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reply_text_and_one_enter_are_separate_commands_outside_the_paste_window() {
+        use std::fs;
+        let fixture = ReplyFixture::new();
+        let input = "yes λ🙂 Enter ; kill-server";
+        fixture
+            .engine
+            .send_agent_input("ABC-123", input)
+            .await
+            .unwrap();
+        let text = fs::read_to_string(fixture.path("text")).unwrap();
+        let expected = input_args("%14", input).join("\n") + "\n";
+        assert_eq!(text, expected);
+        assert_eq!(
+            fs::read_to_string(fixture.path("submit")).unwrap(),
+            "send-keys\n-t\n%14\nEnter\n"
+        );
+        let text_at = fs::metadata(fixture.path("text"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        let submit_at = fs::metadata(fixture.path("submit"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert!(submit_at.duration_since(text_at).unwrap() >= REPLY_SETTLE_DELAY);
+        assert_eq!(
+            fs::read_to_string(fixture.path("log"))
+                .unwrap()
+                .lines()
+                .count(),
+            4
+        );
+        assert_eq!(fixture.engine.work_items().unwrap(), [item()]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_changed_registration_or_disappearing_pane_after_text_delivery_never_gets_enter() {
+        use std::fs;
+        for change in ["edit", "remap", "unregister", "pane", "discovery"] {
+            let fixture = ReplyFixture::new();
+            let sending = fixture.engine.send_agent_input("ABC-123", "continue");
+            tokio::pin!(sending);
+            tokio::select! {
+                result = &mut sending => panic!("send finished before text observation: {result:?}"),
+                _ = fixture.text_delivered() => {},
+            }
+            assert!(!fixture.path("submit").exists());
+            match change {
+                "edit" => {
+                    fixture
+                        .engine
+                        .update_work_item_description(&item(), "Changed")
+                        .unwrap();
+                }
+                "remap" => {
+                    fixture.engine.unregister_work_item(&item()).unwrap();
+                    let mut remapped = item();
+                    remapped.pane_id = "%15".into();
+                    fixture.engine.register_work_item(remapped).unwrap();
+                }
+                "unregister" => {
+                    fixture.engine.unregister_work_item(&item()).unwrap();
+                }
+                "pane" => fs::write(fixture.path("snapshot"), "").unwrap(),
+                _ => fs::write(fixture.path("discovery-failure"), "").unwrap(),
+            }
+            let failure = sending.await.unwrap_err();
+            match change {
+                "edit" | "remap" => assert!(matches!(failure, ActionError::ChangedWorkItem(_))),
+                "unregister" => assert!(matches!(failure, ActionError::UnknownWorkItem(_))),
+                "pane" => assert!(matches!(failure, ActionError::MissingPane { .. })),
+                _ => assert!(matches!(failure, ActionError::Transport(_))),
+            }
+            assert!(!fixture.path("submit").exists(), "{change}");
+            assert_eq!(
+                fs::read_to_string(fixture.path("text"))
+                    .unwrap()
+                    .lines()
+                    .filter(|line| *line == "send-keys")
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn text_and_enter_failures_preserve_state_and_never_retry_input() {
+        use std::fs;
+        for stage in ["text", "submit"] {
+            let fixture = ReplyFixture::new();
+            fs::write(fixture.path(&format!("{stage}-failure")), "").unwrap();
+            assert!(
+                fixture
+                    .engine
+                    .send_agent_input("ABC-123", "continue")
+                    .await
+                    .is_err()
+            );
+            assert_eq!(fixture.engine.work_items().unwrap(), [item()]);
+            if stage == "text" {
+                assert!(!fixture.path("submit").exists());
+                assert_eq!(
+                    fs::read_to_string(fixture.path("log"))
+                        .unwrap()
+                        .lines()
+                        .count(),
+                    2
+                );
+            } else {
+                assert_eq!(
+                    fs::read_to_string(fixture.path("submit")).unwrap(),
+                    "send-keys\n-t\n%14\nEnter\n"
+                );
+                assert_eq!(
+                    fs::read_to_string(fixture.path("log"))
+                        .unwrap()
+                        .lines()
+                        .count(),
+                    4
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     #[ignore = "requires tmux; creates and cleans up only its own isolated test server"]
     async fn isolated_tmux_input_is_literal_and_missing_panes_are_safe() {
@@ -379,13 +584,23 @@ mod tests {
                 .args(["capture-pane", "-p", "-t", &pane_id])
                 .output()
                 .unwrap();
-            if String::from_utf8_lossy(&captured.stdout).contains(reply) {
+            // Canonical-mode cat echoes a submitted line back after the tty's
+            // input echo. One visible copy proves typing, not submission.
+            if String::from_utf8_lossy(&captured.stdout)
+                .lines()
+                .filter(|line| line.trim_end() == reply)
+                .count()
+                == 2
+            {
                 received = true;
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        assert!(received, "literal Unicode reply was not delivered");
+        assert!(
+            received,
+            "literal Unicode reply was not submitted exactly once"
+        );
         let created = std::process::Command::new("tmux")
             .arg("-S")
             .arg(&socket)

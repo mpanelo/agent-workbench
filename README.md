@@ -280,7 +280,9 @@ refresh or selection change cannot redirect the draft to another item. Replies
 are temporary and are not persisted.
 
 The core reloads the registration and rediscovers the pane before every action.
-Text is encoded as literal UTF-8 bytes using `send-keys -H`, followed by one Enter;
+Text is encoded as literal UTF-8 bytes using `send-keys -H`. Workbench waits
+250 ms for the agent's paste handling to settle, rechecks the registration and
+pane, then sends one Enter in a separate command;
 key names, tmux formats, flags, and semicolons in the reply remain literal text.
 Reply submission does not switch panes. Sending occurs in the background and is
 never retried automatically. A failed send retains the draft: inspect the target
