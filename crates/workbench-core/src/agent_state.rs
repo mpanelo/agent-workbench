@@ -24,8 +24,8 @@ const OPTIONS_CLIPPED: &str =
 
 impl Engine {
     /// Resolve registrations and infer status from live, read-only pane observations.
-    /// Every refresh replaces previous evidence. An individual capture failure does
-    /// not fail the list or remove the registration. Dynamic status is never saved.
+    /// Validated opt-in lifecycle signals take precedence over ambiguous screens.
+    /// Individual capture/signal failures never remove a registration.
     pub async fn observe_work_item_states(
         &self,
         snapshot: Option<&Snapshot>,
@@ -58,6 +58,8 @@ impl Engine {
         }
         let mut captures = JoinSet::new();
         let mut observations = HashMap::new();
+        let mut screens = HashMap::new();
+        let signal_records = self.codex_records();
         let mut targets = targets.into_iter();
         loop {
             while captures.len() < MAX_CONCURRENT_CAPTURES {
@@ -75,6 +77,12 @@ impl Engine {
                 let detected = match result {
                     Ok(observation) => {
                         let (status, detail) = infer(&observation);
+                        if !observation.dead
+                            && !observation.in_mode
+                            && supported(Some(&observation.command))
+                        {
+                            screens.insert(id.clone(), observation.screen.clone());
+                        }
                         (
                             status,
                             detail,
@@ -100,6 +108,14 @@ impl Engine {
                 state.status_detail = (*detail).into();
                 state.attention_prompt.clone_from(prompt);
                 state.completion_fingerprint = *completion;
+            }
+            if state.pane == PaneAvailability::Present
+                && let Some(mut record) = self
+                    .live_codex_record(&state.item.pane_id, &signal_records)
+                    .await
+            {
+                record.apply(state, screens.get(&state.item.pane_id).map(String::as_str));
+                self.reconcile_codex_record(&record);
             }
         }
         Ok(states)

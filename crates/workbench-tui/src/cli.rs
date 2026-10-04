@@ -10,6 +10,8 @@ Usage:
       --repository PATH --workspace PATH --pane %ID [--short-description TEXT] [--branch NAME]
       [--state-file PATH]
   workbench list [--state-file PATH]
+  workbench codex-hook [--state-file PATH]         # hook JSON on stdin
+  workbench codex-notify JSON [--state-file PATH]  # completion callback
   workbench --help
 
 The TUI defaults to WORK; w (or the legacy a alias) returns there, s shows sessions.
@@ -56,6 +58,8 @@ pub(crate) enum Command {
     Register(WorkItem),
     List,
     Help,
+    CodexHook,
+    CodexNotify(String),
 }
 
 #[derive(Debug)]
@@ -92,6 +96,7 @@ pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Options,
     let mut args = args.into_iter();
     let mut command = None;
     let mut flags = BTreeMap::new();
+    let mut notification = None;
     while let Some(argument) = args.next() {
         let flag = argument
             .to_str()
@@ -103,8 +108,16 @@ pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Options,
                 command: Command::Help,
             });
         }
-        if matches!(flag, "register" | "list") && command.is_none() {
+        if matches!(flag, "register" | "list" | "codex-hook" | "codex-notify") && command.is_none()
+        {
             command = Some(flag.to_owned());
+            continue;
+        }
+        if command.as_deref() == Some("codex-notify")
+            && !flag.starts_with("--")
+            && notification.is_none()
+        {
+            notification = Some(flag.to_owned());
             continue;
         }
         if !matches!(
@@ -162,6 +175,10 @@ pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Options,
             })
         }
         Some("list") => Command::List,
+        Some("codex-hook") => Command::CodexHook,
+        Some("codex-notify") => {
+            Command::CodexNotify(notification.ok_or("Missing notification JSON.")?)
+        }
         None => Command::Run,
         _ => unreachable!("command was checked while parsing"),
     };
@@ -220,6 +237,30 @@ mod tests {
 
     fn args(text: &[&str]) -> Vec<OsString> {
         text.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn callback_commands_accept_notify_json_before_or_after_state_path() {
+        assert_eq!(
+            parse(args(&["codex-hook"])).unwrap().command,
+            Command::CodexHook
+        );
+        for argv in [
+            args(&["codex-notify", "{}", "--state-file", "/tmp/items.json"]),
+            args(&["codex-notify", "--state-file", "/tmp/items.json", "{}"]),
+        ] {
+            let parsed = parse(argv).unwrap();
+            assert_eq!(parsed.command, Command::CodexNotify("{}".into()));
+            assert_eq!(parsed.state_file, Some("/tmp/items.json".into()));
+        }
+        for argv in [
+            args(&["codex-notify"]),
+            args(&["codex-hook", "{}"]),
+            args(&["codex-notify", "{}", "{}"]),
+            args(&["codex-hook", "--diff-base", "HEAD"]),
+        ] {
+            assert!(parse(argv).is_err());
+        }
     }
 
     #[test]

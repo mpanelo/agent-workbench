@@ -47,7 +47,7 @@ pub enum AgentStatus {
     Running,
     WaitingForInput,
     Idle,
-    /// A visible agent turn finished; not proof that the work item is done.
+    /// An observed agent turn finished; not proof that the work item is done.
     Complete,
     Unknown,
 }
@@ -96,10 +96,10 @@ pub struct WorkItemState {
     /// Local observation only; never persisted and never contains terminal text.
     pub status_detail: String,
     /// Bounded visible approval context, only for a current detected input request.
-    /// Ephemeral, not a full transcript; never persisted.
+    /// Not a transcript. Opt-in signals retain only bounded pending questions.
     pub attention_prompt: Option<String>,
-    /// Opaque hash of visible completion evidence, never terminal text or a
-    /// native agent turn ID. Used only for session-local acknowledgement.
+    /// Opaque hash of completion evidence (screen or native session/turn identity).
+    /// Used only for session-local acknowledgement; never terminal text.
     pub completion_fingerprint: Option<u64>,
 }
 

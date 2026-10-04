@@ -162,6 +162,19 @@ async fn start() -> io::Result<()> {
         print!("{}", cli::HELP);
         return Ok(());
     }
+    if matches!(
+        options.command,
+        cli::Command::CodexHook | cli::Command::CodexNotify(_)
+    ) {
+        // Observational hooks must always return neutral JSON, even on failure.
+        // Never emit policy decisions, model context, or continuation requests.
+        let result = codex_callback(&options).await;
+        if let Err(error) = result {
+            eprintln!("Workbench signal ignored: {error}");
+        }
+        println!("{{}}");
+        return Ok(());
+    }
     let engine = Arc::new(Engine::new(options.state_path().map_err(io::Error::other)?));
     match options.command {
         cli::Command::Register(item) => {
@@ -200,6 +213,9 @@ async fn start() -> io::Result<()> {
         }
         cli::Command::Run => {}
         cli::Command::Help => unreachable!("help was handled above"),
+        cli::Command::CodexHook | cli::Command::CodexNotify(_) => {
+            unreachable!("callback handled above")
+        }
     }
     let mut interaction = interaction::Interaction::default();
     let mut view = ui::View::default();
@@ -222,6 +238,31 @@ async fn start() -> io::Result<()> {
             }
         }
     }
+}
+
+async fn codex_callback(options: &cli::Options) -> io::Result<()> {
+    use std::io::Read;
+    const LIMIT: usize = 128 * 1024;
+    let engine = Engine::new(options.state_path().map_err(io::Error::other)?);
+    let (payload, notification) = match &options.command {
+        cli::Command::CodexNotify(json) => (json.clone(), true),
+        _ => {
+            let mut bytes = String::new();
+            io::stdin()
+                .lock()
+                .take((LIMIT + 1) as u64)
+                .read_to_string(&mut bytes)?;
+            (bytes, false)
+        }
+    };
+    // Interrupt hooks have a short budget; never stall the agent on tmux/ps.
+    time::timeout(
+        Duration::from_millis(800),
+        engine.record_codex_signal(&payload, notification),
+    )
+    .await
+    .map_err(io::Error::other)??;
+    Ok(())
 }
 
 fn init_terminal() -> io::Result<ratatui::DefaultTerminal> {

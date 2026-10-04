@@ -7,6 +7,7 @@ mod agent_state;
 mod approvals;
 mod attention;
 mod cleanup;
+mod codex_signals;
 mod git;
 mod model;
 mod registration;
@@ -42,7 +43,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Select a local state file. No files are created until registration.
+    /// Select a local state file. Construction does not create any files.
     pub fn new(state_file: impl Into<PathBuf>) -> Self {
         Self {
             store: WorkItemStore::new(state_file.into()),

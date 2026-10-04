@@ -146,10 +146,12 @@ before retrying.
 
 ## Status and local data
 
-Automatic status detection currently recognizes the Codex CLI's visible terminal
-UI. Other agents can be registered, opened, replied to, and reviewed, but may show
-`UNKNOWN`. Detection is best-effort: scrolling, menus, or UI changes can hide the
-evidence. `TURN FINISHED` means an agent response ended, not that the task is done.
+Codex CLI supports [opt-in Workbench-owned hooks](docs/codex-hooks.md) for status
+that survives scrolling and multiline drafts. Setup is manual; existing hooks
+and notifications aren't changed automatically. Terminal detection remains the
+zero-configuration fallback and can show `UNKNOWN` when UI evidence is hidden.
+Other agents can be registered, opened, replied to, and reviewed, but may show
+`UNKNOWN`. `TURN FINISHED` means a response ended, not that the task is done.
 Acknowledgements last only for the current Workbench run.
 Acknowledging removes the attention marker, not the work item or its selection.
 

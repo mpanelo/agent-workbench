@@ -2,8 +2,9 @@
 
 ## Implemented terminal rules
 
-Workbench still observes only registered panes through tmux. Detection stays in
-`workbench-core`, separate from rendering, and replaces evidence every refresh.
+Workbench supervises only registered panes through tmux. Terminal detection stays
+in `workbench-core`, separate from rendering, as the zero-configuration fallback.
+Validated opt-in Codex lifecycle signals now take precedence over ambiguous screens.
 
 The reported September 30, 2026 layout exposed three mismatches: bulletless
 `Working (55s • esc to interrupt)`, a rate-limit banner between activity and the
@@ -52,10 +53,12 @@ The punctuated compaction detail still requires an adjacent valid compaction
 timer. Missing composers, malformed footers/timers, history without live
 activity, unsupported processes, dead panes and copy mode remain inconclusive.
 
-## Hook investigation — not implemented
+## Implemented opt-in signals
 
-Local verification: `codex-cli 0.159.3`; `codex features list` reports `hooks`
-as stable and enabled. This verifies availability, not an end-to-end callback.
+The adapter lives in `workbench-core/src/codex_signals.rs`. `workbench codex-hook`
+accepts JSON on stdin; `workbench codex-notify` accepts the appended notification
+JSON argument. Both are observational and return neutral `{}`. See
+[setup and limitations](codex-hooks.md); nothing is installed automatically.
 
 The [official hook guide](https://learn.chatgpt.com/docs/hooks) documents command
 hooks receiving JSON on stdin, session/turn identifiers, and user/project hook
@@ -69,35 +72,46 @@ The separate [notification callback](https://learn.chatgpt.com/docs/config-file/
 currently documents only `agent-turn-complete`, so `notify` alone cannot cover
 running and waiting states.
 
-## Proposed opt-in adapter
+## Interpretation
 
-This is a design recommendation, not a new milestone implementation. Keep the
-terminal adapter as the zero-configuration fallback. Add a separate local signal
-adapter in the core only after validating real callback payloads and ordering.
+Installed Codex 0.159.3 was exercised with an isolated app-server, fake localhost
+provider, and disposable configuration before implementation. Those probes covered
+valid/multiple questions, custom answers, invalid/free-text question tools, Default
+mode rejection, question interruption, approval/denial/automatic approval, delayed
+denial resolution, Stop continuation, quiet generation, prose questions, and
+unsupported async questions. A real isolated TUI probe verified that unsubmitted
+multiline drafts, scrolling and resizing don't emit turn lifecycle events.
 
-| Signal | Proposed interpretation |
+| Signal | Interpretation |
 | --- | --- |
-| `UserPromptSubmit` | Candidate active turn, correlated to the current session. |
+| `SessionStart` | Bind a live root process to session, pane and tmux server. |
+| `UserPromptSubmit` | Start the active root turn; supersede earlier turn evidence. |
+| `PreToolUse` (`request_user_input`) | Bounded question/options candidate; require matching current dialog. |
 | `PermissionRequest` | Pending approval context; confirm a visible dialog before claiming human attention. |
-| `PostToolUse` | Evidence of activity, not proof a turn is idle or finished. |
-| `Stop` / turn-complete notification | Candidate completed turn; reconcile continuation and newer activity. |
+| `PostToolUse` | Resolve matching pending questions; not proof a turn finished. |
+| `Stop` | Clear pending candidates, but stay running: continuation can reuse the turn. |
+| `agent-turn-complete` notification | Complete only the currently active matching session/turn. |
 | `Interrupt` / `SessionEnd` | Invalidate running evidence; do not imply the task succeeded. |
 
-Use a small bounded local event inbox, explicitly bind session + turn identity
-to a registered pane and tmux server, and validate any inherited `TMUX_PANE`
-rather than treating workspace paths as identity. Isolate subagent events: they
-must not complete or retarget the supervising root session. Reject delayed or
-superseded events and reconcile liveness; a lost callback or expired observation
-must not leave a pane permanently running/waiting/complete.
+The owner-only sidecar store is atomically replaced under a nonblocking lock and
+bounded to 128 process bindings. Callback entry timestamps reject out-of-order
+writes; current session/turn plus bounded retired IDs reject superseded callbacks.
+Inherited `TMUX`/`TMUX_PANE`, live server identity, pane PID, Codex ancestry, and
+process start time must agree. Workspace paths are never identity. Agent-tagged
+and subagent lifecycle events cannot complete the root turn. Signal evidence
+expires after 24 hours without a callback, not after brief quiet generation.
 
-The callback must be observational: no permission decisions, prompt context,
-continuation requests, or agent input. Return valid neutral JSON (including for
-`Stop`), keep work short, and tolerate Workbench being closed. Retain only minimal
-status metadata in private local storage; do not copy prompts, command output,
-or transcripts. No network service, LLM API, or automatic configuration changes.
+Only lifecycle metadata and bounded pending structured questions/options are
+retained. No submitted prompts, answers, assistant text, tool output, or transcripts
+are stored. No service, model API, configuration writes, or permission decisions.
+Native completion identity keeps local acknowledgements stable when viewport text
+changes. Approval sending still rechecks the full exact visible dialog separately.
 
-Before implementation, test callback trust and version compatibility, actual
-pane identity propagation, overlapping turns, multiple permissions, denial,
-continuation, interruption, subagents, delayed writes, process crashes, and restart
-recovery. `PermissionRequest` is not an approval-resolved event; a hybrid design
-still needs terminal confirmation or a validated complementary event source.
+`PermissionRequest` is not an approval-resolved event. Recognized live resumed
+activity clears a confirmed denied approval; scrolling it out of view does not.
+An invalid question may emit PreToolUse but no PostToolUse, so a candidate alone
+never establishes WAITING. `permission_mode` is not collaboration mode: real valid
+Plan-mode question callbacks can still report `default`. Stop continuation can
+emit two Stops for one turn and only one final notification. A lost notification
+may leave RUNNING until another callback, process exit, or expiry; this hybrid
+adapter does not claim full app-server request-resolution coverage.
