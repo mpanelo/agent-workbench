@@ -86,6 +86,21 @@ pub(crate) fn render_work(
             interaction.work_list_offset = interaction
                 .work_list_offset
                 .min(items.len().saturating_sub(usize::from(list.height)));
+            // Measure all registered IDs, not only visible rows, so scrolling
+            // and status changes cannot shift the columns. Reserve space for
+            // selection, two gaps and attention; share very narrow screens.
+            let available = usize::from(list.width).saturating_sub(7);
+            let id_width = items
+                .iter()
+                .map(|entry| Line::from(visible(&entry.item.id)).width())
+                .max()
+                .unwrap_or(0)
+                .min(
+                    available
+                        .saturating_sub(WORK_STATUS_WIDTH)
+                        .max(available / 3),
+                );
+            let status_width = WORK_STATUS_WIDTH.min(available.saturating_sub(id_width));
             for entry in items
                 .iter()
                 .skip(interaction.work_list_offset)
@@ -97,17 +112,13 @@ pub(crate) fn render_work(
                     format!(
                         "{}{}  ",
                         if selected { "> " } else { "  " },
-                        visible(&item.id),
+                        work_cell(&visible(&item.id), id_width),
                     ),
                     theme::accent(),
                 )];
                 heading.push(Span::styled(
-                    entry.status.to_string(),
+                    work_cell(&entry.status.to_string(), status_width),
                     theme::status(entry.status),
-                ));
-                heading.push(Span::styled(
-                    format!("  {}", work_kind_label(item.kind)),
-                    theme::work_kind(item.kind),
                 ));
                 if state
                     .attention
@@ -240,6 +251,31 @@ pub(crate) fn render_work(
         }),
         footer,
     );
+}
+
+// Keep attention in a fixed column even when no current item has the longest
+// status label. This is presentation sizing, not an agent-state decision.
+const WORK_STATUS_WIDTH: usize = 17; // WAITING_FOR_INPUT
+
+fn work_cell(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let mut cell = if Line::from(text).width() <= width {
+        text.to_owned()
+    } else {
+        let mut end = 0;
+        for (index, ch) in text.char_indices() {
+            let next = index + ch.len_utf8();
+            if Line::from(&text[..next]).width() > width - 1 {
+                break;
+            }
+            end = next;
+        }
+        format!("{}…", &text[..end])
+    };
+    cell.push_str(&" ".repeat(width.saturating_sub(Line::from(cell.as_str()).width())));
+    cell
 }
 
 /// Compact card labels only; registration, CLI flags, and persisted kinds keep
@@ -882,14 +918,14 @@ mod tests {
         let text = work_screen(&state, 320, 30, &mut 0);
         for expected in [
             "WORK • attention: 2",
-            "ABC-123  WAITING_FOR_INPUT  Build  !",
+            "ABC-123         WAITING_FOR_INPUT  !",
             "Agent requests input:",
             "$ cargo test -- λ🙂",
             "Options:",
             "› 1. Yes, proceed (y)",
             "2. Yes, and don't ask again (p)",
             "3. No, and tell Codex what to do differently (esc)",
-            "PR #1842  TURN FINISHED  Review  !",
+            "PR #1842        TURN FINISHED      !",
             "HIDDEN_UNKNOWN  UNKNOWN",
             "HIDDEN_RUNNING  RUNNING",
             "Details — ABC-123",
@@ -1063,7 +1099,7 @@ mod tests {
             let buffer = terminal.backend().buffer();
             for (text, fg, bg) in [
                 ("Type:", theme::SUBTEXT, theme::BASE),
-                (label, color, theme::SURFACE),
+                (label, color, theme::BASE),
                 ("Repository:", theme::SUBTEXT, theme::BASE),
                 ("/work/repo", theme::TEXT, theme::BASE),
                 ("Workspace:", theme::SUBTEXT, theme::BASE),
@@ -1115,8 +1151,7 @@ mod tests {
             ("› 1. Yes", theme::MAUVE, theme::BASE),
             ("$ cargo test", theme::TEAL, theme::BASE),
             ("Reason:", theme::PEACH, theme::BASE),
-            ("Build", theme::BLUE, theme::SURFACE),
-            ("Review", theme::PINK, theme::BASE),
+            ("Build", theme::BLUE, theme::BASE),
         ] {
             theme::assert_text_style(buffer, text, fg, bg);
         }
@@ -1249,7 +1284,7 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         for expected in [
-            "> C  WAITING_FOR_INPUT  Build",
+            "> C  WAITING_FOR_INPUT",
             "Reply to C",
             "yes λ🙂",
             "Send: <enter>",
@@ -1303,7 +1338,8 @@ mod tests {
             // Header + one content row + one compact shortcut row.
             let text = work_screen(&state, 80, 3, &mut 0);
             let rows: Vec<_> = text.lines().map(str::trim_end).collect();
-            assert_eq!(rows[1], format!("> ABC-123  TURN FINISHED  {label}  !"));
+            assert_eq!(rows[1], "> ABC-123  TURN FINISHED      !");
+            assert!(!rows[1].contains(label));
             assert_eq!(
                 rows[2],
                 "Approve once: y | Reject and reply: n | Edit: e | Unregister: u | … | Help: ?"
@@ -1494,6 +1530,129 @@ mod tests {
     }
 
     #[test]
+    fn compact_work_columns_align_mixed_id_widths_statuses_and_attention() {
+        let items = [
+            ("nvim", AgentStatus::Complete),
+            ("workbench", AgentStatus::WaitingForInput),
+            ("界🙂e\u{301}", AgentStatus::Complete),
+        ]
+        .into_iter()
+        .map(|(id, status)| {
+            let mut item = registered(PaneAvailability::Present, WorkItemKind::Implementation);
+            item.item.id = id.into();
+            item.status = status;
+            item
+        })
+        .collect();
+        let state = AppState::from_refresh(Ok(snapshot()), Ok(items));
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let mut interaction = Interaction {
+            selected_id: Some("workbench".into()),
+            ..Interaction::default()
+        };
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        for (index, status) in ["TURN FINISHED", "WAITING_FOR_INPUT", "TURN FINISHED"]
+            .into_iter()
+            .enumerate()
+        {
+            let row = &terminal.backend().buffer().content()[(index + 1) * 80..(index + 2) * 80];
+            assert_eq!(
+                row.iter().position(|cell| cell.symbol() == &status[..1]),
+                Some(13)
+            ); // prefix + longest ID + gap
+            assert_eq!(row.iter().position(|cell| cell.symbol() == "!"), Some(32));
+            let text: String = row.iter().map(|cell| cell.symbol()).collect();
+            assert!(!text.contains("Build"));
+            assert!(!text.contains("Review"));
+        }
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Type: Build"));
+        assert_eq!(interaction.selected_id.as_deref(), Some("workbench"));
+    }
+
+    #[test]
+    fn work_cells_pad_and_truncate_by_display_width_not_bytes_or_characters() {
+        for (text, width, expected) in [
+            ("nvim", 9, "nvim     "),
+            ("界🙂", 6, "界🙂  "),
+            ("界🙂long", 5, "界🙂…"),
+            ("界🙂long", 4, "界… "),
+            ("e\u{301}", 3, "e\u{301}  "),
+            ("abcdef", 1, "…"),
+            ("abcdef", 0, ""),
+        ] {
+            assert_eq!(work_cell(text, width), expected);
+            assert_eq!(Line::from(work_cell(text, width)).width(), width);
+        }
+        for status in [
+            AgentStatus::Running,
+            AgentStatus::WaitingForInput,
+            AgentStatus::Idle,
+            AgentStatus::Complete,
+            AgentStatus::Unknown,
+        ] {
+            assert!(Line::from(status.to_string()).width() <= WORK_STATUS_WIDTH);
+        }
+    }
+
+    #[test]
+    fn long_ids_fit_without_hiding_status_and_columns_stay_fixed_while_scrolling() {
+        let long_id = "long-task-".repeat(10);
+        let items = ["nvim", "workbench", "third", long_id.as_str()]
+            .into_iter()
+            .map(|id| {
+                let mut item = registered(PaneAvailability::Present, WorkItemKind::ExternalReview);
+                item.item.id = id.into();
+                item.status = AgentStatus::WaitingForInput;
+                item
+            })
+            .collect();
+        let state = AppState::from_refresh(Ok(snapshot()), Ok(items));
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut interaction = Interaction {
+            selected_id: Some("nvim".into()),
+            ..Interaction::default()
+        };
+        let mut status_column = None;
+        for id in ["nvim", "workbench", long_id.as_str()] {
+            interaction.selected_id = Some(id.into());
+            terminal
+                .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+                .unwrap();
+            let row = terminal
+                .backend()
+                .buffer()
+                .content()
+                .chunks(40)
+                .find(|row| row[0].symbol() == ">")
+                .unwrap();
+            let column = row.iter().position(|cell| cell.symbol() == "W").unwrap();
+            assert_eq!(*status_column.get_or_insert(column), column);
+            let text: String = row.iter().map(|cell| cell.symbol()).collect();
+            assert!(text.contains("WAITING_FOR_INPUT"));
+            assert!(text.contains('!'));
+            if id == long_id {
+                assert!(text.contains('…'));
+            }
+        }
+        assert_eq!(state.items()[3].item.id, long_id);
+        for (width, height) in [(0, 0), (1, 1), (10, 8), (20, 10)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+                .unwrap();
+        }
+    }
+
+    #[test]
     fn detail_scrolling_is_independent_of_the_list_and_resets_only_for_a_new_item() {
         let items = ["A", "B"]
             .into_iter()
@@ -1577,7 +1736,7 @@ mod tests {
                 .map(|cell| cell.symbol())
                 .collect()
         };
-        assert!(row(&terminal).contains("Build  !"));
+        assert!(row(&terminal).contains("TURN FINISHED      !"));
         interaction.acknowledgement_requested = Some(
             interaction
                 .attention_tracker
@@ -1588,7 +1747,7 @@ mod tests {
         terminal
             .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
             .unwrap();
-        assert!(row(&terminal).starts_with("> ABC-123  TURN FINISHED  Build"));
+        assert!(row(&terminal).starts_with("> ABC-123  TURN FINISHED"));
         assert!(!row(&terminal).contains('!'));
         assert_eq!(interaction.selected_id.as_deref(), Some("ABC-123"));
         assert_eq!(state.items().len(), 1);

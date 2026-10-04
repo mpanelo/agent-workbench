@@ -44,8 +44,9 @@ session icons. Workmux is optional unless you want workspace cleanup.
 4. Confirm the Work ID and Short Description, then press `<enter>` to save.
 5. Return to WORK with `w` to supervise your registered agents.
 
-WORK keeps a compact list in registration order and shows details for the selected
-item separately. `!` marks items needing attention; `Tab` jumps to the next one.
+WORK keeps an aligned ID/status list in registration order and shows details,
+including work type, for the selected item separately. `!` marks items needing
+attention; `Tab` jumps to the next one.
 Status changes and expanding prompts don't reorder the list or change selection.
 Use `<c-d>` / `<c-u>` to scroll the selected item's details. The old `a` shortcut
 also returns to WORK.
