@@ -15,7 +15,6 @@ use crate::theme;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum View {
     #[default]
-    Attention,
     Work,
     Sessions,
 }
@@ -32,25 +31,6 @@ pub(crate) fn render_work(
     scroll: &mut u16,
     interaction: &mut Interaction,
 ) {
-    render_items(frame, state, scroll, interaction, View::Work);
-}
-
-pub(crate) fn render_attention(
-    frame: &mut Frame<'_>,
-    state: &AppState,
-    scroll: &mut u16,
-    interaction: &mut Interaction,
-) {
-    render_items(frame, state, scroll, interaction, View::Attention);
-}
-
-fn render_items(
-    frame: &mut Frame<'_>,
-    state: &AppState,
-    scroll: &mut u16,
-    interaction: &mut Interaction,
-    view: View,
-) {
     theme::paint(frame);
     let [header, body, notice, composer, footer] = Layout::vertical([
         Constraint::Length(1),
@@ -65,24 +45,9 @@ fn render_items(
         Some(Err(_)) => "unavailable".into(),
         Some(Ok(_)) => state.attention.len().to_string(),
     };
-    let title = if view == View::Attention {
-        format!("AGENT WORKBENCH — ATTENTION — {count}")
-    } else {
-        format!("AGENT WORKBENCH — WORK • attention: {count} (a)")
-    };
+    let title = format!("AGENT WORKBENCH — WORK • attention: {count}");
     frame.render_widget(Paragraph::new(title).style(theme::header()), header);
     let mut lines = Vec::new();
-    let mut selected_row = None;
-    if let Some(Err(error)) = &state.discovery {
-        lines.push(Line::styled(
-            format!("Discovery unavailable: {}", visible(error)),
-            theme::error(),
-        ));
-        lines.push(Line::from(
-            "Saved items remain registered. Retrying automatically every 2 seconds.",
-        ));
-        lines.push(Line::from(""));
-    }
     match &state.work_items {
         None => lines.push(Line::from("Loading work items…")),
         Some(Err(error)) => {
@@ -101,27 +66,33 @@ fn render_items(
             ));
         }
         Some(Ok(items)) => {
-            if view == View::Attention {
-                let unknown = items
-                    .iter()
-                    .filter(|item| item.status == workbench_core::AgentStatus::Unknown)
-                    .count();
-                if state.attention.is_empty() {
-                    lines.push(Line::from("No known items need attention."));
+            // Each item always occupies exactly one row. Prompts, errors and
+            // metadata live in a separate viewport and cannot move list rows.
+            let list_height = items.len().min(usize::from((body.height / 3).max(1))) as u16;
+            let [list, details] =
+                Layout::vertical([Constraint::Length(list_height), Constraint::Min(0)]).areas(body);
+            if let Some(index) = items
+                .iter()
+                .position(|state| interaction.selected_id.as_ref() == Some(&state.item.id))
+            {
+                if index < interaction.work_list_offset {
+                    interaction.work_list_offset = index;
                 }
-                if unknown > 0 {
-                    lines.push(Line::from(format!("{unknown} UNKNOWN item(s) are unclassified, not assumed idle. Press w to inspect all items.")));
-                }
-                if state.attention.is_empty() || unknown > 0 {
-                    lines.push(Line::from(""));
+                if index >= interaction.work_list_offset + usize::from(list.height) {
+                    interaction.work_list_offset =
+                        index.saturating_sub(usize::from(list.height.saturating_sub(1)));
                 }
             }
-            for state in state.items_for(view) {
-                let item = &state.item;
+            interaction.work_list_offset = interaction
+                .work_list_offset
+                .min(items.len().saturating_sub(usize::from(list.height)));
+            for entry in items
+                .iter()
+                .skip(interaction.work_list_offset)
+                .take(usize::from(list.height))
+            {
+                let item = &entry.item;
                 let selected = interaction.selected_id.as_ref() == Some(&item.id);
-                if selected {
-                    selected_row = Some(lines.len());
-                }
                 let mut heading = vec![Span::styled(
                     format!(
                         "{}{}  ",
@@ -130,99 +101,109 @@ fn render_items(
                     ),
                     theme::accent(),
                 )];
-                if view == View::Attention {
-                    heading.push(Span::styled(
-                        format!("{}  ", work_kind_label(item.kind)),
-                        theme::work_kind(item.kind),
-                    ));
-                }
                 heading.push(Span::styled(
-                    state.status.to_string(),
-                    theme::status(state.status),
+                    entry.status.to_string(),
+                    theme::status(entry.status),
                 ));
-                lines.push(selectable_line(Line::from(heading), selected, body.width));
-                if view == View::Work {
-                    lines.push(Line::styled(
-                        format!("  {}", visible(&item.title)),
-                        theme::text(),
-                    ));
-                    lines.push(Line::styled(
-                        format!("  Status: {}", visible(&state.status_detail)),
-                        theme::muted(),
-                    ));
-                }
-                if (view == View::Attention || selected)
-                    && state.status == workbench_core::AgentStatus::WaitingForInput
+                heading.push(Span::styled(
+                    format!("  {}", work_kind_label(item.kind)),
+                    theme::work_kind(item.kind),
+                ));
+                if state
+                    .attention
+                    .iter()
+                    .any(|attention| attention.item.id == item.id)
                 {
+                    heading.push(Span::styled("  !", theme::notice()));
+                }
+                lines.push(selectable_line(Line::from(heading), selected, list.width));
+            }
+            frame.render_widget(Paragraph::new(std::mem::take(&mut lines)), list);
+            let selected = interaction.selected(items);
+            let selected_id = selected.map(|state| state.item.id.clone());
+            if interaction.detail_item_id != selected_id {
+                *scroll = 0;
+                interaction.detail_item_id = selected_id;
+            }
+            let block = Block::bordered()
+                .title(selected.map_or_else(
+                    || "Details".into(),
+                    |state| format!("Details — {}", visible(&state.item.id)),
+                ))
+                .border_style(theme::border(true))
+                .title_style(theme::accent());
+            let inner = block.inner(details);
+            frame.render_widget(block, details);
+            if let Some(Err(error)) = &state.discovery {
+                lines.push(Line::styled(
+                    format!("Discovery unavailable: {}", visible(error)),
+                    theme::error(),
+                ));
+                lines.push(Line::from(
+                    "Saved items remain registered. Retrying automatically every 2 seconds.",
+                ));
+            }
+            if let Some(state) = selected {
+                let item = &state.item;
+                lines.push(Line::styled(visible(&item.title), theme::text()));
+                lines.push(metadata(
+                    "Type",
+                    work_kind_label(item.kind),
+                    theme::work_kind(item.kind),
+                ));
+                if state.status != workbench_core::AgentStatus::Complete {
+                    lines.push(metadata("Status", &state.status_detail, theme::muted()));
+                }
+                match state.pane {
+                    workbench_core::PaneAvailability::Present => {}
+                    workbench_core::PaneAvailability::Missing => {
+                        lines.push(Line::styled("  Agent pane missing.", theme::notice()))
+                    }
+                    workbench_core::PaneAvailability::Unavailable => {
+                        lines.push(Line::styled("  Agent pane unavailable.", theme::notice()))
+                    }
+                }
+                lines.push(metadata(
+                    "Repository",
+                    &display_path(&item.repository),
+                    theme::path(),
+                ));
+                lines.push(metadata(
+                    "Workspace",
+                    &display_path(&item.workspace),
+                    theme::path(),
+                ));
+                if let Some(branch) = &item.branch {
+                    lines.push(metadata("Branch", branch, theme::muted()));
+                }
+                if state.status == workbench_core::AgentStatus::WaitingForInput {
+                    lines.push(Line::from(""));
                     lines.push(Line::styled("  Agent requests input:", theme::notice()));
                     if let Some(prompt) = &state.attention_prompt {
-                        push_prompt(&mut lines, prompt, body.width);
+                        push_prompt(&mut lines, prompt, inner.width);
                     } else {
                         lines.push(Line::from(format!("  {}", visible(&state.status_detail))));
                     }
                 }
-                if view == View::Work {
-                    lines.push(metadata(
-                        "Type",
-                        work_kind_label(item.kind),
-                        theme::work_kind(item.kind),
-                    ));
-                    let warning = match state.pane {
-                        workbench_core::PaneAvailability::Present => None,
-                        workbench_core::PaneAvailability::Missing => Some("  Agent pane missing."),
-                        workbench_core::PaneAvailability::Unavailable => {
-                            Some("  Agent pane unavailable.")
-                        }
-                    };
-                    if let Some(warning) = warning {
-                        lines.push(Line::styled(warning, theme::notice()));
-                    }
-                }
-                if view == View::Work {
-                    lines.push(metadata(
-                        "Repository",
-                        &display_path(&item.repository),
-                        theme::path(),
-                    ));
-                }
-                if view == View::Work {
-                    lines.push(metadata(
-                        "Workspace",
-                        &display_path(&item.workspace),
-                        theme::path(),
-                    ));
-                }
-                if view == View::Work
-                    && let Some(branch) = &item.branch
-                {
-                    lines.push(metadata("Branch", branch, theme::muted()));
-                }
-                if view == View::Work
-                    || state.status == workbench_core::AgentStatus::WaitingForInput
-                {
-                    lines.push(Line::from(""));
-                }
+            } else {
+                lines.push(Line::from("Select a work item to inspect its details."));
             }
+            let max_scroll = lines
+                .len()
+                .saturating_sub(usize::from(inner.height))
+                .min(usize::from(u16::MAX)) as u16;
+            *scroll = (*scroll).min(max_scroll);
+            frame.render_widget(
+                Paragraph::new(std::mem::take(&mut lines)).scroll((*scroll, 0)),
+                inner,
+            );
         }
     }
-    let max_scroll = lines
-        .len()
-        .saturating_sub(body.height as usize)
-        .min(u16::MAX as usize) as u16;
-    if interaction.reveal_selection {
-        if let Some(row) = selected_row {
-            let row = row.min(u16::MAX as usize) as u16;
-            if row < *scroll {
-                *scroll = row;
-            }
-            if row >= scroll.saturating_add(body.height) {
-                *scroll = row.saturating_sub(body.height.saturating_sub(1));
-            }
-        }
-        interaction.reveal_selection = false;
+    if !lines.is_empty() {
+        frame.render_widget(Paragraph::new(lines), body);
+        *scroll = 0;
     }
-    *scroll = (*scroll).min(max_scroll);
-    frame.render_widget(Paragraph::new(lines).scroll((*scroll, 0)), body);
+    interaction.reveal_selection = false;
     if let Some(message) = &interaction.message {
         frame.render_widget(
             Paragraph::new(visible(message))
@@ -255,7 +236,7 @@ fn render_items(
         theme::footer(if interaction.draft.is_some() {
             crate::help::Context::Reply.hints()
         } else {
-            crate::help::Context::view(view, false).hints()
+            crate::help::Context::Work.hints()
         }),
         footer,
     );
@@ -798,25 +779,11 @@ mod tests {
     }
 
     fn work_screen(state: &AppState, width: u16, height: u16, scroll: &mut u16) -> String {
-        item_screen(state, width, height, scroll, View::Work)
-    }
-
-    fn attention_screen(state: &AppState, width: u16, height: u16, scroll: &mut u16) -> String {
-        item_screen(state, width, height, scroll, View::Attention)
-    }
-
-    fn item_screen(
-        state: &AppState,
-        width: u16,
-        height: u16,
-        scroll: &mut u16,
-        view: View,
-    ) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut interaction = Interaction::default();
-        interaction.sync(state.items_for(view));
+        interaction.sync(state.items());
         terminal
-            .draw(|frame| render_items(frame, state, scroll, &mut interaction, view))
+            .draw(|frame| render_work(frame, state, scroll, &mut interaction))
             .unwrap();
         terminal
             .backend()
@@ -884,32 +851,21 @@ mod tests {
     #[test]
     fn shortcut_footers_use_one_row_with_overflow_and_help_at_80_columns() {
         let state = AppState::default();
-        for view in [View::Attention, View::Work] {
-            let text = item_screen(&state, 80, 10, &mut 0, view);
-            let maintenance = "Edit: e | Unregister: u | Clean up: c | Views: a/w/s | Quit: q";
-            if view == View::Work {
-                assert_eq!(
-                    text.lines().last().unwrap().trim_end(),
-                    format!("{maintenance} | … | Help: ?")
-                );
-            } else {
-                assert!(!text.contains(maintenance));
-                assert_eq!(
-                    text.lines().last().unwrap().trim_end(),
-                    "Approve once: y | Reject and reply: n | … | Help: ?"
-                );
-            }
-            assert_eq!(text.lines().nth(8).unwrap().trim_end(), "");
-        }
+        let text = work_screen(&state, 80, 10, &mut 0);
+        assert_eq!(
+            text.lines().last().unwrap().trim_end(),
+            "Approve once: y | Reject and reply: n | Edit: e | Unregister: u | … | Help: ?"
+        );
+        assert_eq!(text.lines().nth(8).unwrap().trim_end(), "");
         let text = screen(None, 80, 10, &mut 0);
         assert_eq!(
             text.lines().last().unwrap().trim_end(),
-            "Agents only: f | Views: a/w/s | Quit: q | Select: j/k | … | Help: ?"
+            "Agents only: f | Views: w/s | Quit: q | Select: j/k | … | Help: ?"
         );
     }
 
     #[test]
-    fn attention_shows_only_queue_items_with_prompt_context_and_compact_completion() {
+    fn unified_work_shows_every_item_attention_flags_and_selected_details() {
         let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         waiting.status = AgentStatus::WaitingForInput;
         waiting.attention_prompt = Some("Would you like to run the following command?\n$ cargo test -- λ🙂\n\nOptions:\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n  3. No, and tell Codex what to do differently (esc)".into());
@@ -923,26 +879,26 @@ mod tests {
         running.status = AgentStatus::Running;
         let state =
             AppState::from_refresh(Ok(snapshot()), Ok(vec![waiting, complete, hidden, running]));
-        let text = attention_screen(&state, 240, 30, &mut 0);
+        let text = work_screen(&state, 320, 30, &mut 0);
         for expected in [
-            "ATTENTION — 2",
-            "ABC-123  Build  WAITING_FOR_INPUT",
+            "WORK • attention: 2",
+            "ABC-123  WAITING_FOR_INPUT  Build  !",
             "Agent requests input:",
             "$ cargo test -- λ🙂",
             "Options:",
             "› 1. Yes, proceed (y)",
             "2. Yes, and don't ask again (p)",
             "3. No, and tell Codex what to do differently (esc)",
-            "PR #1842  Review  TURN FINISHED",
-            "1 UNKNOWN item(s)",
+            "PR #1842  TURN FINISHED  Review  !",
+            "HIDDEN_UNKNOWN  UNKNOWN",
+            "HIDDEN_RUNNING  RUNNING",
+            "Details — ABC-123",
             "Open: <enter>",
             "Reply: r",
             "Help: ?",
         ] {
             assert!(text.contains(expected), "missing {expected:?}: {text}");
         }
-        assert!(!text.contains("HIDDEN_UNKNOWN"));
-        assert!(!text.contains("HIDDEN_RUNNING"));
         for metadata in [
             "Fix retries",
             "Type:",
@@ -950,7 +906,7 @@ mod tests {
             "Repository:",
             "Branch:",
         ] {
-            assert!(!text.contains(metadata), "{text}");
+            assert!(text.contains(metadata), "{text}");
         }
         assert!(!text.contains("Agent turn completed."), "{text}");
         assert!(
@@ -967,10 +923,10 @@ mod tests {
                 .all(|item| item.item.pane_id == "%14")
         );
         let work = work_screen(&state, 120, 35, &mut 0);
-        assert!(work.contains("attention: 2 (a)"));
+        assert!(work.contains("attention: 2"));
         assert!(work.contains("Options:"));
         assert!(work.contains("› 1. Yes, proceed (y)"));
-        let narrow = attention_screen(&state, 80, 24, &mut 0);
+        let narrow = work_screen(&state, 80, 24, &mut 0);
         for hint in ["Approve once: y", "Reject and reply: n", "Help: ?"] {
             assert!(narrow.contains(hint));
         }
@@ -985,8 +941,11 @@ mod tests {
             "Preserve signing settings for future commits. λ🙂 ".repeat(20)
         ));
         let state = AppState::from_refresh(Ok(snapshot()), Ok(vec![waiting]));
-        let text = attention_screen(&state, 80, 45, &mut 0);
-        let compact: String = text.chars().filter(|ch| !ch.is_whitespace()).collect();
+        let text = work_screen(&state, 80, 45, &mut 0);
+        let compact: String = text
+            .chars()
+            .filter(|ch| !ch.is_whitespace() && *ch != '│')
+            .collect();
         assert!(compact.contains("END-OF-REASON"), "{text}");
         assert!(
             compact
@@ -1002,10 +961,10 @@ mod tests {
         interaction.sync(&state.attention);
         let mut scroll = 0;
         let mut pages = String::new();
-        let mut view = View::Attention;
+        let mut view = View::Work;
         for _ in 0..20 {
             terminal
-                .draw(|frame| render_attention(frame, &state, &mut scroll, &mut interaction))
+                .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
                 .unwrap();
             pages.extend(
                 terminal
@@ -1048,9 +1007,9 @@ mod tests {
         }).collect();
         let state = AppState::from_refresh(Ok(snapshot()), Ok(states));
         let mut interaction = Interaction::default();
-        interaction.sync(state.items_for(View::Work));
-        interaction.move_selection(state.items_for(View::Work), 1);
-        interaction.begin_reply(state.items_for(View::Work));
+        interaction.sync(state.items());
+        interaction.move_selection(state.items(), 1);
+        interaction.begin_reply(state.items());
         interaction.draft.as_mut().unwrap().insert("y").unwrap();
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
         terminal
@@ -1104,7 +1063,7 @@ mod tests {
             let buffer = terminal.backend().buffer();
             for (text, fg, bg) in [
                 ("Type:", theme::SUBTEXT, theme::BASE),
-                (label, color, theme::BASE),
+                (label, color, theme::SURFACE),
                 ("Repository:", theme::SUBTEXT, theme::BASE),
                 ("/work/repo", theme::TEXT, theme::BASE),
                 ("Workspace:", theme::SUBTEXT, theme::BASE),
@@ -1144,7 +1103,7 @@ mod tests {
         interaction.sync(&state.attention);
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
         terminal
-            .draw(|frame| render_attention(frame, &state, &mut 0, &mut interaction))
+            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
             .unwrap();
         let buffer = terminal.backend().buffer();
         for (text, fg, bg) in [
@@ -1198,12 +1157,10 @@ mod tests {
     }
 
     #[test]
-    fn attention_loading_empty_unknown_and_errors_do_not_claim_every_agent_is_idle() {
-        assert!(
-            attention_screen(&AppState::default(), 120, 12, &mut 0).contains("Loading work items")
-        );
+    fn work_loading_empty_unknown_and_errors_do_not_claim_every_agent_is_idle() {
+        assert!(work_screen(&AppState::default(), 120, 12, &mut 0).contains("Loading work items"));
         let empty = AppState::from_refresh(Ok(Snapshot::default()), Ok(vec![]));
-        assert!(attention_screen(&empty, 120, 12, &mut 0).contains("No work items registered"));
+        assert!(work_screen(&empty, 120, 12, &mut 0).contains("No work items registered"));
         let unknown = AppState::from_refresh(
             Err("tmux unreachable".into()),
             Ok(vec![registered(
@@ -1211,24 +1168,23 @@ mod tests {
                 WorkItemKind::Implementation,
             )]),
         );
-        let text = attention_screen(&unknown, 120, 15, &mut 0);
+        let text = work_screen(&unknown, 120, 15, &mut 0);
         for expected in [
-            "ATTENTION — 0",
+            "WORK • attention: 0",
             "Discovery unavailable",
-            "No known items need attention",
-            "unclassified, not assumed idle",
-            "Press w",
+            "ABC-123  UNKNOWN",
+            "Agent pane unavailable",
         ] {
             assert!(text.contains(expected), "{text}");
         }
         let error =
             AppState::from_refresh(Ok(snapshot()), Err("unsupported schema version".into()));
-        let text = attention_screen(&error, 120, 12, &mut 0);
-        assert!(text.contains("ATTENTION — unavailable"));
+        let text = work_screen(&error, 120, 12, &mut 0);
+        assert!(text.contains("WORK • attention: unavailable"));
         assert!(text.contains("unsupported schema version"));
         assert!(!text.contains("No known items need attention"));
         let mut scroll = u16::MAX;
-        attention_screen(&error, 1, 1, &mut scroll);
+        work_screen(&error, 1, 1, &mut scroll);
     }
 
     #[test]
@@ -1257,7 +1213,7 @@ mod tests {
     }
 
     #[test]
-    fn attention_selection_and_reply_editor_work_in_small_viewports() {
+    fn work_selection_and_reply_editor_work_in_small_viewports() {
         let states = ["A", "B", "C"]
             .into_iter()
             .map(|id| {
@@ -1283,7 +1239,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
         let mut scroll = 0;
         terminal
-            .draw(|frame| render_attention(frame, &state, &mut scroll, &mut interaction))
+            .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
             .unwrap();
         let text: String = terminal
             .backend()
@@ -1293,17 +1249,17 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         for expected in [
-            "> C  Build  WAITING_FOR_INPUT",
+            "> C  WAITING_FOR_INPUT  Build",
             "Reply to C",
             "yes λ🙂",
             "Send: <enter>",
         ] {
             assert!(text.contains(expected), "{text}");
         }
-        assert!(scroll > 0);
+        assert!(interaction.work_list_offset > 0);
         let mut terminal = Terminal::new(TestBackend::new(1, 1)).unwrap();
         terminal
-            .draw(|frame| render_attention(frame, &state, &mut scroll, &mut interaction))
+            .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
             .unwrap();
     }
 
@@ -1326,15 +1282,16 @@ mod tests {
             };
             let text = work_screen(&state, 100, 15, &mut 0);
             assert!(text.contains(&status.to_string()), "{text}");
-            assert!(
+            assert_eq!(
                 text.contains("Observed locally; task completion unverified."),
+                status != AgentStatus::Complete,
                 "{text}"
             );
         }
     }
 
     #[test]
-    fn finished_attention_items_fit_one_row_and_keep_work_details_and_storage_unchanged() {
+    fn finished_work_items_fit_one_row_and_keep_details_and_storage_unchanged() {
         for (kind, label, full_name) in [
             (WorkItemKind::Implementation, "Build", "Implementation"),
             (WorkItemKind::ExternalReview, "Review", "External Review"),
@@ -1344,12 +1301,12 @@ mod tests {
             let original = finished.clone();
             let state = AppState::from_refresh(Ok(snapshot()), Ok(vec![finished]));
             // Header + one content row + one compact shortcut row.
-            let text = attention_screen(&state, 80, 3, &mut 0);
+            let text = work_screen(&state, 80, 3, &mut 0);
             let rows: Vec<_> = text.lines().map(str::trim_end).collect();
-            assert_eq!(rows[1], format!("> ABC-123  {label}  TURN FINISHED"));
+            assert_eq!(rows[1], format!("> ABC-123  TURN FINISHED  {label}  !"));
             assert_eq!(
                 rows[2],
-                "Approve once: y | Reject and reply: n | … | Help: ?"
+                "Approve once: y | Reject and reply: n | Edit: e | Unregister: u | … | Help: ?"
             );
             assert_eq!(state.items(), std::slice::from_ref(&original));
             assert_eq!(state.items()[0].item.kind.to_string(), full_name);
@@ -1473,7 +1430,169 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(text.contains("> C  UNKNOWN"));
-        assert!(scroll > 0);
+        assert!(interaction.work_list_offset > 0);
+    }
+
+    #[test]
+    fn status_and_prompt_changes_never_move_list_rows_or_change_selection() {
+        let items = ["A", "B", "C", "D", "E", "F"]
+            .into_iter()
+            .map(|id| {
+                let mut item = registered(PaneAvailability::Present, WorkItemKind::Implementation);
+                item.item.id = id.into();
+                item.status = AgentStatus::Running;
+                item
+            })
+            .collect();
+        let mut state = AppState::from_refresh(Ok(snapshot()), Ok(items));
+        let mut interaction = Interaction {
+            selected_id: Some("F".into()),
+            ..Interaction::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 14)).unwrap();
+        let mut scroll = 0;
+        let mut initial_row = None;
+        let mut initial_offset = None;
+        for status in [
+            AgentStatus::Running,
+            AgentStatus::WaitingForInput,
+            AgentStatus::Complete,
+            AgentStatus::Unknown,
+            AgentStatus::Running,
+        ] {
+            if let Some(Ok(items)) = &mut state.work_items {
+                items[0].status = AgentStatus::WaitingForInput;
+                items[0].attention_prompt = Some("UNSELECTED PROMPT".repeat(500));
+                items[5].status = status;
+                items[5].attention_prompt = Some("SELECTED PROMPT\n".repeat(200));
+            }
+            state.refresh_attention(&mut interaction.attention_tracker);
+            state.sync_selection(&mut interaction);
+            terminal
+                .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
+                .unwrap();
+            let rows: Vec<String> = terminal
+                .backend()
+                .buffer()
+                .content()
+                .chunks(80)
+                .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+                .collect();
+            let selected_row = rows
+                .iter()
+                .position(|row| row.starts_with("> F  "))
+                .unwrap();
+            assert_eq!(*initial_row.get_or_insert(selected_row), selected_row);
+            assert_eq!(
+                *initial_offset.get_or_insert(interaction.work_list_offset),
+                interaction.work_list_offset
+            );
+            assert!(rows.iter().any(|row| row.contains("Details — F")));
+            assert!(!rows.iter().any(|row| row.contains("UNSELECTED PROMPT")));
+            assert_eq!(interaction.selected_id.as_deref(), Some("F"));
+        }
+    }
+
+    #[test]
+    fn detail_scrolling_is_independent_of_the_list_and_resets_only_for_a_new_item() {
+        let items = ["A", "B"]
+            .into_iter()
+            .map(|id| {
+                let mut item = registered(PaneAvailability::Present, WorkItemKind::Implementation);
+                item.item.id = id.into();
+                item.status = AgentStatus::WaitingForInput;
+                item.attention_prompt = Some(format!("PROMPT FOR {id}\n").repeat(200));
+                item
+            })
+            .collect();
+        let state = AppState::from_refresh(Ok(snapshot()), Ok(items));
+        let mut interaction = Interaction {
+            selected_id: Some("B".into()),
+            ..Interaction::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
+        let mut scroll = 0;
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
+            .unwrap();
+        scroll = 10;
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
+            .unwrap();
+        assert_eq!(scroll, 10);
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("> B  WAITING_FOR_INPUT"));
+        assert!(text.contains("Details — B"));
+        assert!(text.contains("PROMPT FOR B"));
+        let mut updated = state.clone();
+        if let Some(Ok(items)) = &mut updated.work_items {
+            items[1]
+                .attention_prompt
+                .as_mut()
+                .unwrap()
+                .push_str("NEW OPTION\n");
+        }
+        updated.sync_selection(&mut interaction);
+        terminal
+            .draw(|frame| render_work(frame, &updated, &mut scroll, &mut interaction))
+            .unwrap();
+        assert_eq!(scroll, 10);
+        interaction.move_selection(state.items(), -1);
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
+            .unwrap();
+        assert_eq!(scroll, 0);
+        assert_eq!(interaction.selected_id.as_deref(), Some("A"));
+        assert_eq!(interaction.detail_item_id.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn acknowledgement_only_removes_attention_marker_not_the_selected_row() {
+        let mut item = registered(PaneAvailability::Present, WorkItemKind::Implementation);
+        item.status = AgentStatus::Complete;
+        item.completion_fingerprint = Some(42);
+        let mut state = AppState::from_refresh(Ok(snapshot()), Ok(vec![item]));
+        let mut interaction = Interaction::default();
+        state.refresh_attention(&mut interaction.attention_tracker);
+        state.sync_selection(&mut interaction);
+        let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        let row = |terminal: &Terminal<TestBackend>| -> String {
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .chunks(80)
+                .nth(1)
+                .unwrap()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect()
+        };
+        assert!(row(&terminal).contains("Build  !"));
+        interaction.acknowledgement_requested = Some(
+            interaction
+                .attention_tracker
+                .capture(&state.items()[0])
+                .unwrap(),
+        );
+        state.apply_acknowledgement(&mut interaction);
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        assert!(row(&terminal).starts_with("> ABC-123  TURN FINISHED  Build"));
+        assert!(!row(&terminal).contains('!'));
+        assert_eq!(interaction.selected_id.as_deref(), Some("ABC-123"));
+        assert_eq!(state.items().len(), 1);
+        assert!(state.attention.is_empty());
     }
 
     #[test]

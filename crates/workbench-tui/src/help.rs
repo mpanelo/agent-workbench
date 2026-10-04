@@ -12,7 +12,6 @@ use crate::{theme, ui::View};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Context {
     Work,
-    Attention,
     Sessions { all: bool },
     Review,
     Reply,
@@ -26,7 +25,6 @@ impl Context {
     pub fn view(view: View, all: bool) -> Self {
         match view {
             View::Work => Self::Work,
-            View::Attention => Self::Attention,
             View::Sessions => Self::Sessions { all },
         }
     }
@@ -38,7 +36,6 @@ impl Context {
     pub fn title(self) -> &'static str {
         match self {
             Self::Work => "WORK",
-            Self::Attention => "ATTENTION",
             Self::Sessions { .. } => "SESSIONS",
             Self::Review => "REVIEW",
             Self::Reply => "REPLY",
@@ -54,16 +51,13 @@ impl Context {
     pub fn hints(self) -> &'static str {
         match self {
             Self::Work => {
-                "Edit: e | Unregister: u | Clean up: c | Views: a/w/s | Quit: q | Select: j/k | Open: <enter> | Reply: r | Review: d | Scroll: <c-d>/<c-u> | Help: ?"
-            }
-            Self::Attention => {
-                "Approve once: y | Reject and reply: n | Acknowledge finished turn: x | Views: a/w/s | Quit: q | Select: j/k | Open: <enter> | Reply: r | Review: d | Scroll: <c-d>/<c-u> | Help: ?"
+                "Approve once: y | Reject and reply: n | Edit: e | Unregister: u | Clean up: c | Acknowledge finished turn: x | Views: w/s | Quit: q | Select: j/k | Open: <enter> | Reply: r | Review: d | Scroll details: <c-d>/<c-u> | Help: ?"
             }
             Self::Sessions { all: false } => {
-                "All panes: f | Views: a/w/s | Quit: q | Select: j/k | Register: <enter>/r | Scroll: <c-d>/<c-u> | Help: ?"
+                "All panes: f | Views: w/s | Quit: q | Select: j/k | Register: <enter>/r | Scroll: <c-d>/<c-u> | Help: ?"
             }
             Self::Sessions { all: true } => {
-                "Agents only: f | Views: a/w/s | Quit: q | Select: j/k | Register: <enter>/r | Scroll: <c-d>/<c-u> | Help: ?"
+                "Agents only: f | Views: w/s | Quit: q | Select: j/k | Register: <enter>/r | Scroll: <c-d>/<c-u> | Help: ?"
             }
             Self::Review => {
                 "Select: j/k | Toggle mark: Space | Scroll: <c-d>/<c-u> | Pan: h/l | Reload: r | Full/since: c | Pending: Tab | Back: Esc | Quit: q | Help: ?"
@@ -91,18 +85,16 @@ impl Context {
             .map(theme::shortcut_line)
             .collect();
         let extras: &[&str] = match self {
-            Self::Work | Self::Attention => &[
+            Self::Work => &[
                 "Select (arrows): ↑/↓",
                 "Next attention item: Tab",
-                "Attention: a",
-                "Work: w",
+                "Work (legacy alias): a",
                 "Sessions: s",
                 "Quit (alternatives): Esc/<c-c>",
             ],
             Self::Sessions { .. } => &[
                 "Select (arrows): ↑/↓",
-                "Attention: a",
-                "Work: w",
+                "Work (legacy alias): a",
                 "Sessions: s",
                 "Quit (alternatives): Esc/<c-c>",
             ],
@@ -114,7 +106,7 @@ impl Context {
             _ => &[],
         };
         lines.extend(extras.iter().map(|hint| theme::shortcut_line(hint)));
-        if self == Self::Attention {
+        if self == Self::Work {
             lines.push(Line::styled(
                 "Approval shortcuts require a supported, current approval prompt.",
                 theme::muted(),
@@ -282,11 +274,6 @@ mod tests {
                 "Unregister entry: <enter>",
             ),
             (
-                Context::Attention,
-                "Acknowledge finished turn: x",
-                "Unregister: u",
-            ),
-            (
                 Context::Sessions { all: false },
                 "All panes: f",
                 "Agents only: f",
@@ -319,17 +306,13 @@ mod tests {
             for hint in context.hints().split(" | ") {
                 assert!(text.contains(hint), "missing {hint}: {text}");
             }
-            assert_eq!(
-                text.contains("Approve once: y"),
-                context == Context::Attention
-            );
+            assert_eq!(text.contains("Approve once: y"), context == Context::Work);
             assert_eq!(
                 text.contains("Reject and reply: n"),
-                context == Context::Attention
+                context == Context::Work
             );
         }
         assert_eq!(Context::view(View::Work, false), Context::Work);
-        assert_eq!(Context::view(View::Attention, false), Context::Attention);
         assert_eq!(
             Context::view(View::Sessions, true),
             Context::Sessions { all: true }
@@ -407,7 +390,6 @@ mod tests {
         }
         for context in [
             Context::Work,
-            Context::Attention,
             Context::Sessions { all: false },
             Context::Review,
             Context::Cleanup,
@@ -434,7 +416,7 @@ mod tests {
             );
         }
         let compact: String = pages.chars().filter(|ch| !ch.is_whitespace()).collect();
-        assert!(compact.contains("Scroll:<c-d>/<c-u>"));
+        assert!(compact.contains("Scrolldetails:<c-d>/<c-u>"));
         assert!(compact.contains("Quit(alternatives):Esc/<c-c>"));
         assert!(help.scroll > 0);
         let before = help.scroll;

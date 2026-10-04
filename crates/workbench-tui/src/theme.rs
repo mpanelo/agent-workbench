@@ -392,7 +392,6 @@ mod tests {
         use crate::help::Context;
         for context in [
             Context::Work,
-            Context::Attention,
             Context::Sessions { all: false },
             Context::Sessions { all: true },
             Context::Review,
@@ -410,8 +409,8 @@ mod tests {
             } else {
                 assert!(narrow.ends_with("Help: ?"));
             }
-            assert_eq!(compact_footer(text, 240), text);
-            for width in 0..240 {
+            assert_eq!(compact_footer(text, 320), text);
+            for width in 0..320 {
                 assert!(Line::from(compact_footer(text, width)).width() <= width);
             }
         }

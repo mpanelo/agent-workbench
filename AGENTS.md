@@ -289,15 +289,19 @@ Ask the user before adding any new keybindings, including alternative bindings.
 Scope keybindings to the current view or input mode. Help must list only bindings
 applicable to that context; a key may have different meanings in different views.
 
-Long-term primary views:
+Primary views:
 
 ```text
 WORK
-ATTENTION
+SESSIONS
 REVIEW
 ```
 
 Avoid putting business logic into widgets.
+
+WORK combines supervision and attention. Keep its compact list in registration
+order, with details in a separate viewport. Status/prompt changes must not move
+the selected item or its list row. Acknowledging attention keeps the item visible.
 
 Rendering code should receive state from the core and emit user intents/actions back to the core.
 

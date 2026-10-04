@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, ffi::OsString, path::PathBuf};
 
 use workbench_core::{WorkItem, WorkItemKind, default_state_file};
 
-pub(crate) const HELP: &str = "Agent Workbench — M6 local diff review
+pub(crate) const HELP: &str = "Agent Workbench — coding-agent supervision and local diff review
 
 Usage:
   workbench [--state-file PATH] [--diff-base REV]
@@ -12,11 +12,12 @@ Usage:
   workbench list [--state-file PATH]
   workbench --help
 
-The TUI defaults to ATTENTION; a returns there, w shows all work, s shows sessions.
-In ATTENTION, x acknowledges the selected TURN FINISHED observation for this
+The TUI defaults to WORK; w (or the legacy a alias) returns there, s shows sessions.
+WORK keeps a stable list with separate selected-item details. ! marks attention.
+In WORK, x acknowledges the selected TURN FINISHED observation for this
 Workbench run. New activity/input or changed completion evidence requeues it.
 Acknowledgement does not finish work, mark code reviewed, or dismiss input requests.
-In ATTENTION only, y approves a recognized Codex request once; n rejects it and
+In WORK, y approves a recognized Codex request once; n rejects it and
 opens a reply for instructions. Changed or unsupported prompts must be inspected.
 In REVIEW, Space saves file marks; r reloads while restoring unchanged marks.
 Marks persist across restarts; changed captured diffs require re-review.
@@ -32,15 +33,16 @@ Cleanup keeps the branch and review history; dirty or ambiguous targets are bloc
 Short descriptions are limited to 120 Unicode characters; --title is a legacy
 alias for --short-description. When omitted, the description defaults to the ID.
 j/k or arrows select; <enter> opens the pane; r composes a single-line reply.
-<c-d>/<c-u> scroll down/up half a page. ? shows the current view's keybindings.
+<c-d>/<c-u> scroll details in WORK, or the current view elsewhere, half a page.
+? shows the current view's keybindings.
 In text fields, ? remains literal text.
-<enter> submits a reply and Esc cancels. Tab selects known waiting/completed items.
+<enter> submits a reply and Esc cancels. Tab selects the next unacknowledged attention item.
 While composing a reply, <c-u> clears the draft instead of scrolling.
 d opens local diff review; j/k select files, Space toggles reviewed, Esc returns.
 Review defaults to HEAD (staged, unstaged, and untracked changes). --diff-base REV
 compares the working tree directly to that local commit/ref, including committed
-changes. No fetching or inferred merge-base. Review marks are in-memory only.
-In review, r reloads and clears marks; h/l pan long lines; <c-d>/<c-u> scroll.
+changes. No fetching or inferred merge-base.
+In review, h/l pan long lines; <c-d>/<c-u> scroll.
 Registration does not require a running tmux server. Relative repository/workspace
 paths are resolved from the current directory; expand ~ using your shell.
 State: --state-file, then AGENT_WORKBENCH_STATE_FILE, then

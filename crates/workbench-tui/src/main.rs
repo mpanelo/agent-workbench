@@ -65,8 +65,6 @@ impl AppState {
             match interaction.attention_tracker.acknowledge(&target) {
                 Ok(()) => {
                     self.attention = interaction.attention_tracker.items(self.items());
-                    interaction.sync(&self.attention);
-                    interaction.reveal_selection = true;
                     interaction.message =
                         Some("Turn acknowledged; work item and review state unchanged.".into());
                 }
@@ -133,10 +131,11 @@ impl AppState {
             .map_or(&[], Vec::as_slice)
     }
 
-    fn items_for(&self, view: ui::View) -> &[WorkItemState] {
-        match view {
-            ui::View::Attention => &self.attention,
-            _ => self.items(),
+    fn sync_selection(&self, interaction: &mut interaction::Interaction) {
+        // A failed load is not removal evidence. Retain the selected ID until
+        // a successful snapshot proves that its registration disappeared.
+        if let Some(Ok(items)) = &self.work_items {
+            interaction.sync(items);
         }
     }
 }
@@ -325,9 +324,6 @@ async fn event_loop(
                 } else {
                     match *view {
                         ui::View::Work => ui::render_work(frame, &state, &mut scroll, interaction),
-                        ui::View::Attention => {
-                            ui::render_attention(frame, &state, &mut scroll, interaction)
-                        }
                         ui::View::Sessions => {
                             ui::render_sessions(frame, &state, &mut scroll, interaction)
                         }
@@ -363,7 +359,7 @@ async fn event_loop(
                         if success {
                             state.reload_registry(&engine);
                             state.refresh_attention(&mut interaction.attention_tracker);
-                            interaction.sync(state.items_for(*view));
+                            state.sync_selection(interaction);
                             interaction.reveal_selection = true;
                             interaction.message = Some(format!("Cleaned up {id}: workmux window and worktree removed; branch and review history kept."));
                         }
@@ -381,7 +377,7 @@ async fn event_loop(
                             state.apply_detail_edit(&mutation, interaction);
                             state.reload_registry(&engine);
                             state.refresh_attention(&mut interaction.attention_tracker);
-                            interaction.sync(state.items_for(*view));
+                            state.sync_selection(interaction);
                             interaction.reveal_selection = true;
                             interaction.message = Some(mutation.success_message());
                         }
@@ -438,17 +434,12 @@ async fn event_loop(
             // running; consume its latest snapshot immediately after the save.
             changed = receiver.changed(), if mutations.is_empty() => {
                 changed.map_err(|_| io::Error::other("Discovery task stopped unexpectedly"))?;
-                let previous_position = state.items_for(*view).iter().position(|item| Some(&item.item.id) == interaction.selected_id.as_ref());
                 let updated = receiver.borrow_and_update().clone();
-                let previous_attention = state.attention.clone();
                 state = updated;
                 state.reload_registry(&engine);
                 state.refresh_attention(&mut interaction.attention_tracker);
-                let attention_changed = previous_attention != state.attention;
                 if let Some(snapshot) = state.snapshot() { interaction.sync_panes(snapshot); }
-                interaction.sync(state.items_for(*view));
-                let position = state.items_for(*view).iter().position(|item| Some(&item.item.id) == interaction.selected_id.as_ref());
-                interaction.reveal_selection |= position != previous_position || (*view == ui::View::Attention && attention_changed);
+                state.sync_selection(interaction);
                 redraw = true;
             }
             completed = sends.join_next(), if !sends.is_empty() => {
@@ -657,10 +648,10 @@ fn navigate(
     {
         return None;
     }
-    let items = state.items_for(*view);
+    let items = state.items();
     match key.code {
         KeyCode::Char('y' | 'n')
-            if *view == ui::View::Attention
+            if *view == ui::View::Work
                 && key.kind == KeyEventKind::Press
                 && key.modifiers.is_empty() =>
         {
@@ -677,11 +668,11 @@ fn navigate(
                 Some(Err(error)) => interaction.message = Some(error.to_string()),
                 None => {
                     interaction.message =
-                        Some("Select a WAITING approval item in ATTENTION first.".into())
+                        Some("Select a WAITING approval item in WORK first.".into())
                 }
             }
         }
-        KeyCode::Char('x') if *view == ui::View::Attention => {
+        KeyCode::Char('x') if *view == ui::View::Work => {
             match interaction
                 .selected(items)
                 .map(|item| interaction.attention_tracker.capture(item))
@@ -689,8 +680,7 @@ fn navigate(
                 Some(Ok(target)) => interaction.acknowledgement_requested = Some(target),
                 Some(Err(error)) => interaction.message = Some(error.to_string()),
                 None => {
-                    interaction.message =
-                        Some("Select a TURN FINISHED item in ATTENTION first.".into())
+                    interaction.message = Some("Select a TURN FINISHED item in WORK first.".into())
                 }
             }
         }
@@ -756,7 +746,7 @@ fn navigate(
                 .is_none()
                 .then(|| "Select an item in WORK first.".into());
         }
-        KeyCode::Tab if view.is_item_view() => interaction.next_attention(items),
+        KeyCode::Tab if view.is_item_view() => interaction.next_attention(&state.attention),
         KeyCode::Char('d') if view.is_item_view() => {
             interaction.review_requested = interaction
                 .selected(items)
@@ -771,12 +761,11 @@ fn navigate(
         KeyCode::Up => *scroll = scroll.saturating_sub(1),
         KeyCode::Char('a' | 'w' | 's') => {
             *view = match key.code {
-                KeyCode::Char('a') => ui::View::Attention,
-                KeyCode::Char('w') => ui::View::Work,
+                KeyCode::Char('a' | 'w') => ui::View::Work,
                 _ => ui::View::Sessions,
             };
             *scroll = 0;
-            interaction.sync(state.items_for(*view));
+            state.sync_selection(interaction);
             interaction.reveal_selection = true;
             if *view == ui::View::Sessions {
                 if let Some(snapshot) = state.snapshot() {
@@ -808,12 +797,12 @@ mod tests {
     }
 
     #[test]
-    fn approval_keys_are_attention_only_plain_press_actions_not_draft_or_busy_actions() {
+    fn approval_keys_are_work_only_plain_press_actions_not_draft_or_busy_actions() {
         let state = approval_state();
         for code in ['y', 'n'] {
-            for mut view in [ui::View::Work, ui::View::Sessions, ui::View::Attention] {
+            for mut view in [ui::View::Work, ui::View::Sessions] {
                 let mut interaction = interaction::Interaction::default();
-                interaction.sync(state.items_for(view));
+                interaction.sync(state.items());
                 navigate(
                     KeyCode::Char(code),
                     &state,
@@ -822,7 +811,7 @@ mod tests {
                     &mut interaction,
                     24,
                 );
-                if view == ui::View::Attention {
+                if view == ui::View::Work {
                     let request = interaction.approval_requested.take().unwrap();
                     assert_eq!(request.item_id(), "waiting");
                     assert_eq!(
@@ -837,9 +826,9 @@ mod tests {
                     assert!(interaction.approval_requested.is_none());
                 }
             }
-            let mut view = ui::View::Attention;
+            let mut view = ui::View::Work;
             let mut interaction = interaction::Interaction::default();
-            interaction.sync(state.items_for(view));
+            interaction.sync(state.items());
             for modifiers in [
                 KeyModifiers::CONTROL,
                 KeyModifiers::ALT,
@@ -878,7 +867,7 @@ mod tests {
             );
             assert!(interaction.approval_requested.is_none());
             interaction.sending = false;
-            interaction.begin_reply(state.items_for(view));
+            interaction.begin_reply(state.items());
             navigate(
                 KeyCode::Char(code),
                 &state,
@@ -969,8 +958,9 @@ mod tests {
         let original = state.items().to_vec();
         let mut interaction = interaction::Interaction::default();
         state.refresh_attention(&mut interaction.attention_tracker);
-        let mut view = ui::View::Attention;
-        interaction.sync(state.items_for(view));
+        let mut view = ui::View::Work;
+        interaction.sync(state.items());
+        interaction.selected_id = Some("finished".into());
         navigate(
             KeyCode::Char('x'),
             &state,
@@ -983,10 +973,19 @@ mod tests {
         state.apply_acknowledgement(&mut interaction);
         assert_eq!(state.attention.len(), 1);
         assert_eq!(state.attention[0].item.id, "waiting");
-        assert_eq!(interaction.selected_id.as_deref(), Some("waiting"));
+        assert_eq!(interaction.selected_id.as_deref(), Some("finished"));
         assert_eq!(state.items(), original);
         state.refresh_attention(&mut interaction.attention_tracker);
         assert_eq!(state.attention.len(), 1);
+        navigate(
+            KeyCode::Tab,
+            &state,
+            &mut view,
+            &mut 0,
+            &mut interaction,
+            24,
+        );
+        assert_eq!(interaction.selected_id.as_deref(), Some("waiting"));
         navigate(
             KeyCode::Char('x'),
             &state,
@@ -1003,7 +1002,7 @@ mod tests {
                 .unwrap()
                 .contains("input requests cannot be dismissed")
         );
-        interaction.begin_reply(&state.attention);
+        interaction.begin_reply(state.items());
         navigate(
             KeyCode::Char('x'),
             &state,
@@ -1015,7 +1014,8 @@ mod tests {
         assert!(interaction.acknowledgement_requested.is_none());
         assert_eq!(interaction.draft.as_ref().unwrap().item_id, "waiting");
         interaction.draft = None;
-        for mut view in [ui::View::Work, ui::View::Sessions] {
+        {
+            let mut view = ui::View::Sessions;
             navigate(
                 KeyCode::Char('x'),
                 &state,
@@ -1204,9 +1204,9 @@ mod tests {
             ("hidden", AgentStatus::Running),
             ("A", AgentStatus::Complete),
         ]);
-        for mut view in [ui::View::Work, ui::View::Attention, ui::View::Sessions] {
+        for mut view in [ui::View::Work, ui::View::Sessions] {
             let mut interaction = interaction::Interaction::default();
-            interaction.sync(state.items_for(view));
+            interaction.sync(state.items());
             for code in [KeyCode::Char('e'), KeyCode::Char('n'), KeyCode::Char('u')] {
                 navigate(code, &state, &mut view, &mut 0, &mut interaction, 24);
                 if view == ui::View::Work && code != KeyCode::Char('n') {
@@ -1269,7 +1269,7 @@ mod tests {
     #[test]
     fn cleanup_key_captures_work_selection_only_and_ignores_drafts_and_modifiers() {
         let state = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
-        for mut view in [ui::View::Work, ui::View::Attention, ui::View::Sessions] {
+        for mut view in [ui::View::Work, ui::View::Sessions] {
             let mut interaction = interaction::Interaction {
                 selected_id: Some("B".into()),
                 ..Default::default()
@@ -1641,10 +1641,10 @@ mod tests {
     #[test]
     fn vim_half_page_scroll_works_in_every_view_without_changing_selection() {
         let state = state(&[("A", AgentStatus::WaitingForInput)]);
-        for mut view in [ui::View::Attention, ui::View::Work, ui::View::Sessions] {
+        for mut view in [ui::View::Work, ui::View::Sessions] {
             let original_view = view;
             let mut interaction = interaction::Interaction::default();
-            interaction.sync(state.items_for(view));
+            interaction.sync(state.items());
             let selected = interaction.selected_id.clone();
             let mut scroll = 0;
             for (key, expected) in [('d', 11), ('d', 22), ('u', 11), ('u', 0), ('u', 0)] {
@@ -1696,7 +1696,7 @@ mod tests {
     #[test]
     fn vim_scroll_saturates_and_moves_at_least_one_row_on_tiny_terminals() {
         let state = state(&[]);
-        let mut view = ui::View::Attention;
+        let mut view = ui::View::Work;
         let mut interaction = interaction::Interaction::default();
         for height in [0, 1, 2, 3, 4] {
             let mut scroll = 0;
@@ -1725,9 +1725,9 @@ mod tests {
     #[test]
     fn modified_keys_and_reply_drafts_do_not_trigger_list_actions() {
         let state = state(&[("A", AgentStatus::WaitingForInput)]);
-        let mut view = ui::View::Attention;
+        let mut view = ui::View::Work;
         let mut interaction = interaction::Interaction::default();
-        interaction.sync(state.items_for(view));
+        interaction.sync(state.items());
         let mut scroll = 10;
         for key in [
             KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
@@ -1742,7 +1742,7 @@ mod tests {
             assert!(interaction.message.is_none());
             assert!(interaction.draft.is_none());
         }
-        interaction.begin_reply(state.items_for(view));
+        interaction.begin_reply(state.items());
         interaction.draft.as_mut().unwrap().insert("yes").unwrap();
         for ch in ['d', 'u'] {
             navigate(
@@ -1759,17 +1759,26 @@ mod tests {
     }
 
     #[test]
-    fn attention_is_default_and_all_actions_target_the_visible_queue() {
+    fn work_is_default_and_all_actions_target_the_selected_item() {
         let state = state(&[
             ("hidden", AgentStatus::Running),
             ("B", AgentStatus::Complete),
             ("C", AgentStatus::WaitingForInput),
         ]);
         let mut view = ui::View::default();
-        assert_eq!(view, ui::View::Attention);
+        assert_eq!(view, ui::View::Work);
         let mut interaction = interaction::Interaction::default();
-        interaction.sync(state.items_for(view));
+        interaction.sync(state.items());
         let mut scroll = 0;
+        assert_eq!(interaction.selected_id.as_deref(), Some("hidden"));
+        navigate(
+            KeyCode::Tab,
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
         assert_eq!(interaction.selected_id.as_deref(), Some("B"));
         navigate(
             KeyCode::Char('j'),
@@ -1869,34 +1878,46 @@ mod tests {
     }
 
     #[test]
-    fn refresh_changes_queue_without_redirecting_an_existing_draft() {
+    fn refresh_changes_attention_without_redirecting_selection_or_an_existing_draft() {
         let initial = state(&[
             ("A", AgentStatus::WaitingForInput),
             ("B", AgentStatus::Complete),
         ]);
         let mut interaction = interaction::Interaction::default();
-        interaction.sync(initial.items_for(ui::View::Attention));
-        interaction.begin_reply(initial.items_for(ui::View::Attention));
+        interaction.sync(initial.items());
+        interaction.begin_reply(initial.items());
         let next = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
-        interaction.sync(next.items_for(ui::View::Attention));
-        assert_eq!(interaction.selected_id.as_deref(), Some("B"));
+        next.sync_selection(&mut interaction);
+        assert_eq!(interaction.selected_id.as_deref(), Some("A"));
         assert_eq!(interaction.draft.as_ref().unwrap().item_id, "A");
-        let empty = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Unknown)]);
-        interaction.sync(empty.items_for(ui::View::Attention));
+        let no_attention = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Unknown)]);
+        no_attention.sync_selection(&mut interaction);
+        assert_eq!(interaction.selected_id.as_deref(), Some("A"));
+        assert_eq!(no_attention.items().len(), 2);
+        let failed = AppState::from_refresh(
+            Err("tmux unavailable".into()),
+            Err("state unreadable".into()),
+        );
+        failed.sync_selection(&mut interaction);
+        assert_eq!(interaction.selected_id.as_deref(), Some("A"));
+        let removed = state(&[("B", AgentStatus::Unknown)]);
+        removed.sync_selection(&mut interaction);
+        assert_eq!(interaction.selected_id.as_deref(), Some("B"));
+        let empty = state(&[]);
+        empty.sync_selection(&mut interaction);
         assert!(interaction.selected_id.is_none());
         assert_eq!(interaction.draft.as_ref().unwrap().item_id, "A");
-        assert_eq!(empty.items().len(), 2);
     }
 
     #[test]
-    fn empty_or_failed_queue_never_opens_or_replies_to_hidden_work() {
-        let empty = state(&[("hidden", AgentStatus::Unknown)]);
+    fn empty_or_failed_work_never_opens_or_replies_to_stale_selection() {
+        let empty = state(&[]);
         let failed = AppState::from_refresh(
             Err("tmux unavailable".into()),
             Err("state unreadable".into()),
         );
         for state in [empty, failed] {
-            let mut view = ui::View::Attention;
+            let mut view = ui::View::Work;
             let mut scroll = 0;
             let mut interaction = interaction::Interaction {
                 selected_id: Some("hidden".into()),

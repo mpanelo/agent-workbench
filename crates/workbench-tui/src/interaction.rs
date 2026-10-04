@@ -97,6 +97,8 @@ impl Draft {
 #[derive(Default, Debug)]
 pub(crate) struct Interaction {
     pub selected_id: Option<String>,
+    pub work_list_offset: usize,
+    pub detail_item_id: Option<String>,
     pub draft: Option<Draft>,
     pub message: Option<String>,
     pub sending: bool,

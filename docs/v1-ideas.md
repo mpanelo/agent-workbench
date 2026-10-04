@@ -5,16 +5,21 @@ Potential follow-ups for v1, plus completed ideas retained for context.
 ## Clarify turn completion and acknowledge attention items
 
 Implemented: the displayed status is `TURN FINISHED` (core enum remains
-`AgentStatus::Complete`). In ATTENTION, `x` acknowledges the selected finished
+`AgentStatus::Complete`). In WORK, `x` acknowledges the selected finished
 observation without changing the work item or code-review state. Input requests
 cannot be dismissed. Repeated captures of the acknowledged completion stay out
-of the queue; new observed activity/input or changed completion evidence requeues it.
+of attention; new observed activity/input or changed completion evidence flags it again.
+The work item stays visible and selected in the unified WORK view.
 
 Chosen scope: session-only acknowledgements, retained across view switches and
 pane focus but reset on Workbench exit. The core tracker uses visible completion
 fingerprints and observation generations, not native agent turn IDs. Uncertain
-observations alone do not clear an acknowledgement. See the README's attention
-section for viewport and identical-fast-turn limitations.
+observations alone do not clear an acknowledgement. Terminal captures cannot
+reliably distinguish identical fast turns without native agent turn IDs.
+
+Implemented unified WORK view: stable registration-order list, attention markers,
+and a separate scrollable detail area for the selected item. Status/prompt changes
+do not reorder rows or change selection. Further layout/UX refinements remain open.
 
 Possible follow-up: reliable opt-in turn identifiers before considering durable
 cross-restart acknowledgements. No durable dismissal is implemented.

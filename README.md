@@ -10,7 +10,7 @@ worktrees, and it requires no cloud account or API key.
 ## Features
 
 - Track work items linked to agent panes.
-- See input requests and finished turns in an attention queue.
+- See all work, input requests, and finished turns in one dashboard.
 - Open an agent's pane or send a reply from Workbench.
 - Review Git diffs, save file-level review marks, and see what changed since review.
 - Clean up a workmux window and worktree after confirmation.
@@ -42,7 +42,13 @@ session icons. Workmux is optional unless you want workspace cleanup.
 3. Press `s` for SESSIONS, select an agent, and press `r` or `<enter>` to register it.
    Workbench fills in its pane, repository, worktree, and branch when available.
 4. Confirm the Work ID and Short Description, then press `<enter>` to save.
-5. Use `a` for ATTENTION or `w` for WORK to supervise your registered agents.
+5. Return to WORK with `w` to supervise your registered agents.
+
+WORK keeps a compact list in registration order and shows details for the selected
+item separately. `!` marks items needing attention; `Tab` jumps to the next one.
+Status changes and expanding prompts don't reorder the list or change selection.
+Use `<c-d>` / `<c-u>` to scroll the selected item's details. The old `a` shortcut
+also returns to WORK.
 
 A Work ID is your unique task label, such as `fix-auth` or `PR-42`.
 Short Description is a readable summary, limited to 120 characters. Work items
@@ -58,17 +64,18 @@ literal question mark. `<c-d>` means Control+D; `<enter>` means the Enter key.
 
 | Action | Key |
 | --- | --- |
-| Attention / work / sessions | `a` / `w` / `s` |
+| Work / sessions | `w` / `s` |
 | Select an item | `j` / `k` or `↓` / `↑` |
-| Open the selected agent pane | `<enter>` in WORK or ATTENTION |
-| Reply to an agent | `r` in WORK or ATTENTION; `<enter>` sends |
-| Review the selected item's diff | `d` in WORK or ATTENTION |
+| Open the selected agent pane | `<enter>` in WORK |
+| Reply to an agent | `r` in WORK; `<enter>` sends |
+| Review the selected item's diff | `d` in WORK |
 | Edit ID and description | `e` in WORK |
 | Unregister an item | `u` in WORK |
 | Clean up a workmux workspace | `c` in WORK |
-| Approve a request once | `y` in ATTENTION |
-| Reject and compose instructions | `n` in ATTENTION |
-| Acknowledge a finished turn | `x` in ATTENTION |
+| Approve a request once | `y` in WORK |
+| Reject and compose instructions | `n` in WORK |
+| Acknowledge a finished turn | `x` in WORK |
+| Next item needing attention | `Tab` in WORK |
 | Register a pane | `r` or `<enter>` in SESSIONS |
 | Toggle agent-only / all panes | `f` in SESSIONS |
 | Scroll half a page | `<c-d>` / `<c-u>` outside text inputs |
@@ -142,6 +149,7 @@ UI. Other agents can be registered, opened, replied to, and reviewed, but may sh
 `UNKNOWN`. Detection is best-effort: scrolling, menus, or UI changes can hide the
 evidence. `TURN FINISHED` means an agent response ended, not that the task is done.
 Acknowledgements last only for the current Workbench run.
+Acknowledging removes the attention marker, not the work item or its selection.
 
 Registrations and review history stay on your computer. Review snapshots contain
 local diff text; treat them like source files when backing up or sharing data.
