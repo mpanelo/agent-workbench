@@ -1,5 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use workbench_core::{ActionError, MAX_INPUT_BYTES, Snapshot, WorkItemState};
+use workbench_core::{
+    ActionError, ApprovalDecision, ApprovalError, ApprovalRequest, MAX_INPUT_BYTES, Snapshot,
+    WorkItemState,
+};
 
 /// Cursor measured in Unicode characters before the end. A default cursor is
 /// at the end, including for prefilled fields; all edits stay on UTF-8 boundaries.
@@ -107,9 +110,38 @@ pub(crate) struct Interaction {
     pub cleanup_requested: Option<workbench_core::WorkItem>,
     pub attention_tracker: workbench_core::AttentionTracker,
     pub acknowledgement_requested: Option<workbench_core::CompletionAcknowledgement>,
+    pub approval_requested: Option<ApprovalRequest>,
 }
 
 impl Interaction {
+    pub fn finish_approval(
+        &mut self,
+        request: &ApprovalRequest,
+        result: Result<(), ApprovalError>,
+    ) {
+        self.sending = false;
+        self.message = Some(match result {
+            Ok(()) if request.decision() == ApprovalDecision::RejectAndReply => {
+                // The queue may have refreshed or moved while the key was sent.
+                // Reply to the captured item, never the newly selected row.
+                self.draft = Some(Draft {
+                    item_id: request.item_id().into(),
+                    text: String::new(),
+                    cursor: InputCursor::default(),
+                });
+                format!(
+                    "Rejected request for {}. Tell the agent what to do differently.",
+                    request.item_id()
+                )
+            }
+            Ok(()) => format!("Approved once for {}.", request.item_id()),
+            Err(error) => format!(
+                "Decision for {} failed: {error} Not retried; inspect the pane before retrying.",
+                request.item_id()
+            ),
+        });
+    }
+
     pub fn finish_focus(&mut self, id: &str, result: Result<(), ActionError>) {
         // Successful navigation needs no persistent notice; clear stale messages.
         self.message = result

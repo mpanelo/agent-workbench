@@ -6,7 +6,10 @@ use tokio::{
     task::JoinSet,
     time::{self, MissedTickBehavior},
 };
-use workbench_core::{Engine, Snapshot, WorkItemState, attention_items, validate_agent_input};
+use workbench_core::{
+    ApprovalDecision, ApprovalRequest, Engine, Snapshot, WorkItemState, attention_items,
+    validate_agent_input,
+};
 
 mod cleanup;
 mod cli;
@@ -292,6 +295,7 @@ async fn event_loop(
     let mut scroll = 0_u16;
     let mut redraw = true;
     let mut sends = JoinSet::new();
+    let mut approvals = JoinSet::new();
     let mut diffs = JoinSet::new();
     let mut review_saves = JoinSet::new();
     let mut preparations = JoinSet::new();
@@ -333,6 +337,16 @@ async fn event_loop(
             redraw = false;
         }
         tokio::select! {
+            completed = approvals.join_next(), if !approvals.is_empty() => {
+                match completed {
+                    Some(Ok((request, result))) => interaction.finish_approval(&request, result),
+                    _ => {
+                        interaction.sending = false;
+                        interaction.message = Some("Approval task stopped. Not retried; inspect the pane before retrying.".into());
+                    }
+                }
+                redraw = true;
+            }
             completed = cleanup_preparations.join_next(), if !cleanup_preparations.is_empty() => {
                 match completed {
                     Some(Ok((ticket, result))) => cleanup.finish_preview(ticket, result),
@@ -565,12 +579,22 @@ async fn event_loop(
                             }
                             continue;
                         }
+                        if interaction.sending { continue; }
                         match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => return Ok(RunExit::Quit),
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(RunExit::Quit),
                             _ => {
                                 if let Some(id) = navigate(key, &state, view, &mut scroll, interaction, terminal.size()?.height) { return Ok(RunExit::Focus(id)); }
                                 state.apply_acknowledgement(interaction);
+                                if let Some(request) = interaction.approval_requested.take() {
+                                    interaction.sending = true;
+                                    interaction.message = Some(format!("Checking approval for {}…", request.item_id()));
+                                    let engine = Arc::clone(&engine);
+                                    approvals.spawn(async move {
+                                        let result = engine.respond_to_approval(&request).await;
+                                        (request, result)
+                                    });
+                                }
                                 if let Some(request) = interaction.maintenance_requested.take() {
                                     interaction.message = None;
                                     maintenance.open(request);
@@ -613,7 +637,7 @@ fn navigate(
     height: u16,
 ) -> Option<String> {
     let key = key.into();
-    if interaction.draft.is_some() {
+    if interaction.draft.is_some() || interaction.sending {
         return None;
     }
     if key.modifiers == KeyModifiers::CONTROL {
@@ -635,6 +659,28 @@ fn navigate(
     }
     let items = state.items_for(*view);
     match key.code {
+        KeyCode::Char('y' | 'n')
+            if *view == ui::View::Attention
+                && key.kind == KeyEventKind::Press
+                && key.modifiers.is_empty() =>
+        {
+            let decision = if key.code == KeyCode::Char('y') {
+                ApprovalDecision::ApproveOnce
+            } else {
+                ApprovalDecision::RejectAndReply
+            };
+            match interaction
+                .selected(items)
+                .map(|item| ApprovalRequest::capture(item, decision))
+            {
+                Some(Ok(request)) => interaction.approval_requested = Some(request),
+                Some(Err(error)) => interaction.message = Some(error.to_string()),
+                None => {
+                    interaction.message =
+                        Some("Select a WAITING approval item in ATTENTION first.".into())
+                }
+            }
+        }
         KeyCode::Char('x') if *view == ui::View::Attention => {
             match interaction
                 .selected(items)
@@ -748,6 +794,167 @@ fn navigate(
 mod tests {
     use super::*;
     use workbench_core::{AgentStatus, PaneAvailability, WorkItem, WorkItemKind};
+
+    fn approval_state() -> AppState {
+        let mut state = state(&[
+            ("waiting", AgentStatus::WaitingForInput),
+            ("finished", AgentStatus::Complete),
+        ]);
+        if let Some(Ok(items)) = &mut state.work_items {
+            items[0].attention_prompt = Some("Would you like to run the following command?\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)".into());
+        }
+        state.attention = attention_items(state.items());
+        state
+    }
+
+    #[test]
+    fn approval_keys_are_attention_only_plain_press_actions_not_draft_or_busy_actions() {
+        let state = approval_state();
+        for code in ['y', 'n'] {
+            for mut view in [ui::View::Work, ui::View::Sessions, ui::View::Attention] {
+                let mut interaction = interaction::Interaction::default();
+                interaction.sync(state.items_for(view));
+                navigate(
+                    KeyCode::Char(code),
+                    &state,
+                    &mut view,
+                    &mut 0,
+                    &mut interaction,
+                    24,
+                );
+                if view == ui::View::Attention {
+                    let request = interaction.approval_requested.take().unwrap();
+                    assert_eq!(request.item_id(), "waiting");
+                    assert_eq!(
+                        request.decision(),
+                        if code == 'y' {
+                            ApprovalDecision::ApproveOnce
+                        } else {
+                            ApprovalDecision::RejectAndReply
+                        }
+                    );
+                } else {
+                    assert!(interaction.approval_requested.is_none());
+                }
+            }
+            let mut view = ui::View::Attention;
+            let mut interaction = interaction::Interaction::default();
+            interaction.sync(state.items_for(view));
+            for modifiers in [
+                KeyModifiers::CONTROL,
+                KeyModifiers::ALT,
+                KeyModifiers::SUPER,
+                KeyModifiers::SHIFT,
+            ] {
+                navigate(
+                    KeyEvent::new(KeyCode::Char(code), modifiers),
+                    &state,
+                    &mut view,
+                    &mut 0,
+                    &mut interaction,
+                    24,
+                );
+                assert!(interaction.approval_requested.is_none());
+            }
+            for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+                navigate(
+                    KeyEvent::new_with_kind(KeyCode::Char(code), KeyModifiers::NONE, kind),
+                    &state,
+                    &mut view,
+                    &mut 0,
+                    &mut interaction,
+                    24,
+                );
+                assert!(interaction.approval_requested.is_none());
+            }
+            interaction.sending = true;
+            navigate(
+                KeyCode::Char(code),
+                &state,
+                &mut view,
+                &mut 0,
+                &mut interaction,
+                24,
+            );
+            assert!(interaction.approval_requested.is_none());
+            interaction.sending = false;
+            interaction.begin_reply(state.items_for(view));
+            navigate(
+                KeyCode::Char(code),
+                &state,
+                &mut view,
+                &mut 0,
+                &mut interaction,
+                24,
+            );
+            assert!(interaction.approval_requested.is_none());
+            interaction
+                .draft
+                .as_mut()
+                .unwrap()
+                .edit(KeyCode::Char(code).into())
+                .unwrap();
+            assert_eq!(interaction.draft.as_ref().unwrap().text, code.to_string());
+            interaction.draft = None;
+            interaction.selected_id = Some("finished".into());
+            navigate(
+                KeyCode::Char(code),
+                &state,
+                &mut view,
+                &mut 0,
+                &mut interaction,
+                24,
+            );
+            assert!(interaction.approval_requested.is_none());
+            navigate(
+                KeyCode::Char(code),
+                &AppState::default(),
+                &mut view,
+                &mut 0,
+                &mut interaction,
+                24,
+            );
+            assert!(interaction.approval_requested.is_none());
+        }
+    }
+
+    #[test]
+    fn rejection_opens_reply_for_captured_item_even_after_queue_selection_changes() {
+        let state = approval_state();
+        let mut interaction = interaction::Interaction::default();
+        interaction.sync(&state.attention);
+        let request =
+            ApprovalRequest::capture(&state.attention[0], ApprovalDecision::RejectAndReply)
+                .unwrap();
+        interaction.sending = true;
+        interaction.selected_id = Some("finished".into());
+        interaction.finish_approval(&request, Ok(()));
+        assert!(!interaction.sending);
+        let draft = interaction.draft.as_ref().unwrap();
+        assert_eq!(draft.item_id, "waiting");
+        assert!(draft.text.is_empty());
+        interaction.draft = None;
+        interaction.finish_approval(&request, Err(workbench_core::ApprovalError::Changed));
+        assert!(interaction.draft.is_none());
+        assert!(
+            interaction
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("Not retried")
+        );
+        let request =
+            ApprovalRequest::capture(&state.attention[0], ApprovalDecision::ApproveOnce).unwrap();
+        interaction.finish_approval(&request, Ok(()));
+        assert!(interaction.draft.is_none());
+        assert!(
+            interaction
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("Approved once for waiting")
+        );
+    }
 
     #[test]
     fn acknowledgement_targets_visible_finished_turns_and_keeps_work_and_reply_safety() {

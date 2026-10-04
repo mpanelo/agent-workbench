@@ -57,7 +57,7 @@ impl Context {
                 "Edit: e | Unregister: u | Clean up: c | Views: a/w/s | Quit: q | Select: j/k | Open: <enter> | Reply: r | Review: d | Scroll: <c-d>/<c-u> | Help: ?"
             }
             Self::Attention => {
-                "Acknowledge finished turn: x | Views: a/w/s | Quit: q | Select: j/k | Open: <enter> | Reply: r | Review: d | Scroll: <c-d>/<c-u> | Help: ?"
+                "Approve once: y | Reject and reply: n | Acknowledge finished turn: x | Views: a/w/s | Quit: q | Select: j/k | Open: <enter> | Reply: r | Review: d | Scroll: <c-d>/<c-u> | Help: ?"
             }
             Self::Sessions { all: false } => {
                 "All panes: f | Views: a/w/s | Quit: q | Select: j/k | Register: <enter>/r | Scroll: <c-d>/<c-u> | Help: ?"
@@ -114,6 +114,12 @@ impl Context {
             _ => &[],
         };
         lines.extend(extras.iter().map(|hint| theme::shortcut_line(hint)));
+        if self == Self::Attention {
+            lines.push(Line::styled(
+                "Approval shortcuts require a supported, current approval prompt.",
+                theme::muted(),
+            ));
+        }
         if self.text_input() {
             lines.push(Line::styled(
                 "? and q type text while editing.",
@@ -313,6 +319,14 @@ mod tests {
             for hint in context.hints().split(" | ") {
                 assert!(text.contains(hint), "missing {hint}: {text}");
             }
+            assert_eq!(
+                text.contains("Approve once: y"),
+                context == Context::Attention
+            );
+            assert_eq!(
+                text.contains("Reject and reply: n"),
+                context == Context::Attention
+            );
         }
         assert_eq!(Context::view(View::Work, false), Context::Work);
         assert_eq!(Context::view(View::Attention, false), Context::Attention);
@@ -342,6 +356,8 @@ mod tests {
                 key(KeyCode::Enter),
                 key(KeyCode::Char('e')),
                 key(KeyCode::Char('u')),
+                key(KeyCode::Char('y')),
+                key(KeyCode::Char('n')),
                 key(KeyCode::Char('w')),
                 key(KeyCode::F(1)),
                 Event::Paste("do not insert".into()),

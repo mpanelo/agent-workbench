@@ -16,6 +16,8 @@ The TUI defaults to ATTENTION; a returns there, w shows all work, s shows sessio
 In ATTENTION, x acknowledges the selected TURN FINISHED observation for this
 Workbench run. New activity/input or changed completion evidence requeues it.
 Acknowledgement does not finish work, mark code reviewed, or dismiss input requests.
+In ATTENTION only, y approves a recognized Codex request once; n rejects it and
+opens a reply for instructions. Changed or unsupported prompts must be inspected.
 In REVIEW, Space saves file marks; r reloads while restoring unchanged marks.
 Marks persist across restarts; changed captured diffs require re-review.
 In SESSIONS, j/k or arrows select a pane; <enter> or r opens registration with

@@ -286,6 +286,8 @@ This is not required in the first milestone.
 The TUI should be keyboard-first.
 
 Ask the user before adding any new keybindings, including alternative bindings.
+Scope keybindings to the current view or input mode. Help must list only bindings
+applicable to that context; a key may have different meanings in different views.
 
 Long-term primary views:
 

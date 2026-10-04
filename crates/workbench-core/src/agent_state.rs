@@ -450,7 +450,7 @@ fn model_workspace_footer(line: &str) -> bool {
         && parts.next().is_none()
 }
 
-fn approval_title(line: &str) -> bool {
+pub(crate) fn approval_title(line: &str) -> bool {
     matches!(
         line,
         "Would you like to run the following command?"
@@ -477,6 +477,10 @@ fn approval_option(line: &str) -> bool {
         .is_some_and(|(number, text)| {
             number.parse::<u8>().is_ok() && (text.starts_with("Yes, ") || text.starts_with("No, "))
         })
+}
+
+pub(crate) fn current_approval_prompt(observation: &PaneObservation) -> Option<String> {
+    approval_prompt(observation, infer(observation).0)
 }
 
 fn approval_prompt(observation: &PaneObservation, status: AgentStatus) -> Option<String> {

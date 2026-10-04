@@ -66,6 +66,8 @@ literal question mark. `<c-d>` means Control+D; `<enter>` means the Enter key.
 | Edit ID and description | `e` in WORK |
 | Unregister an item | `u` in WORK |
 | Clean up a workmux workspace | `c` in WORK |
+| Approve a request once | `y` in ATTENTION |
+| Reject and compose instructions | `n` in ATTENTION |
 | Acknowledge a finished turn | `x` in ATTENTION |
 | Register a pane | `r` or `<enter>` in SESSIONS |
 | Toggle agent-only / all panes | `f` in SESSIONS |
@@ -76,6 +78,11 @@ Forms support arrow-key cursor movement, Tab to switch fields, and `<c-u>` to
 clear a field. `Esc` cancels an edit or reply before saving or sending.
 Replies are single-line messages. If sending fails, inspect the agent pane before
 retrying: some input may already have arrived.
+
+Approval shortcuts work only on recognized Codex approval dialogs. Workbench
+rechecks the prompt before sending a decision; `y` never grants persistent
+permission. `n` rejects first, then opens a reply for your instructions. Other
+prompts or customized agent shortcuts should be handled in the agent pane.
 
 Opening a pane leaves Workbench running. Use your tmux navigation to return; when
 running outside tmux, detach from the opened session to return to Workbench.

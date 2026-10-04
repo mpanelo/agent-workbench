@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 mod actions;
 mod agent_state;
+mod approvals;
 mod attention;
 mod cleanup;
 mod git;
@@ -16,6 +17,7 @@ mod tmux;
 mod work_items;
 
 pub use actions::{ActionError, MAX_INPUT_BYTES, validate_agent_input};
+pub use approvals::{ApprovalDecision, ApprovalError, ApprovalRequest};
 pub use attention::{AttentionError, AttentionTracker, CompletionAcknowledgement, attention_items};
 pub use cleanup::{CleanupDetails, CleanupError, CleanupPreview};
 pub use git::{ChangeKind, ChangedFile, GitError, WorkItemDiff};

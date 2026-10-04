@@ -89,7 +89,7 @@ pub fn validate_agent_input(input: &str) -> Result<(), ActionError> {
 }
 
 impl Engine {
-    fn registered_item(&self, id: &str) -> Result<WorkItem, ActionError> {
+    pub(crate) fn registered_item(&self, id: &str) -> Result<WorkItem, ActionError> {
         self.work_items()?
             .into_iter()
             .find(|item| item.id == id)
@@ -156,7 +156,7 @@ fn inside_tmux() -> bool {
     std::env::var_os("TMUX").is_some_and(|value| !value.is_empty())
 }
 
-fn target_for(item: &WorkItem, snapshot: &Snapshot) -> Result<String, ActionError> {
+pub(crate) fn target_for(item: &WorkItem, snapshot: &Snapshot) -> Result<String, ActionError> {
     for session in &snapshot.sessions {
         for window in &session.windows {
             if window.panes.iter().any(|pane| pane.id == item.pane_id) {

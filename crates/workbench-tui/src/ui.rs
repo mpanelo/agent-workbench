@@ -896,7 +896,7 @@ mod tests {
                 assert!(!text.contains(maintenance));
                 assert_eq!(
                     text.lines().last().unwrap().trim_end(),
-                    "Acknowledge finished turn: x | Views: a/w/s | Quit: q | … | Help: ?"
+                    "Approve once: y | Reject and reply: n | … | Help: ?"
                 );
             }
             assert_eq!(text.lines().nth(8).unwrap().trim_end(), "");
@@ -923,7 +923,7 @@ mod tests {
         running.status = AgentStatus::Running;
         let state =
             AppState::from_refresh(Ok(snapshot()), Ok(vec![waiting, complete, hidden, running]));
-        let text = attention_screen(&state, 120, 30, &mut 0);
+        let text = attention_screen(&state, 240, 30, &mut 0);
         for expected in [
             "ATTENTION — 2",
             "ABC-123  Build  WAITING_FOR_INPUT",
@@ -970,7 +970,10 @@ mod tests {
         assert!(work.contains("attention: 2 (a)"));
         assert!(work.contains("Options:"));
         assert!(work.contains("› 1. Yes, proceed (y)"));
-        assert!(attention_screen(&state, 80, 24, &mut 0).contains("Quit: q"));
+        let narrow = attention_screen(&state, 80, 24, &mut 0);
+        for hint in ["Approve once: y", "Reject and reply: n", "Help: ?"] {
+            assert!(narrow.contains(hint));
+        }
     }
 
     #[test]
@@ -1346,7 +1349,7 @@ mod tests {
             assert_eq!(rows[1], format!("> ABC-123  {label}  TURN FINISHED"));
             assert_eq!(
                 rows[2],
-                "Acknowledge finished turn: x | Views: a/w/s | Quit: q | … | Help: ?"
+                "Approve once: y | Reject and reply: n | … | Help: ?"
             );
             assert_eq!(state.items(), std::slice::from_ref(&original));
             assert_eq!(state.items()[0].item.kind.to_string(), full_name);
