@@ -115,38 +115,59 @@ impl Engine {
         Ok(())
     }
 
+    /// Switch the current tmux client without taking over the caller's terminal.
+    /// Returns false outside tmux: the caller must restore its terminal before
+    /// using `focus_work_item` to attach. Errors never fall back to attachment.
+    pub async fn try_switch_work_item(&self, id: &str) -> Result<bool, ActionError> {
+        self.try_switch_work_item_in_context(id, inside_tmux())
+            .await
+    }
+
+    async fn try_switch_work_item_in_context(
+        &self,
+        id: &str,
+        inside: bool,
+    ) -> Result<bool, ActionError> {
+        if !inside {
+            return Ok(false);
+        }
+        let item = self.registered_item(id)?;
+        let target = target_for(&item, &self.discover().await?)?;
+        self.tmux.execute(&focus_args(&target, true)).await?;
+        Ok(true)
+    }
+
     /// Switch the current tmux client, or attach this terminal until the user detaches.
-    /// The caller must suspend terminal rendering/raw mode before this operation.
+    /// Outside tmux, the caller must suspend terminal rendering/raw mode first.
+    /// TUIs should first use `try_switch_work_item` to avoid suspending inside tmux.
     pub async fn focus_work_item(&self, id: &str) -> Result<(), ActionError> {
+        if self.try_switch_work_item(id).await? {
+            return Ok(());
+        }
         let item = self.registered_item(id)?;
         let snapshot = self.discover().await?;
         let target = target_for(&item, &snapshot)?;
-        if inside_tmux() {
-            self.tmux.execute(&focus_args(&target, true)).await?;
-        } else {
-            if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-                return Err(ActionError::NotInteractive);
+        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+            return Err(ActionError::NotInteractive);
+        }
+        let mut command = self.tmux.command();
+        command
+            .args(focus_args(&target, false))
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true);
+        // An interactive attachment lasts until detach, so has no command timeout.
+        let status = command
+            .status()
+            .await
+            .map_err(DiscoveryError::Unavailable)?;
+        if !status.success() {
+            return Err(DiscoveryError::CommandFailed {
+                code: status.code(),
+                message: "Could not attach to the mapped pane; check the pane and terminal".into(),
             }
-            let mut command = self.tmux.command();
-            command
-                .args(focus_args(&target, false))
-                .stdin(Stdio::inherit())
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .kill_on_drop(true);
-            // An interactive attachment lasts until detach, so has no command timeout.
-            let status = command
-                .status()
-                .await
-                .map_err(DiscoveryError::Unavailable)?;
-            if !status.success() {
-                return Err(DiscoveryError::CommandFailed {
-                    code: status.code(),
-                    message: "Could not attach to the mapped pane; check the pane and terminal"
-                        .into(),
-                }
-                .into());
-            }
+            .into());
         }
         Ok(())
     }
@@ -368,6 +389,9 @@ send-keys)
     printf '%s\n' "$@" >> "$base/submit"
     [ ! -e "$base/submit-failure" ] || exit 33
   fi ;;
+switch-client)
+  printf '%s\n' "$@" >> "$base/switch"
+  [ ! -e "$base/switch-failure" ] || exit 34 ;;
 *) exit 99 ;;
 esac
 "#,
@@ -398,6 +422,103 @@ esac
             .await
             .expect("text command was not reached");
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn switches_inside_tmux_without_attaching_or_sending_input() {
+        let fixture = ReplyFixture::new();
+        assert!(
+            fixture
+                .engine
+                .try_switch_work_item_in_context("ABC-123", true)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.path("switch")).unwrap(),
+            "switch-client\n-E\n-t\n$1:@2.%14\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.path("log"))
+                .unwrap()
+                .lines()
+                .count(),
+            2
+        );
+        assert!(!fixture.path("text").exists());
+        assert!(!fixture.path("submit").exists());
+        assert_eq!(fixture.engine.work_items().unwrap(), [item()]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn outside_tmux_defers_attachment_without_invoking_transport() {
+        let fixture = ReplyFixture::new();
+        assert!(
+            !fixture
+                .engine
+                .try_switch_work_item_in_context("ABC-123", false)
+                .await
+                .unwrap()
+        );
+        assert!(!fixture.path("log").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_switch_preserves_registration_and_does_not_retry_or_attach() {
+        let fixture = ReplyFixture::new();
+        std::fs::write(fixture.path("switch-failure"), "").unwrap();
+        assert!(matches!(
+            fixture
+                .engine
+                .try_switch_work_item_in_context("ABC-123", true)
+                .await,
+            Err(ActionError::Transport(DiscoveryError::CommandFailed {
+                code: Some(34),
+                ..
+            }))
+        ));
+        assert_eq!(
+            std::fs::read_to_string(fixture.path("log"))
+                .unwrap()
+                .lines()
+                .count(),
+            2
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.path("switch"))
+                .unwrap()
+                .lines()
+                .count(),
+            4
+        );
+        assert_eq!(fixture.engine.work_items().unwrap(), [item()]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn switch_revalidates_registration_and_pane_before_changing_focus() {
+        let fixture = ReplyFixture::new();
+        assert!(matches!(
+            fixture
+                .engine
+                .try_switch_work_item_in_context("missing", true)
+                .await,
+            Err(ActionError::UnknownWorkItem(_))
+        ));
+        assert!(!fixture.path("log").exists());
+        std::fs::write(fixture.path("snapshot"), "").unwrap();
+        assert!(matches!(
+            fixture
+                .engine
+                .try_switch_work_item_in_context("ABC-123", true)
+                .await,
+            Err(ActionError::MissingPane { .. })
+        ));
+        assert!(!fixture.path("switch").exists());
+        assert_eq!(fixture.engine.work_items().unwrap(), [item()]);
     }
 
     #[cfg(unix)]

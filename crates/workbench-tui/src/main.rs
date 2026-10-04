@@ -7,8 +7,8 @@ use tokio::{
     time::{self, MissedTickBehavior},
 };
 use workbench_core::{
-    ApprovalDecision, ApprovalRequest, Engine, Snapshot, WorkItemState, attention_items,
-    validate_agent_input,
+    ActionError, ApprovalDecision, ApprovalRequest, Engine, Snapshot, WorkItemState,
+    attention_items, validate_agent_input,
 };
 
 mod cleanup;
@@ -575,7 +575,10 @@ async fn event_loop(
                             KeyCode::Char('q') | KeyCode::Esc => return Ok(RunExit::Quit),
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(RunExit::Quit),
                             _ => {
-                                if let Some(id) = navigate(key, &state, view, &mut scroll, interaction, terminal.size()?.height) { return Ok(RunExit::Focus(id)); }
+                                if let Some(id) = navigate(key, &state, view, &mut scroll, interaction, terminal.size()?.height)
+                                    && let Some(exit) = finish_switch(&id, interaction, engine.try_switch_work_item(&id).await) {
+                                        return Ok(exit);
+                                    }
                                 state.apply_acknowledgement(interaction);
                                 if let Some(request) = interaction.approval_requested.take() {
                                     interaction.sending = true;
@@ -614,6 +617,22 @@ async fn event_loop(
                     }
                 }
             }
+        }
+    }
+}
+
+/// Only an external attachment needs to leave the event loop and restore the
+/// terminal. A switch (including a failed one) keeps the display and watcher alive.
+fn finish_switch(
+    id: &str,
+    interaction: &mut interaction::Interaction,
+    result: Result<bool, ActionError>,
+) -> Option<RunExit> {
+    match result {
+        Ok(false) => Some(RunExit::Focus(id.into())),
+        result => {
+            interaction.finish_focus(id, result.map(|_| ()));
+            None
         }
     }
 }
@@ -783,6 +802,58 @@ fn navigate(
 mod tests {
     use super::*;
     use workbench_core::{AgentStatus, PaneAvailability, WorkItem, WorkItemKind};
+
+    #[test]
+    fn tmux_switch_keeps_the_event_loop_and_selection_state() {
+        let mut interaction = interaction::Interaction {
+            selected_id: Some("task".into()),
+            detail_item_id: Some("task".into()),
+            work_list_offset: 7,
+            message: Some("stale notice".into()),
+            ..Default::default()
+        };
+        assert!(finish_switch("task", &mut interaction, Ok(true)).is_none());
+        assert_eq!(interaction.selected_id.as_deref(), Some("task"));
+        assert_eq!(interaction.detail_item_id.as_deref(), Some("task"));
+        assert_eq!(interaction.work_list_offset, 7);
+        assert!(interaction.message.is_none());
+    }
+
+    #[test]
+    fn failed_switch_stays_in_the_tui_without_falling_back_to_attachment() {
+        let mut interaction = interaction::Interaction {
+            selected_id: Some("task".into()),
+            ..Default::default()
+        };
+        for error in [
+            ActionError::MissingPane {
+                item: "task".into(),
+                pane: "%14".into(),
+            },
+            ActionError::Transport(workbench_core::DiscoveryError::CommandFailed {
+                code: Some(1),
+                message: "client disappeared".into(),
+            }),
+        ] {
+            assert!(finish_switch("task", &mut interaction, Err(error)).is_none());
+            assert!(
+                interaction
+                    .message
+                    .as_deref()
+                    .unwrap()
+                    .starts_with("Could not open task:")
+            );
+            assert_eq!(interaction.selected_id.as_deref(), Some("task"));
+        }
+    }
+
+    #[test]
+    fn external_attachment_exits_the_loop_for_terminal_restoration() {
+        let mut interaction = interaction::Interaction::default();
+        assert!(matches!(finish_switch("task", &mut interaction, Ok(false)),
+            Some(RunExit::Focus(id)) if id == "task"));
+        assert!(interaction.message.is_none());
+    }
 
     fn approval_state() -> AppState {
         let mut state = state(&[

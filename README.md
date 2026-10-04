@@ -92,8 +92,9 @@ rechecks the prompt before sending a decision; `y` never grants persistent
 permission. `n` rejects first, then opens a reply for your instructions. Other
 prompts or customized agent shortcuts should be handled in the agent pane.
 
-Opening a pane leaves Workbench running. Use your tmux navigation to return; when
-running outside tmux, detach from the opened session to return to Workbench.
+Opening a pane inside tmux keeps Workbench's display, selection, and background
+refresh running. Use your tmux navigation to return. When running outside tmux,
+Workbench restores the terminal before attaching; detach to return to Workbench.
 
 ## Reviewing code
 
