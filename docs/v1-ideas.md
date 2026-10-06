@@ -83,7 +83,8 @@ Still potential follow-ups: orphaned review-history pruning, stale-registration
 bulk selection, archiving, and broader owner/session/duplicate-window support.
 No automatic cleanup or review-history deletion is implemented.
 
-Metadata housekeeping remains under discussion, not approved for implementation:
+Metadata housekeeping is a v1 candidate. Its exact scope remains under
+discussion; implementation has not been approved:
 
 - Bulk unregister explicitly selected missing-resource entries, without touching
   code, branches, panes, or saved review history. Missing resources alone do not
@@ -97,3 +98,33 @@ Metadata housekeeping remains under discussion, not approved for implementation:
 
 This is distinct from the already implemented workspace cleanup: metadata
 housekeeping must not close windows or delete workspaces as a side effect.
+
+### Proposed first scope: shared removal menu, then bulk unregister
+
+Consolidate the selected work item's unregister and workspace-cleanup entry
+points into one lazygit-style action menu. The menu must keep the actions
+distinct and disclose what each keeps/removes:
+
+- Unregister only: remove the registration; keep pane, workspace, branch, and
+  saved review history. Open the existing explicit unregister confirmation.
+- Clean up workspace: open the existing ownership/safety preview and cancel-first
+  confirmation for the entire workmux window and its linked worktree. Keep branch
+  and review history; unregister only after verified cleanup success.
+
+Opening the menu or choosing an action must not itself remove anything. Capture
+the selected registration so refreshes cannot retarget the operation. Preserve
+all existing cleanup restrictions and revalidation. A blocked or failed cleanup
+must never fall back to unregistering. Menu help must be scoped to its actions.
+The shared WORK shortcut, menu shortcuts, and removal of the old direct shortcut
+are proposals requiring user approval, not implemented bindings.
+
+As a separate next slice, preview registrations with confirmed missing panes or
+workspace directories and let the user explicitly select which to unregister.
+Discovery/access failures and unknown agent activity are not proof of absence.
+Recheck registrations and resource availability before confirmation/execution,
+and require renewed approval if an entry changed or its resources returned.
+Do not delete workspace resources or review history in this bulk operation.
+
+Recommend leaving archive/restore, review-history pruning, automatic removal,
+bulk workspace deletion, and broader cleanup-owner support outside this first
+scope. These boundaries and the bulk-selection interaction still need agreement.
