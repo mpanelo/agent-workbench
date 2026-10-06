@@ -3,6 +3,23 @@
 Potential follow-ups deferred beyond v1. These are not committed implementation
 plans.
 
+## Attention age
+
+Show how long a current input request has been waiting or how recently an agent
+turn finished, without reordering work items or changing selection. Define which
+events establish/reset the timestamp and distinguish first observation from a
+verified agent event time. Decide restart behavior and privacy/retention before
+implementation. Deferred from the v1 shortlist.
+
+## Claude lifecycle-status support
+
+Investigate reliable Claude activity, input-request, and turn-completion signals,
+with explicit source validation and conservative unavailable/unknown behavior.
+Recognizing a Claude pane is not equivalent to supervising its lifecycle. Define
+supported versions, setup, event boundaries, and tests before implementation;
+do not assume all agents share Codex's hooks or permission controls. Deferred
+from the v1 shortlist; no agent configuration is changed by this backlog item.
+
 ## Complete agent-response viewing in WORK
 
 Show the selected work item's complete latest agent response in a read-only,

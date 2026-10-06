@@ -5,6 +5,32 @@ Potential follow-ups for v1, plus completed ideas retained for context.
 Complete agent-response viewing is deferred to [v2](v2-ideas.md), not a v1
 pane-preview or popup feature.
 
+## Relink a missing agent pane
+
+Keep this candidate in v1. Allow an explicit choice of a replacement pane from
+SESSIONS for an existing registration, preserving its Work ID, description,
+workspace, and saved review history instead of unregistering and registering
+again. Revalidate both the captured registration and replacement pane before
+saving. Do not infer a replacement from a matching title, directory, or branch.
+Confirm the interaction and any new keybindings before implementation.
+
+## Git and review counts in WORK (under discussion)
+
+This is a numeric workspace/review summary, not a prose summary of the agent's
+response or a claim about changes made in its latest turn. Reuse the existing
+REVIEW engine's Git diff and saved file-review snapshots for the selected work
+item, using the same workspace and resolved diff base.
+
+Potential counts include changed files, unreviewed files, and changes since
+review, including previously reviewed paths that disappeared from the base diff.
+Define the count categories before implementation; do not assume all counts have
+the same denominator. Show freshness and explicit unavailable states on capture
+failures or limits. Concurrent edits mean a capture is not an atomic snapshot of
+the entire live workspace. Do not display a partial result as complete or an
+error as zero changes. This idea has not been approved for implementation.
+
+Attention age and Claude lifecycle-status support are deferred to [v2](v2-ideas.md).
+
 ## Clarify turn completion and acknowledge attention items
 
 Implemented: the displayed status is `TURN FINISHED` (core enum remains
@@ -56,3 +82,18 @@ See the README's cleanup section for safeguards and partial-failure behavior.
 Still potential follow-ups: orphaned review-history pruning, stale-registration
 bulk selection, archiving, and broader owner/session/duplicate-window support.
 No automatic cleanup or review-history deletion is implemented.
+
+Metadata housekeeping remains under discussion, not approved for implementation:
+
+- Bulk unregister explicitly selected missing-resource entries, without touching
+  code, branches, panes, or saved review history. Missing resources alone do not
+  prove an entry is disposable; some entries should be relinked instead.
+- Separately preview saved review contexts without a current matching
+  registration. These may still be useful after re-registration or an ID rename.
+  Deleting them loses saved review marks and diff snapshots, so any removal must
+  be opt-in, explain the loss, and decide backup/recovery behavior first.
+- Archiving is a possible alternative to unregistering, but its restore behavior
+  and persistence model need a separate decision.
+
+This is distinct from the already implemented workspace cleanup: metadata
+housekeeping must not close windows or delete workspaces as a side effect.
