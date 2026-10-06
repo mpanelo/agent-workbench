@@ -55,7 +55,7 @@ impl Context {
     pub fn hints(self) -> &'static str {
         match self {
             Self::Work => {
-                "Respond: r | Edit: e | Remove: c | Acknowledge finished turn: x | Views: w/s | Quit: q | Select: j/k | Open: <enter> | Review: d | Scroll details: <c-d>/<c-u> | Help: ?"
+                "Respond: r | Edit: e | Clean Up: c | Acknowledge finished turn: x | Views: w/s | Quit: q | Select: j/k | Open: <enter> | Review: d | Scroll details: <c-d>/<c-u> | Help: ?"
             }
             Self::Sessions { all: false } => {
                 "All panes: f | Views: w/s | Quit: q | Select: j/k | Register: <enter>/r | Scroll: <c-d>/<c-u> | Help: ?"
@@ -89,8 +89,8 @@ impl Context {
                 "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→"
             }
             Self::Unregister => "Unregister entry: <enter> | Cancel: Esc/Ctrl-C | Help: ?",
-            Self::Removal { blocked: false } => "Unregister: u | Clean: c | Cancel: Esc | Help: ?",
-            Self::Removal { blocked: true } => "Cancel: Esc | Help: ?",
+            Self::Removal { blocked: false } => "Unregister: u | Clean: c | Cancel: Esc",
+            Self::Removal { blocked: true } => "Cancel: Esc",
             Self::Cleanup => {
                 "Choose: Tab/←/→ | Confirm: <enter> | Cancel: Esc/q/<c-c> | Scroll: <c-d>/<c-u> | Help: ?"
             }
@@ -176,13 +176,6 @@ impl HelpUi {
         self.context.is_some()
     }
 
-    /// Keep an open help screen consistent with a modal's current availability.
-    pub fn refresh_context(&mut self, context: Context) {
-        if self.is_open() {
-            self.context = Some(context);
-        }
-    }
-
     /// Consume all input while open so dismissing help never activates a view
     /// action, submits a draft, quits the app, or pastes into an editor.
     pub fn event(&mut self, event: &Event, context: Context, height: u16) -> bool {
@@ -192,7 +185,10 @@ impl HelpUi {
             let plain = !key
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
-            let toggle = plain && key.code == KeyCode::Char('?') && !context.text_input();
+            let toggle = plain
+                && key.code == KeyCode::Char('?')
+                && !context.text_input()
+                && !matches!(context, Context::Removal { .. });
             if self.is_open() {
                 if toggle
                     || plain && matches!(key.code, KeyCode::Esc | KeyCode::Char('q' | '?'))
@@ -313,17 +309,7 @@ mod tests {
     #[test]
     fn every_view_shows_its_own_complete_bindings_including_hidden_footer_hints() {
         for (context, required, excluded) in [
-            (Context::Work, "Remove: c", "Unregister: u"),
-            (
-                Context::Removal { blocked: false },
-                "Unregister: u",
-                "Respond: r",
-            ),
-            (
-                Context::Removal { blocked: true },
-                "Cancel: Esc",
-                "Unregister: u",
-            ),
+            (Context::Work, "Clean Up: c", "Unregister: u"),
             (
                 Context::Cleanup,
                 "Choose: Tab/←/→",
@@ -407,23 +393,24 @@ mod tests {
     }
 
     #[test]
-    fn open_removal_help_tracks_blocked_actions_without_closing_or_activating_them() {
-        let mut help = HelpUi::default();
-        let available = Context::Removal { blocked: false };
-        let blocked = Context::Removal { blocked: true };
-        help.refresh_context(available);
-        assert!(!help.is_open());
-        assert!(help.event(&key(KeyCode::Char('?')), available, 24));
-        assert!(screen(&mut help, 100, 24).contains("Unregister: u"));
-        help.refresh_context(blocked);
-        let text = screen(&mut help, 100, 24);
-        assert!(text.contains("Cancel: Esc"));
-        assert!(!text.contains("Unregister: u"));
-        assert!(!text.contains("Clean: c"));
-        assert!(help.event(&key(KeyCode::Char('u')), blocked, 24));
-        assert!(help.is_open());
-        assert!(help.event(&key(KeyCode::Esc), blocked, 24));
-        assert!(!help.is_open());
+    fn removal_options_never_open_help_but_other_views_still_can() {
+        for blocked in [false, true] {
+            let mut help = HelpUi::default();
+            let context = Context::Removal { blocked };
+            assert!(!context.hints().contains("Help"));
+            for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+                assert!(!help.event(
+                    &Event::Key(KeyEvent::new(KeyCode::Char('?'), modifiers)),
+                    context,
+                    24
+                ));
+                assert!(!help.is_open());
+            }
+            // Cancellation belongs to the popup, not a hidden help screen.
+            assert!(!help.event(&key(KeyCode::Esc), context, 24));
+            assert!(help.event(&key(KeyCode::Char('?')), Context::Work, 24));
+            assert!(help.is_open());
+        }
     }
 
     #[test]

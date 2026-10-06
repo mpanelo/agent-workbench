@@ -83,8 +83,9 @@ while the form is open, cancel and reopen it before saving.
 
 ## Keyboard shortcuts
 
-Press `?` for the full bindings in the current view. In text inputs, `?` types a
-literal question mark. `<c-d>` means Control+D; `<enter>` means the Enter key.
+Press `?` for the full bindings in the current view. Clean Up Options shows its
+controls inline instead. In text inputs, `?` types a literal question mark.
+`<c-d>` means Control+D; `<enter>` means the Enter key.
 
 | Action | Key |
 | --- | --- |
@@ -94,7 +95,7 @@ literal question mark. `<c-d>` means Control+D; `<enter>` means the Enter key.
 | Respond to an agent | `r` in WORK; reply editor uses `<enter>` to send |
 | Review the selected item's diff | `d` in WORK |
 | Edit ID and description | `e` in WORK |
-| Open removal options | `c` in WORK |
+| Open Clean Up Options | `c` in WORK |
 | Unregister only / clean up workspace | `u` / `c` in the removal menu |
 | Approve a request once | `y` in the response bar |
 | Reject and compose instructions | `n` in the response bar |
@@ -148,10 +149,11 @@ context.
 
 ## Workspace cleanup
 
-Press `c` in WORK to open a removal menu for the selected item. Inside the menu,
+Press `c` in WORK to open **Clean Up Options** for the selected item. Inside the menu,
 `u` opens unregister confirmation, `c` opens workspace-cleanup preview, and `Esc`
 cancels. Neither opening the menu nor choosing an action removes anything.
-`<enter>` does not pick a default action; press `?` for this menu's bindings.
+All menu controls are shown inline; `?` does not open help here, and `<enter>` does
+not pick a default action. The bottom help bar is hidden while this menu is open.
 Changed or removed registrations disable the menu until you cancel and reopen it.
 
 Unregistering with `c`, then `u` removes only the Workbench entry after confirmation;

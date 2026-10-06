@@ -357,9 +357,6 @@ async fn event_loop(
                 .as_ref()
                 .and_then(|result| result.as_deref().ok()),
         );
-        if removal.is_open() {
-            help.refresh_context(removal.help_context());
-        }
         if redraw {
             terminal.draw(|frame| {
                 if help.is_open() {
@@ -1630,7 +1627,7 @@ mod tests {
     }
 
     #[test]
-    fn removal_popup_preserves_work_rows_selection_and_only_shows_applicable_footer() {
+    fn cleanup_options_preserve_work_rows_selection_and_hide_the_bottom_help_bar() {
         use ratatui::{Terminal, backend::TestBackend};
         let state = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
         let mut interaction = interaction::Interaction {
@@ -1651,10 +1648,10 @@ mod tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
-        // A 58x9 centered popup: outside it, only the context footer changes.
+        // A 58x7 centered popup: outside it, only the context footer changes.
         for y in 0..23 {
             for x in 0..100 {
-                if !(21..79).contains(&x) || !(7..16).contains(&y) {
+                if !(21..79).contains(&x) || !(8..15).contains(&y) {
                     assert_eq!(
                         buffer[(x, y)],
                         baseline[(x, y)],
@@ -1667,13 +1664,25 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(footer.contains("Unregister: u"));
-        assert!(footer.contains("Clean: c"));
-        assert!(!footer.contains("Respond:"));
+        assert!(
+            footer.trim().is_empty(),
+            "bottom help bar still visible: {footer}"
+        );
         assert_eq!(interaction.selected_id.as_deref(), Some("B"));
         assert_eq!(interaction.work_list_offset, 0);
         assert_eq!(interaction.detail_item_id.as_deref(), Some("B"));
-        theme::assert_text_style(buffer, "Remove work item", theme::TEAL, theme::MANTLE);
+        theme::assert_text_style(buffer, "Clean Up Options", theme::TEAL, theme::MANTLE);
+        assert!(matches!(
+            menu.key(KeyCode::Esc.into()),
+            removal::Intent::Cancel
+        ));
+        terminal
+            .draw(|frame| {
+                ui::render_work(frame, &state, &mut 0, &mut interaction);
+                menu.render(frame);
+            })
+            .unwrap();
+        assert_eq!(terminal.backend().buffer(), &baseline);
     }
 
     #[test]

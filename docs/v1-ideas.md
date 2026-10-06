@@ -112,18 +112,22 @@ item. The menu keeps the actions distinct and discloses what each keeps/removes:
   linked worktree. Keep branch and review history; unregister only after verified
   cleanup success.
 
-The compact menu shows the work ID, `Unregister: u`, `Clean: c`, short scope
-descriptions, and a cancel/help footer. Workspace paths and generic warning text
-are omitted here; full consequences remain in the next confirmation. Warnings
-appear only when registration changes or load failures block an action.
+The compact **Clean Up Options** menu shows the work ID and key-first action rows:
+`u    Unregister work item. Keep pane and files.` and
+`c    Close workmux window. Remove worktree.`, followed by `Esc  Cancel`.
+The WORK action is labeled **Clean Up**. All menu controls are shown inline;
+there is no help entry or `?` help behavior here, and the bottom help bar is hidden.
+Workspace paths and generic warning text are omitted; full consequences remain
+in the next confirmation. Warnings appear only when registration changes or load
+failures block an action.
 
 Opening the menu or choosing an action does not itself remove anything. Its
 captured registration cannot be retargeted by refreshes; changed/removed entries
 disable choices until reopened and load errors pause choices until recovery.
 Existing cleanup restrictions and revalidation are unchanged. Blocked or failed
-cleanup never falls back to unregistering. `Esc` cancels; menu help lists only its
-applicable bindings. `<enter>` does not choose a default action. These menu
-controls were approved; the old standalone `u` binding in WORK was removed.
+cleanup never falls back to unregistering. `Esc` cancels; `<enter>` does not choose
+a default action. These menu controls were approved; the old standalone `u`
+binding in WORK was removed.
 
 As a separate next slice, preview registrations with confirmed missing panes or
 workspace directories and let the user explicitly select which to unregister.

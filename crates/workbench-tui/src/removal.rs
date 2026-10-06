@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Clear, Paragraph, Wrap},
 };
 use workbench_core::{WorkItem, WorkItemState};
@@ -76,21 +76,24 @@ impl RemovalUi {
     pub fn render(&self, frame: &mut Frame<'_>) {
         let Some(item) = &self.item else { return };
         let area = frame.area();
-        frame.render_widget(
-            theme::footer(self.help_context().hints()),
-            Rect::new(
-                area.x,
-                area.bottom().saturating_sub(1),
-                area.width,
-                area.height.min(1),
-            ),
+        let bottom = Rect::new(
+            area.x,
+            area.bottom().saturating_sub(1),
+            area.width,
+            area.height.min(1),
         );
+        frame.render_widget(Clear, bottom);
+        frame.render_widget(Block::default().style(theme::text()), bottom);
         let disabled = self.changed || self.unavailable;
         let width = area.width.saturating_sub(4).max(area.width.min(30)).min(58);
-        let detailed = width >= 46 && area.height >= if disabled { 11 } else { 9 };
-        let height = area
-            .height
-            .min(if detailed { 9 } else { 6 } + if disabled { 2 } else { 0 });
+        let action_height = if width < 50 && area.height >= if disabled { 11 } else { 9 } {
+            2
+        } else {
+            1
+        };
+        let gap = u16::from(area.height >= if disabled { 9 } else { 7 });
+        let notice_height = if disabled { 2 } else { 0 };
+        let height = area.height.min(4 + gap + action_height * 2 + notice_height);
         let popup = Rect::new(
             area.x + (area.width - width) / 2,
             area.y + (area.height - height) / 2,
@@ -99,17 +102,17 @@ impl RemovalUi {
         );
         frame.render_widget(Clear, popup);
         let block = Block::bordered()
-            .title("Remove work item")
+            .title("Clean Up Options")
             .style(theme::panel())
             .border_style(theme::border(true))
             .title_style(theme::accent());
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
-        let [target, _, actions, notice, footer] = Layout::vertical([
+        let [target, _, actions, notice, cancel] = Layout::vertical([
             Constraint::Length(1),
-            Constraint::Length(u16::from(detailed)),
-            Constraint::Length(if detailed { 4 } else { 2 }),
-            Constraint::Length(if disabled { 2 } else { 0 }),
+            Constraint::Length(gap),
+            Constraint::Length(action_height * 2),
+            Constraint::Length(notice_height),
             Constraint::Length(1),
         ])
         .areas(inner);
@@ -117,35 +120,33 @@ impl RemovalUi {
             Paragraph::new(format!("Work ID: {}", visible(&item.id))).style(theme::panel()),
             target,
         );
-        let [unregister, cleanup] = Layout::vertical([
-            Constraint::Length(if detailed { 2 } else { 1 }),
-            Constraint::Min(0),
-        ])
-        .areas(actions);
-        for (area, hint, description) in [
-            (unregister, "Unregister: u", "Keep pane and files."),
+        let [unregister, cleanup] =
+            Layout::vertical([Constraint::Length(action_height), Constraint::Min(0)])
+                .areas(actions);
+        for (area, key, label, description) in [
+            (
+                unregister,
+                "u",
+                "Unregister",
+                "Unregister work item. Keep pane and files.",
+            ),
             (
                 cleanup,
-                "Clean: c",
-                "Close entire workmux window; remove worktree.",
+                "c",
+                "Clean",
+                "Close workmux window. Remove worktree.",
             ),
         ] {
-            let [heading, detail] =
-                Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
             let line = if disabled {
-                Line::styled(
-                    format!("{} (disabled)", hint.split(':').next().unwrap()),
-                    theme::muted(),
-                )
+                Line::styled(format!("     {label} (disabled)"), theme::muted())
             } else {
-                theme::shortcut_line(hint)
+                key_line(key, description)
             };
-            frame.render_widget(Paragraph::new(line).style(theme::panel()), heading);
             frame.render_widget(
-                Paragraph::new(description)
+                Paragraph::new(line)
                     .style(theme::panel())
                     .wrap(Wrap { trim: false }),
-                detail,
+                area,
             );
         }
         let message = if self.changed {
@@ -161,8 +162,18 @@ impl RemovalUi {
                 .wrap(Wrap { trim: false }),
             notice,
         );
-        frame.render_widget(theme::footer("Cancel: Esc | Help: ?"), footer);
+        frame.render_widget(
+            Paragraph::new(key_line("Esc", "Cancel")).style(theme::panel()),
+            cancel,
+        );
     }
+}
+
+fn key_line(key: &'static str, description: &'static str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{key:<5}"), theme::accent().fg(theme::PEACH)),
+        Span::raw(description),
+    ])
 }
 
 #[cfg(test)]
@@ -261,6 +272,7 @@ mod tests {
             KeyCode::Char('s'),
             KeyCode::Char('w'),
             KeyCode::Char('x'),
+            KeyCode::Char('?'),
         ] {
             assert!(matches!(menu.key(key(code)), Intent::None));
             assert!(menu.is_open());
@@ -371,14 +383,11 @@ mod tests {
         let menu = menu();
         let text = screen(&menu, 100, 24);
         for expected in [
-            "Remove work item",
+            "Clean Up Options",
             "Work ID: fix-auth",
-            "Unregister: u",
-            "Clean: c",
-            "Keep pane and files.",
-            "Close entire workmux window; remove worktree.",
-            "Cancel: Esc",
-            "Help: ?",
+            "u    Unregister work item. Keep pane and files.",
+            "c    Close workmux window. Remove worktree.",
+            "Esc  Cancel",
         ] {
             assert!(text.contains(expected), "missing {expected}: {text}");
         }
@@ -387,10 +396,19 @@ mod tests {
         assert!(!text.contains("/repo/worktree"));
         assert!(!text.contains("Nothing is removed"));
         assert!(!text.contains("confirmation"));
+        assert!(!text.contains("Help"));
+        assert!(!text.contains('?'));
+        assert!(!text.contains("Remove work item"));
+        assert!(!text.contains("Remove options"));
         assert!(!text.contains('\u{2014}'));
         for (width, height) in [(30, 6), (30, 10), (80, 8)] {
             let text = screen(&menu, width, height);
-            for expected in ["Work ID: fix-auth", "Unregister: u", "Clean: c", "Help: ?"] {
+            for expected in [
+                "Work ID: fix-auth",
+                "u    Unregister work item.",
+                "c    Close workmux window.",
+                "Esc  Cancel",
+            ] {
                 assert!(text.contains(expected), "missing {expected}: {text}");
             }
         }
@@ -405,7 +423,7 @@ mod tests {
             let mut menu = menu();
             menu.observe(if unavailable { None } else { Some(&[]) });
             let text = screen(&menu, 100, 24);
-            for expected in ["Unregister (disabled)", "Clean (disabled)", "Cancel: Esc"] {
+            for expected in ["Unregister (disabled)", "Clean (disabled)", "Esc  Cancel"] {
                 assert!(text.contains(expected), "missing {expected}: {text}");
             }
             assert!(text.contains(if unavailable {
@@ -413,8 +431,10 @@ mod tests {
             } else {
                 "Registration changed or removed. Cancel and reopen."
             }));
-            assert!(!text.contains("Unregister: u"));
-            assert!(!text.contains("Clean: c"));
+            assert!(!text.contains("u    Unregister"));
+            assert!(!text.contains("c    Close"));
+            assert!(!text.contains("Help"));
+            assert!(!text.contains('?'));
             assert!(!text.contains('\u{2014}'));
             assert!(matches!(menu.key(key(KeyCode::Char('c'))), Intent::None));
             assert!(matches!(menu.key(key(KeyCode::Char('u'))), Intent::None));
