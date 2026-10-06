@@ -66,7 +66,7 @@ impl Context {
                 "Send: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear: <c-u> | Move cursor: ←/→"
             }
             Self::Registration => {
-                "Field: Tab/Shift-Tab/↑/↓ | Toggle kind: Space | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→"
+                "Field: Tab/Shift-Tab/↑/↓ | Toggle type: Space | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→"
             }
             Self::Edit => {
                 "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→"
@@ -285,8 +285,8 @@ mod tests {
             ),
             (Context::Review, "Back: Esc", "Unregister: u"),
             (Context::Reply, "Send: <enter>", "Save: <enter>"),
-            (Context::Registration, "Toggle kind: Space", "Send: <enter>"),
-            (Context::Edit, "Clear field: <c-u>", "Toggle kind: Space"),
+            (Context::Registration, "Toggle type: Space", "Send: <enter>"),
+            (Context::Edit, "Clear field: <c-u>", "Toggle type: Space"),
             (
                 Context::Unregister,
                 "Unregister entry: <enter>",

@@ -2,6 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
+    text::Line,
     widgets::{Block, Paragraph, Wrap},
 };
 use workbench_core::{
@@ -14,14 +15,7 @@ use crate::{
     ui::{display_path, visible},
 };
 
-const LABELS: [&str; 6] = [
-    "ID",
-    "Short Description",
-    "Kind",
-    "Repository",
-    "Workspace",
-    "Branch (optional)",
-];
+const LABELS: [&str; 3] = ["ID", "Short Description", "Type"];
 
 #[derive(Default)]
 pub(crate) struct RegistrationUi {
@@ -33,7 +27,7 @@ pub(crate) struct RegistrationUi {
     pub generation: u64,
     fields: Vec<String>,
     selected: usize,
-    cursors: [InputCursor; 6],
+    cursors: [InputCursor; 3],
 }
 
 pub(crate) enum RegistrationIntent {
@@ -52,7 +46,7 @@ impl RegistrationUi {
         self.error = None;
         self.fields.clear();
         self.selected = 0;
-        self.cursors = [InputCursor::default(); 6];
+        self.cursors = [InputCursor::default(); 3];
         self.generation
     }
 
@@ -67,9 +61,6 @@ impl RegistrationUi {
                     draft.item.id.clone(),
                     draft.item.title.clone(),
                     draft.item.kind.to_string(),
-                    display_path(&draft.item.repository),
-                    display_path(&draft.item.workspace),
-                    draft.item.branch.clone().unwrap_or_default(),
                 ];
                 self.draft = Some(draft);
                 self.error = None;
@@ -122,20 +113,6 @@ impl RegistrationUi {
                 } else {
                     WorkItemKind::ExternalReview
                 };
-                match (
-                    absolute_path(&self.fields[3]),
-                    absolute_path(&self.fields[4]),
-                ) {
-                    (Ok(repository), Ok(workspace)) => {
-                        edited.item.repository = repository;
-                        edited.item.workspace = workspace;
-                    }
-                    (Err(error), _) | (_, Err(error)) => {
-                        self.error = Some(error);
-                        return RegistrationIntent::None;
-                    }
-                }
-                edited.item.branch = (!self.fields[5].is_empty()).then(|| self.fields[5].clone());
                 self.saving = true;
                 self.error = None;
                 return RegistrationIntent::Save(Box::new(edited));
@@ -234,6 +211,19 @@ impl RegistrationUi {
             );
             return;
         }
+        let Some(draft) = &self.draft else {
+            // Discovery failures use the full body, rather than the short
+            // validation area, so the manual-registration advice stays visible.
+            if let Some(error) = &self.error {
+                frame.render_widget(
+                    Paragraph::new(visible(error))
+                        .style(theme::error())
+                        .wrap(Wrap { trim: false }),
+                    body.union(notice),
+                );
+            }
+            return;
+        };
         if let Some(error) = &self.error {
             frame.render_widget(
                 Paragraph::new(visible(error))
@@ -249,25 +239,48 @@ impl RegistrationUi {
                 .style(theme::notice()),
                 notice,
             );
-        } else if let Some(message) = self.draft.as_ref().and_then(|draft| draft.notice.as_ref()) {
-            frame.render_widget(
-                Paragraph::new(visible(message))
-                    .style(theme::notice())
-                    .wrap(Wrap { trim: false }),
-                notice,
-            );
         } else {
             frame.render_widget(
-                Paragraph::new("Pane is fixed. Review the defaults, then <enter> to register.")
+                Paragraph::new("Detected Git target is read-only. <enter> to register.")
                     .style(theme::muted()),
                 notice,
             );
         }
-        let areas = Layout::vertical([Constraint::Length(3); 6]).split(body);
+        let mut metadata = vec![
+            format!(
+                "Workspace: {}",
+                visible(&display_path(&draft.item.workspace))
+            ),
+            format!(
+                "Branch: {}",
+                visible(draft.item.branch.as_deref().unwrap_or("Detached HEAD"))
+            ),
+        ];
+        if draft.item.repository != draft.item.workspace {
+            metadata.push(format!(
+                "Repository: {}",
+                visible(&display_path(&draft.item.repository))
+            ));
+        }
+        let metadata = metadata_rows(metadata, body.width);
+        let metadata_height = metadata.len();
+        // Keep at least one full editor on short terminals; very small terminals
+        // prioritize input over the read-only summary.
+        let [summary, editors] = Layout::vertical([
+            Constraint::Length(
+                u16::try_from(metadata_height)
+                    .unwrap_or(u16::MAX)
+                    .min(body.height.saturating_sub(3)),
+            ),
+            Constraint::Min(0),
+        ])
+        .areas(body);
+        frame.render_widget(Paragraph::new(metadata).style(theme::muted()), summary);
+        let areas = Layout::vertical([Constraint::Length(3); 3]).split(editors);
         // On short terminals, show only the active editor so it stays usable.
-        if body.height < 18 {
+        if editors.height < 9 {
             if !self.fields.is_empty() {
-                self.render_field(frame, body, self.selected);
+                self.render_field(frame, editors, self.selected);
             }
         } else {
             for (index, area) in areas.iter().enumerate() {
@@ -290,8 +303,9 @@ impl RegistrationUi {
         };
         let block = Block::bordered()
             .title(format!(
-                "{} / 6 — {}{}{}",
+                "{} / {} — {}{}{}",
                 index + 1,
+                LABELS.len(),
                 LABELS[index],
                 count,
                 if selected { " (editing)" } else { "" }
@@ -332,24 +346,26 @@ impl RegistrationUi {
     }
 }
 
-fn absolute_path(text: &str) -> Result<std::path::PathBuf, String> {
-    let path = if text == "~" || text.starts_with("~/") {
-        let home = std::env::var_os("HOME")
-            .map(std::path::PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .ok_or_else(|| "HOME is unavailable; enter an absolute path.".to_owned())?;
-        if text == "~" {
-            home
-        } else {
-            home.join(&text[2..])
+// Hard-wrap detected paths without losing spaces or relying on estimated word
+// wrap heights. The read-only summary must not overlap the editable fields.
+fn metadata_rows(values: Vec<String>, width: u16) -> Vec<Line<'static>> {
+    let limit = usize::from(width.max(1));
+    let mut lines = Vec::new();
+    for value in values {
+        let mut row = String::new();
+        let mut columns = 0;
+        for ch in value.chars() {
+            let ch_width = Line::from(ch.to_string()).width();
+            if columns + ch_width > limit && !row.is_empty() {
+                lines.push(Line::from(std::mem::take(&mut row)));
+                columns = 0;
+            }
+            row.push(ch);
+            columns += ch_width;
         }
-    } else {
-        text.into()
-    };
-    if !path.is_absolute() {
-        return Err("Repository and workspace must be absolute paths (~/ is supported).".into());
+        lines.push(Line::from(row));
     }
-    Ok(path)
+    lines
 }
 
 #[cfg(test)]
@@ -370,7 +386,6 @@ mod tests {
                 pane_id: "%14".into(),
             },
             pane_directory: Some("/work/linked task/src".into()),
-            notice: None,
         }
     }
     fn ready() -> RegistrationUi {
@@ -478,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn editing_pasting_kind_and_optional_branch_are_explicit_and_unicode_safe() {
+    fn only_identity_fields_are_editable_and_unicode_safe() {
         let mut form = ready();
         form.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
         form.paste("ID λ🙂");
@@ -493,49 +508,46 @@ mod tests {
         key(&mut form, KeyCode::Char(' '));
         key(&mut form, KeyCode::Up);
         assert_eq!(form.selected, 1);
-        for _ in 0..4 {
+        for _ in 0..3 {
             key(&mut form, KeyCode::Tab);
         }
+        assert_eq!(form.selected, 1);
+        assert_eq!(form.fields.len(), 3);
+        key(&mut form, KeyCode::Tab);
+        form.paste("must not edit type or metadata");
+        assert_eq!(form.fields[2], "External Review");
+        key(&mut form, KeyCode::BackTab);
         form.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
         let RegistrationIntent::Save(saved) = key(&mut form, KeyCode::Enter) else {
             panic!("expected save");
         };
         assert_eq!(saved.item.kind, WorkItemKind::ExternalReview);
-        assert_eq!(saved.item.branch, None);
+        assert_eq!(saved.item.branch, draft().item.branch);
+        assert_eq!(saved.item.repository, draft().item.repository);
+        assert_eq!(saved.item.workspace, draft().item.workspace);
         assert_eq!(saved.item.id, "ID λq");
         assert_eq!(saved.item.pane_id, "%14");
     }
 
     #[test]
-    fn invalid_paths_and_save_errors_preserve_edits_for_retry() {
+    fn save_errors_preserve_identity_edits_and_detected_target_for_retry() {
         let mut form = ready();
-        form.selected = 4;
-        form.fields[4] = "relative/path".into();
-        assert!(matches!(
-            key(&mut form, KeyCode::Enter),
-            RegistrationIntent::None
-        ));
-        assert!(form.error.as_ref().unwrap().contains("absolute"));
-        assert!(!form.saving);
-        form.fields[4] = "/work/correct".into();
+        form.fields[0] = "edited-id".into();
+        form.fields[1] = "edited description".into();
         assert!(matches!(
             key(&mut form, KeyCode::Enter),
             RegistrationIntent::Save(_)
         ));
         form.saving = false;
         form.error = Some("Duplicate ID; choose another".into());
-        assert_eq!(form.fields[4], "/work/correct");
+        assert_eq!(form.fields[0], "edited-id");
+        assert_eq!(form.fields[1], "edited description");
         assert!(screen(&form, 80, 24).contains("Duplicate ID"));
-        assert!(absolute_path("relative").is_err());
-        if let Some(home) = std::env::var_os("HOME")
-            .map(std::path::PathBuf::from)
-            .filter(|path| path.is_absolute())
-        {
-            assert_eq!(
-                absolute_path("~/some path").unwrap(),
-                home.join("some path")
-            );
-        }
+        let RegistrationIntent::Save(saved) = key(&mut form, KeyCode::Enter) else {
+            panic!("expected retry");
+        };
+        assert_eq!(saved.item.workspace, draft().item.workspace);
+        assert_eq!(saved.item.branch, draft().item.branch);
     }
 
     #[test]
@@ -573,10 +585,10 @@ mod tests {
         ] {
             assert!(wide.contains(text), "{wide}");
         }
-        form.selected = 4;
-        form.fields[4] = "/work/λ\x1b".into();
+        form.selected = 1;
+        form.draft.as_mut().unwrap().item.workspace = "/work/λ\x1b".into();
         let small = screen(&form, 80, 12);
-        assert!(small.contains("5 / 6 — Workspace"));
+        assert!(small.contains("2 / 3 — Short Description"));
         assert!(small.contains("/work/λ\\u{1b}"));
         assert!(!small.contains('\x1b'));
         for (width, height) in [(40, 8), (1, 1), (0, 1)] {
@@ -591,7 +603,7 @@ mod tests {
         let rows: Vec<_> = text.lines().map(str::trim_end).collect();
         assert_eq!(
             rows[23],
-            "Field: Tab/Shift-Tab/↑/↓ | Toggle kind: Space | Save: <enter> | …"
+            "Field: Tab/Shift-Tab/↑/↓ | Toggle type: Space | Save: <enter> | …"
         );
     }
 
@@ -631,7 +643,7 @@ mod tests {
         assert_eq!(terminal.backend().cursor_position().x, 1);
         form.close();
         form.open("%14".into());
-        assert_eq!(form.cursors, [InputCursor::default(); 6]);
+        assert_eq!(form.cursors, [InputCursor::default(); 3]);
     }
 
     #[test]
@@ -642,7 +654,7 @@ mod tests {
         let buffer = terminal.backend().buffer();
         theme::assert_text_style(buffer, "REGISTER WORK ITEM", theme::LAVENDER, theme::MANTLE);
         theme::assert_text_style(buffer, "feature-task", theme::TEXT, theme::SURFACE);
-        theme::assert_text_style(buffer, "2 / 6", theme::SUBTEXT, theme::BASE);
+        theme::assert_text_style(buffer, "2 / 3", theme::SUBTEXT, theme::BASE);
         form.error = Some("test registration error".into());
         terminal.draw(|frame| form.render(frame)).unwrap();
         theme::assert_text_style(
@@ -651,5 +663,60 @@ mod tests {
             theme::RED,
             theme::BASE,
         );
+    }
+
+    #[test]
+    fn read_only_summary_hides_duplicate_repository_and_labels_detached_head() {
+        let mut form = ready();
+        let item = &mut form.draft.as_mut().unwrap().item;
+        item.repository = item.workspace.clone();
+        item.branch = None;
+        let text = screen(&form, 120, 24);
+        assert!(text.contains("Workspace: /work/linked task"), "{text}");
+        assert!(text.contains("Branch: Detached HEAD"), "{text}");
+        assert!(!text.contains("Repository"), "{text}");
+        assert!(!text.contains("optional"), "{text}");
+        let RegistrationIntent::Save(saved) = key(&mut form, KeyCode::Enter) else {
+            panic!("expected detached save");
+        };
+        assert!(saved.item.branch.is_none());
+    }
+
+    #[test]
+    fn unavailable_metadata_blocks_saving_and_shows_recovery_instructions() {
+        let mut form = RegistrationUi::default();
+        let ticket = form.open("%14".into());
+        form.finish(
+            ticket,
+            Err(
+                "Git metadata is unavailable. Use workbench register for manual registration."
+                    .into(),
+            ),
+        );
+        let text = screen(&form, 40, 12);
+        assert!(text.contains("workbench register"), "{text}");
+        assert!(!text.contains("Detached HEAD"), "{text}");
+        assert!(!text.contains("Save:"), "{text}");
+        assert!(matches!(
+            key(&mut form, KeyCode::Enter),
+            RegistrationIntent::None
+        ));
+        assert!(!form.saving);
+    }
+
+    #[test]
+    fn detected_metadata_wraps_without_losing_spaces_or_overlapping_fields() {
+        let values = vec![
+            "Workspace: /work/λ linked task".into(),
+            "Branch: feature/task".into(),
+        ];
+        let rows = metadata_rows(values.clone(), 12);
+        assert!(rows.iter().all(|row| row.width() <= 12));
+        let text: String = rows.iter().map(|row| row.to_string()).collect();
+        assert_eq!(text, values.join(""));
+        let text = screen(&ready(), 40, 24);
+        assert!(text.contains("Workspace: /work/linked task"), "{text}");
+        assert!(text.contains("Branch: feature/task"), "{text}");
+        assert!(text.contains("3 / 3 — Type"), "{text}");
     }
 }

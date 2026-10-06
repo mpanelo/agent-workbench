@@ -40,8 +40,8 @@ session icons. Workmux is optional unless you want workspace cleanup.
 1. Start your coding agents in tmux panes as usual.
 2. Run `workbench`, preferably in its own tmux window.
 3. Press `s` for SESSIONS, select an agent, and press `r` or `<enter>` to register it.
-   Workbench fills in its pane, repository, worktree, and branch when available.
-4. Confirm the Work ID and Short Description, then press `<enter>` to save.
+   Workbench detects its Git workspace and branch and shows them read-only.
+4. Confirm the Work ID, optional Short Description, and Type, then press `<enter>` to save.
 5. Return to WORK with `w` to supervise your registered agents.
 
 WORK keeps an aligned ID/status list in registration order and shows details,
@@ -58,6 +58,11 @@ can represent implementation work or code review.
 
 SESSIONS shows recognized coding-agent commands by default. Press `f` to show all
 panes if your agent runs through a wrapper or isn't recognized.
+Registration shows the repository only when it differs from the workspace.
+`Detached HEAD` means the workspace has no checked-out branch, not that detection
+failed. If Git metadata is unavailable, SESSIONS registration is blocked; use
+`workbench register` for manual registration. If the detected target changes
+while the form is open, cancel and reopen it before saving.
 
 ## Keyboard shortcuts
 

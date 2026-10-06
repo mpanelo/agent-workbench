@@ -24,7 +24,9 @@ opens a reply for instructions. Changed or unsupported prompts must be inspected
 In REVIEW, Space saves file marks; r reloads while restoring unchanged marks.
 Marks persist across restarts; changed captured diffs require re-review.
 In SESSIONS, j/k or arrows select a pane; <enter> or r opens registration with
-pane/Git metadata filled in. <enter> confirms; Tab changes fields; Esc cancels.
+read-only detected workspace/branch. Only ID, Short Description, and Type are
+editable. <enter> confirms; Tab changes fields; Esc cancels. Missing Git metadata
+blocks SESSIONS registration; workbench register remains available manually.
 SESSIONS defaults to recognized agent commands; f toggles all panes.
 In WORK, e edits Work ID and Short Description together; Tab changes fields.
 u opens unregister confirmation. Unregistering

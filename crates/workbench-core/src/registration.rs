@@ -2,14 +2,15 @@
 
 use std::{error::Error, fmt, path::PathBuf};
 
-use crate::{DiscoveryError, Engine, Pane, Snapshot, WorkItem, WorkItemError, WorkItemKind};
+use crate::{
+    DiscoveryError, Engine, GitError, Pane, Snapshot, WorkItem, WorkItemError, WorkItemKind,
+};
 
 #[derive(Clone, Debug)]
 pub struct RegistrationDraft {
     pub item: WorkItem,
     /// Original directory is retained to reject a retargeted pane before saving.
     pub pane_directory: Option<PathBuf>,
-    pub notice: Option<String>,
 }
 
 #[derive(Debug)]
@@ -18,6 +19,9 @@ pub enum RegistrationError {
     Discovery(DiscoveryError),
     MissingPane(String),
     PaneChanged,
+    MissingDirectory,
+    GitMetadataUnavailable(GitError),
+    MetadataChanged,
     AlreadyRegistered(String),
 }
 
@@ -32,6 +36,16 @@ impl fmt::Display for RegistrationError {
             Self::PaneChanged => f.write_str(
                 "Pane directory changed while registering; cancel and select the pane again.",
             ),
+            Self::MissingDirectory => f.write_str(
+                "Pane directory is unavailable. SESSIONS registration requires detected Git metadata; use workbench register for manual registration.",
+            ),
+            Self::GitMetadataUnavailable(error) => write!(
+                f,
+                "Git metadata is unavailable: {error}. Select a pane in a Git workspace, or use workbench register for manual registration."
+            ),
+            Self::MetadataChanged => f.write_str(
+                "Detected repository, workspace, or branch changed while registering; cancel and reopen registration.",
+            ),
             Self::AlreadyRegistered(id) => write!(
                 f,
                 "This pane is already registered as {id:?}. Cancel, then press w to use its work item."
@@ -45,6 +59,7 @@ impl Error for RegistrationError {
         match self {
             Self::State(error) => Some(error),
             Self::Discovery(error) => Some(error),
+            Self::GitMetadataUnavailable(error) => Some(error),
             _ => None,
         }
     }
@@ -73,22 +88,15 @@ impl Engine {
         let items = self.work_items().map_err(RegistrationError::State)?;
         check_unregistered(&items, pane_id)?;
         let directory = pane.working_directory.clone();
-        let mut workspace = directory.clone().unwrap_or_default();
-        let mut repository = workspace.clone();
-        let mut branch = None;
-        let notice = if let Some(directory) = directory.as_ref() {
-            match self.git.registration_metadata(directory).await {
-                Ok((repo, root, detected_branch)) => {
-                    repository = repo;
-                    workspace = root;
-                    branch = detected_branch;
-                    None
-                }
-                Err(_) => Some("Git metadata is unavailable; paths default to the pane directory. Check or edit them before saving.".into()),
-            }
-        } else {
-            Some("Pane directory is unavailable. Enter absolute repository and workspace paths before saving.".into())
-        };
+        let (repository, workspace, branch) = self
+            .git
+            .registration_metadata(
+                directory
+                    .as_ref()
+                    .ok_or(RegistrationError::MissingDirectory)?,
+            )
+            .await
+            .map_err(RegistrationError::GitMetadataUnavailable)?;
         let suggestion = branch
             .as_deref()
             .unwrap_or(window_name)
@@ -131,11 +139,10 @@ impl Engine {
                 pane_id: pane_id.into(),
             },
             pane_directory: directory,
-            notice,
         })
     }
 
-    /// Explicitly save edited fields, after rechecking the original pane binding.
+    /// Save editable identity fields after rechecking the pane and detected Git target.
     /// Manual CLI registration remains usable offline via register_work_item.
     pub async fn register_discovered_work_item(
         &self,
@@ -150,6 +157,22 @@ impl Engine {
             &self.work_items().map_err(RegistrationError::State)?,
             &draft.item.pane_id,
         )?;
+        let (repository, workspace, branch) = self
+            .git
+            .registration_metadata(
+                draft
+                    .pane_directory
+                    .as_ref()
+                    .ok_or(RegistrationError::MissingDirectory)?,
+            )
+            .await
+            .map_err(RegistrationError::GitMetadataUnavailable)?;
+        if repository != draft.item.repository
+            || workspace != draft.item.workspace
+            || branch != draft.item.branch
+        {
+            return Err(RegistrationError::MetadataChanged);
+        }
         self.register_work_item(draft.item.clone())
             .map_err(RegistrationError::State)?;
         Ok(draft.item)
@@ -227,14 +250,14 @@ mod tests {
         git(&root, &["checkout", "-b", &branch]);
         let engine = Engine::new(dir.path().join("new-items.json"));
         let draft = engine
-            .registration_from_snapshot(&snapshot(Some(root)), "%1")
+            .registration_from_snapshot(&snapshot(Some(root.clone())), "%1")
             .await
             .unwrap();
         assert!(draft.item.title.is_empty());
         assert_eq!(draft.item.id, "a".repeat(100));
         assert_eq!(draft.item.branch.as_deref(), Some(branch.as_str()));
-        assert!(draft.notice.is_none());
-        let mut fallback = snapshot(None);
+        git(&root, &["checkout", "--detach"]);
+        let mut fallback = snapshot(Some(root));
         fallback.sessions[0].windows[0].name = "🙂".repeat(crate::MAX_SHORT_DESCRIPTION_CHARS + 1);
         let fallback = engine
             .registration_from_snapshot(&fallback, "%1")
@@ -242,7 +265,7 @@ mod tests {
             .unwrap();
         assert!(fallback.item.title.is_empty());
         assert_eq!(fallback.item.id, "work-item");
-        assert!(!fallback.notice.unwrap().contains("Short Description"));
+        assert!(fallback.item.branch.is_none());
         engine.register_work_item(draft.item).unwrap();
     }
 
@@ -263,7 +286,6 @@ mod tests {
         assert_eq!(draft.item.id, "main");
         assert!(draft.item.title.is_empty());
         assert_eq!(draft.pane_directory, Some(nested));
-        assert!(draft.notice.is_none());
         assert!(!dir.path().join("new-items.json").exists());
         engine.register_work_item(draft.item).unwrap();
         assert!(matches!(
@@ -319,21 +341,21 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(draft.item.branch.as_deref(), Some("initial"));
-        assert!(draft.notice.is_none());
     }
 
     #[tokio::test]
-    async fn fallback_missing_panes_changed_binding_and_collisions_are_safe() {
-        let dir = tempfile::tempdir().unwrap();
+    async fn detached_missing_panes_changed_binding_and_collisions_are_safe() {
+        let (dir, _) = fixture();
+        let root = dir.path().join("workspace");
+        git(&root, &["checkout", "--detach"]);
         let engine = Engine::new(dir.path().join("items.json"));
-        let state = snapshot(Some(dir.path().into()));
+        let state = snapshot(Some(root.clone()));
         let draft = engine
             .registration_from_snapshot(&state, "%1")
             .await
             .unwrap();
-        assert!(draft.notice.is_some());
         assert_eq!(draft.item.id, "Task-λ");
-        assert_eq!(draft.item.workspace, dir.path());
+        assert_eq!(draft.item.workspace, std::fs::canonicalize(root).unwrap());
         assert!(validate_binding(&state, &draft).is_ok());
         assert!(matches!(
             validate_binding(&Snapshot::default(), &draft),
@@ -355,16 +377,36 @@ mod tests {
                 .id,
             "Task-λ-2"
         );
-        let missing = engine
-            .registration_from_snapshot(&snapshot(None), "%1")
-            .await
-            .unwrap();
-        assert!(missing.item.workspace.as_os_str().is_empty());
-        assert!(missing.notice.is_some());
+        assert!(matches!(
+            engine
+                .registration_from_snapshot(&snapshot(None), "%1")
+                .await,
+            Err(RegistrationError::MissingDirectory)
+        ));
         assert!(matches!(
             engine.registration_from_snapshot(&state, "%9").await,
             Err(RegistrationError::MissingPane(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn unavailable_git_metadata_blocks_session_registration_without_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_file = dir.path().join("items.json");
+        let engine = Engine::new(&state_file);
+        for directory in [dir.path().to_path_buf(), dir.path().join("missing")] {
+            let error = engine
+                .registration_from_snapshot(&snapshot(Some(directory)), "%1")
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                RegistrationError::GitMetadataUnavailable(_)
+            ));
+            assert!(error.source().is_some());
+            assert!(error.to_string().contains("workbench register"));
+            assert!(!state_file.exists());
+        }
     }
 
     #[cfg(unix)]
@@ -409,6 +451,42 @@ mod tests {
         ));
         assert!(!state_file.exists());
         fs::write(&output_file, &discovered).unwrap();
+        // Neither changed branches nor edited infrastructure fields can be saved.
+        for field in 0..3 {
+            let mut edited = draft.clone();
+            match field {
+                0 => edited.item.repository = dir.path().into(),
+                1 => edited.item.workspace = dir.path().into(),
+                _ => edited.item.branch = None,
+            }
+            assert!(matches!(
+                engine.register_discovered_work_item(edited).await,
+                Err(RegistrationError::MetadataChanged)
+            ));
+            assert!(!state_file.exists());
+        }
+        git(&root, &["checkout", "-b", "changed-branch"]);
+        assert!(matches!(
+            engine.register_discovered_work_item(draft.clone()).await,
+            Err(RegistrationError::MetadataChanged)
+        ));
+        assert!(!state_file.exists());
+        git(&root, &["checkout", "--detach"]);
+        assert!(matches!(
+            engine.register_discovered_work_item(draft.clone()).await,
+            Err(RegistrationError::MetadataChanged)
+        ));
+        assert!(!state_file.exists());
+        // A fresh detached draft remains registrable without a branch name.
+        let draft = engine.prepare_pane_registration("%1").await.unwrap();
+        assert!(draft.item.branch.is_none());
+        fs::rename(root.join(".git"), root.join("hidden-git")).unwrap();
+        assert!(matches!(
+            engine.register_discovered_work_item(draft.clone()).await,
+            Err(RegistrationError::GitMetadataUnavailable(_))
+        ));
+        assert!(!state_file.exists());
+        fs::rename(root.join("hidden-git"), root.join(".git")).unwrap();
         let mut invalid = draft.clone();
         invalid.item.id.clear();
         assert!(matches!(
