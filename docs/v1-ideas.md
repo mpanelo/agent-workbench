@@ -2,6 +2,9 @@
 
 Potential follow-ups for v1, plus completed ideas retained for context.
 
+Complete agent-response viewing is deferred to [v2](v2-ideas.md), not a v1
+pane-preview or popup feature.
+
 ## Clarify turn completion and acknowledge attention items
 
 Implemented: the displayed status is `TURN FINISHED` (core enum remains
