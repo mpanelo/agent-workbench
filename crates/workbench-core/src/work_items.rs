@@ -183,12 +183,13 @@ fn state_file_from(
     Ok(directory.join("agent-workbench/work-items.json"))
 }
 
-/// Validate a user-supplied short description before registration.
+/// Validate an optional user-supplied short description before registration.
 /// Existing saved descriptions remain readable without applying the new limit.
 pub fn validate_short_description(value: &str) -> Result<(), WorkItemError> {
-    if value.trim().is_empty() || value != value.trim() || value.chars().any(char::is_control) {
+    if value != value.trim() || value.chars().any(char::is_control) {
         return Err(WorkItemError::Invalid(
-            "short description must be nonempty, with no control characters or surrounding whitespace".into(),
+            "short description must not contain control characters or surrounding whitespace"
+                .into(),
         ));
     }
     if value.chars().count() > MAX_SHORT_DESCRIPTION_CHARS {
@@ -212,9 +213,10 @@ pub fn validate_work_item_id(value: &str) -> Result<(), WorkItemError> {
 fn validate(item: &WorkItem) -> Result<(), WorkItemError> {
     validate_work_item_id(&item.id)?;
     let value = item.title.as_str();
-    if value.trim().is_empty() || value != value.trim() || value.chars().any(char::is_control) {
+    if value != value.trim() || value.chars().any(char::is_control) {
         return Err(WorkItemError::Invalid(
-            "short description must be nonempty, with no control characters or surrounding whitespace".into(),
+            "short description must not contain control characters or surrounding whitespace"
+                .into(),
         ));
     }
     if !item.repository.is_absolute() || !item.workspace.is_absolute() {
@@ -530,7 +532,7 @@ mod tests {
             .unwrap();
         let before = fs::read(&path).unwrap();
         for (id, description) in [
-            ("New", ""),
+            ("New", " "),
             ("Duplicate", "New description"),
             (" invalid ", "New description"),
         ] {
@@ -716,7 +718,7 @@ mod tests {
         first.register_work_item(target.clone()).unwrap();
         let original = fs::read(&path).unwrap();
         for description in [
-            String::new(),
+            " ".into(),
             "bad\ntext".into(),
             "λ".repeat(MAX_SHORT_DESCRIPTION_CHARS + 1),
         ] {
@@ -888,9 +890,30 @@ mod tests {
         let stored = fs::read(&path).unwrap();
         assert!(engine.register_work_item(too_long).is_err());
         assert_eq!(fs::read(&path).unwrap(), stored);
-        for invalid in ["", " ", " surrounding ", "multiple\nlines"] {
+        assert!(validate_short_description("").is_ok());
+        for invalid in [" ", " surrounding ", "multiple\nlines"] {
             assert!(validate_short_description(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn empty_descriptions_round_trip_and_can_be_edited_or_cleared() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("items.json");
+        let engine = Engine::new(&path);
+        let mut target = item("A", WorkItemKind::Implementation);
+        target.title.clear();
+        engine.register_work_item(target.clone()).unwrap();
+        assert_eq!(Engine::new(&path).work_items().unwrap(), [target.clone()]);
+        let edited = engine
+            .update_work_item_description(&target, "Description")
+            .unwrap();
+        let cleared = engine.update_work_item_description(&edited, "").unwrap();
+        assert_eq!(cleared, target);
+        let renamed = engine.update_work_item_details(&cleared, "B", "").unwrap();
+        target.id = "B".into();
+        assert_eq!(renamed, target);
+        assert_eq!(Engine::new(&path).work_items().unwrap(), [target]);
     }
 
     #[test]

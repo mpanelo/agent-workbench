@@ -52,7 +52,8 @@ Use `<c-d>` / `<c-u>` to scroll the selected item's details. The old `a` shortcu
 also returns to WORK.
 
 A Work ID is your unique task label, such as `fix-auth` or `PR-42`.
-Short Description is a readable summary, limited to 120 characters. Work items
+Short Description is an optional readable summary, limited to 120 characters.
+It starts empty when registering from SESSIONS and can be left blank. Work items
 can represent implementation work or code review.
 
 SESSIONS shows recognized coding-agent commands by default. Press `f` to show all

@@ -553,8 +553,24 @@ mod tests {
         let mut form = MaintenanceUi::default();
         form.open(Request::Edit(item("A")));
         form.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        let Intent::Save(mutation) = key(&mut form, KeyCode::Enter) else {
+            panic!("expected empty description save");
+        };
+        let Mutation::Details {
+            description, id, ..
+        } = *mutation
+        else {
+            panic!("expected details edit");
+        };
+        assert!(description.is_empty());
+        assert_eq!(id, "A");
+        form.finish(Ok(()));
+        form.open(Request::Edit(item("A")));
+        form.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        form.paste(" ");
         assert!(matches!(key(&mut form, KeyCode::Enter), Intent::None));
         assert!(form.error.is_some());
+        form.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
         form.paste(&"🙂".repeat(MAX_SHORT_DESCRIPTION_CHARS));
         let boundary = form.text.clone();
         key(&mut form, KeyCode::Char('a'));

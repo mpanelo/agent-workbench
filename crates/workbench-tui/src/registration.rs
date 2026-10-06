@@ -362,7 +362,7 @@ mod tests {
         RegistrationDraft {
             item: WorkItem {
                 id: "feature-task".into(),
-                title: "Task λ".into(),
+                title: String::new(),
                 kind: WorkItemKind::Implementation,
                 repository: "/work/repo".into(),
                 workspace: "/work/linked task".into(),
@@ -433,10 +433,10 @@ mod tests {
         form.selected = 1;
         for (width, height) in [(120, 24), (80, 12)] {
             let text = screen(&form, width, height);
-            assert!(text.contains("Short Description (6/120)"), "{text}");
+            assert!(text.contains("Short Description (0/120)"), "{text}");
             assert!(!text.contains("Title"), "{text}");
         }
-        for invalid in [String::new(), "λ".repeat(MAX_SHORT_DESCRIPTION_CHARS + 1)] {
+        for invalid in [" ".into(), "λ".repeat(MAX_SHORT_DESCRIPTION_CHARS + 1)] {
             form.fields[1] = invalid.clone();
             assert!(matches!(
                 key(&mut form, KeyCode::Enter),
@@ -457,6 +457,7 @@ mod tests {
     #[test]
     fn confirming_defaults_saves_the_bound_pane_and_disables_repeat_submission() {
         let mut form = ready();
+        assert!(form.fields[1].is_empty());
         let RegistrationIntent::Save(saved) = key(&mut form, KeyCode::Enter) else {
             panic!("expected save");
         };
@@ -564,7 +565,7 @@ mod tests {
         let wide = screen(&form, 120, 24);
         for text in [
             "pane %14",
-            "Task λ",
+            "Short Description (0/120)",
             "Repository",
             "Workspace",
             "feature/task",
