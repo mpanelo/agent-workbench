@@ -18,6 +18,7 @@ pub enum Context {
     Response { changed: bool, can_reject: bool },
     Registration,
     Edit,
+    Removal { blocked: bool },
     Unregister,
     Cleanup,
 }
@@ -43,6 +44,7 @@ impl Context {
             Self::Response { .. } => "RESPONSE",
             Self::Registration => "REGISTER",
             Self::Edit => "EDIT DETAILS",
+            Self::Removal { .. } => "REMOVE",
             Self::Unregister => "UNREGISTER",
             Self::Cleanup => "CLEAN UP",
         }
@@ -53,7 +55,7 @@ impl Context {
     pub fn hints(self) -> &'static str {
         match self {
             Self::Work => {
-                "Respond: r | Edit: e | Unregister: u | Clean up: c | Acknowledge finished turn: x | Views: w/s | Quit: q | Select: j/k | Open: <enter> | Review: d | Scroll details: <c-d>/<c-u> | Help: ?"
+                "Respond: r | Edit: e | Remove: c | Acknowledge finished turn: x | Views: w/s | Quit: q | Select: j/k | Open: <enter> | Review: d | Scroll details: <c-d>/<c-u> | Help: ?"
             }
             Self::Sessions { all: false } => {
                 "All panes: f | Views: w/s | Quit: q | Select: j/k | Register: <enter>/r | Scroll: <c-d>/<c-u> | Help: ?"
@@ -87,6 +89,10 @@ impl Context {
                 "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→"
             }
             Self::Unregister => "Unregister entry: <enter> | Cancel: Esc/Ctrl-C | Help: ?",
+            Self::Removal { blocked: false } => {
+                "Unregister only: u | Clean up workspace: c | Cancel: Esc | Help: ?"
+            }
+            Self::Removal { blocked: true } => "Cancel: Esc | Help: ?",
             Self::Cleanup => {
                 "Choose: Tab/←/→ | Confirm: <enter> | Cancel: Esc/q/<c-c> | Scroll: <c-d>/<c-u> | Help: ?"
             }
@@ -170,6 +176,13 @@ pub struct HelpUi {
 impl HelpUi {
     pub fn is_open(&self) -> bool {
         self.context.is_some()
+    }
+
+    /// Keep an open help screen consistent with a modal's current availability.
+    pub fn refresh_context(&mut self, context: Context) {
+        if self.is_open() {
+            self.context = Some(context);
+        }
     }
 
     /// Consume all input while open so dismissing help never activates a view
@@ -302,7 +315,17 @@ mod tests {
     #[test]
     fn every_view_shows_its_own_complete_bindings_including_hidden_footer_hints() {
         for (context, required, excluded) in [
-            (Context::Work, "Unregister: u", "Toggle mark: Space"),
+            (Context::Work, "Remove: c", "Unregister: u"),
+            (
+                Context::Removal { blocked: false },
+                "Unregister only: u",
+                "Respond: r",
+            ),
+            (
+                Context::Removal { blocked: true },
+                "Cancel: Esc",
+                "Unregister only: u",
+            ),
             (
                 Context::Cleanup,
                 "Choose: Tab/←/→",
@@ -383,6 +406,26 @@ mod tests {
             Context::view(View::Sessions, true),
             Context::Sessions { all: true }
         );
+    }
+
+    #[test]
+    fn open_removal_help_tracks_blocked_actions_without_closing_or_activating_them() {
+        let mut help = HelpUi::default();
+        let available = Context::Removal { blocked: false };
+        let blocked = Context::Removal { blocked: true };
+        help.refresh_context(available);
+        assert!(!help.is_open());
+        assert!(help.event(&key(KeyCode::Char('?')), available, 24));
+        assert!(screen(&mut help, 100, 24).contains("Unregister only: u"));
+        help.refresh_context(blocked);
+        let text = screen(&mut help, 100, 24);
+        assert!(text.contains("Cancel: Esc"));
+        assert!(!text.contains("Unregister only: u"));
+        assert!(!text.contains("Clean up workspace: c"));
+        assert!(help.event(&key(KeyCode::Char('u')), blocked, 24));
+        assert!(help.is_open());
+        assert!(help.event(&key(KeyCode::Esc), blocked, 24));
+        assert!(!help.is_open());
     }
 
     #[test]

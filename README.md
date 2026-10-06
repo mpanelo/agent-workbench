@@ -70,8 +70,8 @@ be checked, not that it was deleted. `UNKNOWN` is reserved for uncertain agent
 activity. Details show which resource needs attention and any live agent status.
 These warnings clear when resources return; Workbench never removes registrations
 automatically or treats missing resources as completed work. After manual cleanup,
-use `u` to unregister the item. Acknowledging a finished turn cannot hide a resource
-warning.
+use `c`, then `u` to unregister the item. Acknowledging a finished turn cannot
+hide a resource warning.
 
 SESSIONS shows recognized coding-agent commands by default. Press `f` to show all
 panes if your agent runs through a wrapper or isn't recognized.
@@ -94,8 +94,8 @@ literal question mark. `<c-d>` means Control+D; `<enter>` means the Enter key.
 | Respond to an agent | `r` in WORK; reply editor uses `<enter>` to send |
 | Review the selected item's diff | `d` in WORK |
 | Edit ID and description | `e` in WORK |
-| Unregister an item | `u` in WORK |
-| Clean up a workmux workspace | `c` in WORK |
+| Open removal options | `c` in WORK |
+| Unregister only / clean up workspace | `u` / `c` in the removal menu |
 | Approve a request once | `y` in the response bar |
 | Reject and compose instructions | `n` in the response bar |
 | Write a reply / cancel | `<enter>` / `Esc` in the response bar |
@@ -148,12 +148,18 @@ context.
 
 ## Workspace cleanup
 
-Unregistering with `u` removes only the Workbench entry; it leaves your panes,
-files, branch, and review history intact.
+Press `c` in WORK to open a removal menu for the selected item. Inside the menu,
+`u` opens unregister confirmation, `c` opens workspace-cleanup preview, and `Esc`
+cancels. Neither opening the menu nor choosing an action removes anything.
+`<enter>` does not pick a default action; press `?` for this menu's bindings.
+Changed or removed registrations disable the menu until you cancel and reopen it.
 
-Cleanup with `c` removes a linked worktree and closes its **entire workmux window**,
-including companion panes and their running programs. The branch and review
-history are kept. Nothing is merged or pushed.
+Unregistering with `c`, then `u` removes only the Workbench entry after confirmation;
+it leaves your panes, files, branch, and review history intact.
+
+Cleanup with `c`, then `c` removes a linked worktree and closes its **entire workmux
+window**, including companion panes and their running programs. The branch and
+review history are kept. Nothing is merged or pushed.
 
 The preview includes ignored files that will be deleted, such as `.env` and build
 caches. **Cancel is selected by default.** Use Tab or Left / Right to select

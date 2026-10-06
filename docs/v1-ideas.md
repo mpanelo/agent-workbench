@@ -72,8 +72,8 @@ Potential scope, to decide before implementation:
 - Prefer a dry-run preview and recoverable actions; explain which data/history
   will be lost and how removal relates to archiving or future re-registration.
 
-Implemented workspace cleanup: in WORK, `c` previews and confirms removal of one
-verified workmux window and its linked worktree, keeping branch and review history.
+Implemented workspace cleanup: in WORK, `c`, then `c` previews and confirms removal
+of one verified workmux window and its linked worktree, keeping branch and review history.
 Cancel is selected by default; dirty, shared, own-workbench, legacy/unmanaged,
 duplicate-window, and unsupported targets are blocked. Removal is delegated to
 workmux without `--force`; the registry entry is removed only after verified success.
@@ -99,24 +99,26 @@ discussion; implementation has not been approved:
 This is distinct from the already implemented workspace cleanup: metadata
 housekeeping must not close windows or delete workspaces as a side effect.
 
-### Proposed first scope: shared removal menu, then bulk unregister
+### Shared removal menu (implemented), then bulk unregister (proposed)
 
-Consolidate the selected work item's unregister and workspace-cleanup entry
-points into one lazygit-style action menu. The menu must keep the actions
-distinct and disclose what each keeps/removes:
+Implemented: `c` in WORK opens a lazygit-style removal menu for the captured work
+item. The menu keeps the actions distinct and discloses what each keeps/removes:
 
-- Unregister only: remove the registration; keep pane, workspace, branch, and
-  saved review history. Open the existing explicit unregister confirmation.
-- Clean up workspace: open the existing ownership/safety preview and cancel-first
-  confirmation for the entire workmux window and its linked worktree. Keep branch
-  and review history; unregister only after verified cleanup success.
+- Unregister only (`u` inside the menu): remove the registration; keep pane,
+  workspace, branch, and saved review history. Open the existing explicit
+  unregister confirmation.
+- Clean up workspace (`c` inside the menu): open the existing ownership/safety
+  preview and cancel-first confirmation for the entire workmux window and its
+  linked worktree. Keep branch and review history; unregister only after verified
+  cleanup success.
 
-Opening the menu or choosing an action must not itself remove anything. Capture
-the selected registration so refreshes cannot retarget the operation. Preserve
-all existing cleanup restrictions and revalidation. A blocked or failed cleanup
-must never fall back to unregistering. Menu help must be scoped to its actions.
-The shared WORK shortcut, menu shortcuts, and removal of the old direct shortcut
-are proposals requiring user approval, not implemented bindings.
+Opening the menu or choosing an action does not itself remove anything. Its
+captured registration cannot be retargeted by refreshes; changed/removed entries
+disable choices until reopened and load errors pause choices until recovery.
+Existing cleanup restrictions and revalidation are unchanged. Blocked or failed
+cleanup never falls back to unregistering. `Esc` cancels; menu help lists only its
+applicable bindings. `<enter>` does not choose a default action. These menu
+controls were approved; the old standalone `u` binding in WORK was removed.
 
 As a separate next slice, preview registrations with confirmed missing panes or
 workspace directories and let the user explicitly select which to unregister.

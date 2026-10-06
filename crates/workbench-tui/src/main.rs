@@ -16,6 +16,7 @@ mod help;
 mod interaction;
 mod maintenance;
 mod registration;
+mod removal;
 mod review;
 mod theme;
 mod ui;
@@ -343,12 +344,22 @@ async fn event_loop(
     let mut maintenance = maintenance::MaintenanceUi::default();
     let mut help = help::HelpUi::default();
     let mut cleanup = cleanup::CleanupUi::default();
+    let mut removal = removal::RemovalUi::default();
     let mut cleanup_preparations = JoinSet::new();
     let mut cleanups = JoinSet::<(u64, String, Result<(), String>)>::new();
     let mut mutations = JoinSet::<(Box<maintenance::Mutation>, Result<(), String>)>::new();
     let mut input_tick = time::interval(Duration::from_millis(100));
     input_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
+        removal.observe(
+            state
+                .work_items
+                .as_ref()
+                .and_then(|result| result.as_deref().ok()),
+        );
+        if removal.is_open() {
+            help.refresh_context(removal.help_context());
+        }
         if redraw {
             terminal.draw(|frame| {
                 if help.is_open() {
@@ -368,6 +379,7 @@ async fn event_loop(
                             ui::render_sessions(frame, &state, &mut scroll, interaction)
                         }
                     }
+                    removal.render(frame);
                 }
             })?;
             redraw = false;
@@ -496,7 +508,7 @@ async fn event_loop(
                     redraw = true;
                     let event = event::read()?;
                     if matches!(event, Event::Resize(_, _)) { interaction.reveal_selection = true; interaction.reveal_pane = true; }
-                    let context = if cleanup.is_open() { help::Context::Cleanup } else { maintenance.help_context().unwrap_or_else(|| {
+                    let context = if removal.is_open() { removal.help_context() } else if cleanup.is_open() { help::Context::Cleanup } else { maintenance.help_context().unwrap_or_else(|| {
                         if registration.pane.is_some() { help::Context::Registration }
                         else if reviews.is_open() { help::Context::Review }
                         else if interaction.draft.is_some() { help::Context::Reply }
@@ -504,6 +516,15 @@ async fn event_loop(
                         else { help::Context::view(*view, interaction.show_all_panes) }
                     }) };
                     if help.event(&event, context, terminal.size()?.height) {
+                        continue;
+                    }
+                    if removal.is_open() {
+                        removal.observe(state.work_items.as_ref().and_then(|result| result.as_deref().ok()));
+                        if let Event::Key(key) = event
+                            && let Some((ticket, item)) = open_removal_action(removal.key(key), &mut maintenance, &mut cleanup) {
+                            let engine = Arc::clone(&engine);
+                            cleanup_preparations.spawn(async move { (ticket, engine.prepare_cleanup(&item).await.map_err(|e| e.to_string())) });
+                        }
                         continue;
                     }
                     if cleanup.is_open() {
@@ -631,11 +652,9 @@ async fn event_loop(
                                     interaction.message = None;
                                     maintenance.open(request);
                                 }
-                                if let Some(item) = interaction.cleanup_requested.take() {
+                                if let Some(item) = interaction.removal_requested.take() {
                                     interaction.message = None;
-                                    let ticket = cleanup.open(item.clone());
-                                    let engine = Arc::clone(&engine);
-                                    cleanup_preparations.spawn(async move { (ticket, engine.prepare_cleanup(&item).await.map_err(|e| e.to_string())) });
+                                    removal.open(item);
                                 }
                                 if let Some(id) = interaction.review_requested.take()
                                     && let Some(ticket) = reviews.open(id.clone()) {
@@ -672,6 +691,23 @@ fn finish_switch(
             interaction.finish_focus(id, result.map(|_| ()));
             None
         }
+    }
+}
+
+/// Opening an action only enters its existing confirmation flow. Return the
+/// captured cleanup target to schedule a read-only core preview, never deletion.
+fn open_removal_action(
+    intent: removal::Intent,
+    maintenance: &mut maintenance::MaintenanceUi,
+    cleanup: &mut cleanup::CleanupUi,
+) -> Option<(u64, workbench_core::WorkItem)> {
+    match intent {
+        removal::Intent::Unregister(item) => {
+            maintenance.open(maintenance::Request::Unregister(item));
+            None
+        }
+        removal::Intent::Cleanup(item) => Some((cleanup.open(item.clone()), item)),
+        removal::Intent::None | removal::Intent::Cancel => None,
     }
 }
 
@@ -771,23 +807,23 @@ fn navigate(
         {
             interaction.begin_response(items)
         }
-        KeyCode::Char('c') if *view == ui::View::Work => {
-            interaction.cleanup_requested = interaction
+        KeyCode::Char('c')
+            if *view == ui::View::Work
+                && key.kind == KeyEventKind::Press
+                && key.modifiers.is_empty() =>
+        {
+            interaction.removal_requested = interaction
                 .selected(items)
                 .map(|selected| selected.item.clone());
             interaction.message = interaction
-                .cleanup_requested
+                .removal_requested
                 .is_none()
                 .then(|| "Select an item in WORK first.".into());
         }
-        KeyCode::Char('e' | 'u') if *view == ui::View::Work => {
-            interaction.maintenance_requested = interaction.selected(items).map(|selected| {
-                if key.code == KeyCode::Char('e') {
-                    maintenance::Request::Edit(selected.item.clone())
-                } else {
-                    maintenance::Request::Unregister(selected.item.clone())
-                }
-            });
+        KeyCode::Char('e') if *view == ui::View::Work => {
+            interaction.maintenance_requested = interaction
+                .selected(items)
+                .map(|selected| maintenance::Request::Edit(selected.item.clone()));
             interaction.message = interaction
                 .maintenance_requested
                 .is_none()
@@ -1100,7 +1136,7 @@ mod tests {
             assert_eq!(interaction.selected_id.as_deref(), Some("waiting"));
             assert_eq!(view, ui::View::Work);
             assert!(interaction.maintenance_requested.is_none());
-            assert!(interaction.cleanup_requested.is_none());
+            assert!(interaction.removal_requested.is_none());
         }
         navigate(
             KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
@@ -1390,15 +1426,14 @@ mod tests {
             interaction.sync(state.items());
             for code in [KeyCode::Char('e'), KeyCode::Char('n'), KeyCode::Char('u')] {
                 navigate(code, &state, &mut view, &mut 0, &mut interaction, 24);
-                if view == ui::View::Work && code != KeyCode::Char('n') {
+                if view == ui::View::Work && code == KeyCode::Char('e') {
                     match interaction.maintenance_requested.take().unwrap() {
                         maintenance::Request::Edit(item) => {
                             assert_eq!(code, KeyCode::Char('e'));
                             assert_eq!(item.id, "hidden");
                         }
                         maintenance::Request::Unregister(item) => {
-                            assert_eq!(code, KeyCode::Char('u'));
-                            assert_eq!(item.id, "hidden");
+                            panic!("Editing must not request unregistering {}", item.id);
                         }
                     }
                 } else {
@@ -1448,7 +1483,7 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_key_captures_work_selection_only_and_ignores_drafts_and_modifiers() {
+    fn removal_key_captures_work_selection_only_and_ignores_drafts_and_modifiers() {
         let state = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
         for mut view in [ui::View::Work, ui::View::Sessions] {
             let mut interaction = interaction::Interaction {
@@ -1465,11 +1500,11 @@ mod tests {
             );
             if view == ui::View::Work {
                 assert_eq!(
-                    interaction.cleanup_requested.take(),
+                    interaction.removal_requested.take(),
                     Some(state.items()[1].item.clone())
                 );
             } else {
-                assert!(interaction.cleanup_requested.is_none());
+                assert!(interaction.removal_requested.is_none());
             }
         }
         let mut view = ui::View::Work;
@@ -1479,6 +1514,7 @@ mod tests {
             KeyModifiers::CONTROL,
             KeyModifiers::ALT,
             KeyModifiers::SUPER,
+            KeyModifiers::SHIFT,
         ] {
             navigate(
                 KeyEvent::new(KeyCode::Char('c'), modifier),
@@ -1488,7 +1524,13 @@ mod tests {
                 &mut interaction,
                 24,
             );
-            assert!(interaction.cleanup_requested.is_none());
+            assert!(interaction.removal_requested.is_none());
+        }
+        for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+            let mut key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
+            key.kind = kind;
+            navigate(key, &state, &mut view, &mut 0, &mut interaction, 24);
+            assert!(interaction.removal_requested.is_none());
         }
         interaction.begin_reply(state.items());
         navigate(
@@ -1499,7 +1541,7 @@ mod tests {
             &mut interaction,
             24,
         );
-        assert!(interaction.cleanup_requested.is_none());
+        assert!(interaction.removal_requested.is_none());
         interaction.draft = None;
         navigate(
             KeyCode::Char('c'),
@@ -1509,7 +1551,7 @@ mod tests {
             &mut interaction,
             24,
         );
-        assert!(interaction.cleanup_requested.is_none());
+        assert!(interaction.removal_requested.is_none());
         assert!(
             interaction
                 .message
@@ -1517,6 +1559,121 @@ mod tests {
                 .unwrap()
                 .contains("Select an item")
         );
+    }
+
+    #[test]
+    fn removal_menu_only_routes_to_existing_confirmations_and_never_falls_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = Engine::new(directory.path().join("items.json"));
+        let state = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
+        for item in state.items() {
+            engine.register_work_item(item.item.clone()).unwrap();
+        }
+        let saved = engine.work_items().unwrap();
+        for code in ['u', 'c'] {
+            let mut interaction = interaction::Interaction {
+                selected_id: Some("B".into()),
+                ..Default::default()
+            };
+            let mut view = ui::View::Work;
+            let mut scroll = 5;
+            navigate(
+                KeyCode::Char('c'),
+                &state,
+                &mut view,
+                &mut scroll,
+                &mut interaction,
+                24,
+            );
+            assert!(interaction.maintenance_requested.is_none());
+            let mut menu = removal::RemovalUi::default();
+            menu.open(interaction.removal_requested.take().unwrap());
+            interaction.selected_id = Some("A".into());
+            menu.observe(Some(state.items()));
+            let mut maintenance = maintenance::MaintenanceUi::default();
+            let mut cleanup = cleanup::CleanupUi::default();
+            let preview = open_removal_action(
+                menu.key(KeyCode::Char(code).into()),
+                &mut maintenance,
+                &mut cleanup,
+            );
+            assert_eq!(engine.work_items().unwrap(), saved);
+            assert!(!menu.is_open());
+            assert_eq!(view, ui::View::Work);
+            assert_eq!(scroll, 5);
+            if code == 'u' {
+                assert!(preview.is_none());
+                assert!(maintenance.is_open());
+                assert!(!cleanup.is_open());
+                let maintenance::Intent::Save(mutation) = maintenance.key(KeyCode::Enter.into())
+                else {
+                    panic!("unregister still needs confirmation")
+                };
+                assert!(
+                    matches!(mutation.as_ref(), maintenance::Mutation::Unregister(item) if item.id == "B")
+                );
+                assert_eq!(engine.work_items().unwrap(), saved); // Intent alone is not a write.
+            } else {
+                let (ticket, target) = preview.unwrap();
+                assert_eq!(target, state.items()[1].item);
+                assert!(cleanup.is_open());
+                assert!(!maintenance.is_open());
+                cleanup.finish_preview(ticket, Err("Dirty workspace; cleanup blocked.".into()));
+                assert!(matches!(
+                    cleanup.key(KeyCode::Enter.into(), 24),
+                    cleanup::Intent::Cancel
+                ));
+                assert!(!maintenance.is_open());
+                assert_eq!(engine.work_items().unwrap(), saved);
+            }
+        }
+    }
+
+    #[test]
+    fn removal_popup_preserves_work_rows_selection_and_only_shows_applicable_footer() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let state = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
+        let mut interaction = interaction::Interaction {
+            selected_id: Some("B".into()),
+            ..Default::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal
+            .draw(|frame| ui::render_work(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        let baseline = terminal.backend().buffer().clone();
+        let mut menu = removal::RemovalUi::default();
+        menu.open(state.items()[1].item.clone());
+        terminal
+            .draw(|frame| {
+                ui::render_work(frame, &state, &mut 0, &mut interaction);
+                menu.render(frame);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        // A 78x16 centered popup: outside it, only the context footer changes.
+        for y in 0..23 {
+            for x in 0..100 {
+                if !(11..89).contains(&x) || !(4..20).contains(&y) {
+                    assert_eq!(
+                        buffer[(x, y)],
+                        baseline[(x, y)],
+                        "changed background at {x},{y}"
+                    );
+                }
+            }
+        }
+        let footer: String = buffer.content()[2300..2400]
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(footer.contains("Unregister only: u"));
+        assert!(footer.contains("Clean up workspace: c"));
+        assert!(!footer.contains("Respond:"));
+        assert_eq!(interaction.selected_id.as_deref(), Some("B"));
+        assert_eq!(interaction.work_list_offset, 0);
+        assert_eq!(interaction.detail_item_id.as_deref(), Some("B"));
+        theme::assert_text_style(buffer, "Remove work item", theme::TEAL, theme::MANTLE);
     }
 
     #[test]

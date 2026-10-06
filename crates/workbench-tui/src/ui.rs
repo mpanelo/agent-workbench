@@ -968,7 +968,7 @@ mod tests {
         let text = work_screen(&state, 80, 10, &mut 0);
         assert_eq!(
             text.lines().last().unwrap().trim_end(),
-            "Respond: r | Edit: e | Unregister: u | Clean up: c | … | Help: ?"
+            "Respond: r | Edit: e | Remove: c | Acknowledge finished turn: x | … | Help: ?"
         );
         assert_eq!(text.lines().nth(8).unwrap().trim_end(), "");
         let text = screen(None, 80, 10, &mut 0);
@@ -1623,7 +1623,7 @@ mod tests {
             assert!(!rows[1].contains(label));
             assert_eq!(
                 rows[2],
-                "Respond: r | Edit: e | Unregister: u | Clean up: c | … | Help: ?"
+                "Respond: r | Edit: e | Remove: c | Acknowledge finished turn: x | … | Help: ?"
             );
             assert_eq!(state.items(), std::slice::from_ref(&original));
             assert_eq!(state.items()[0].item.kind.to_string(), full_name);
