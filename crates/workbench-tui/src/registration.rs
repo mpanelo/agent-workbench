@@ -180,7 +180,11 @@ impl RegistrationUi {
         let [header, body, notice, footer] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(0),
-            Constraint::Length(3),
+            Constraint::Length(if self.error.is_some() || self.saving {
+                3
+            } else {
+                0
+            }),
             Constraint::Length(1),
         ])
         .areas(frame.area());
@@ -237,12 +241,6 @@ impl RegistrationUi {
                     "Saving registration… Please wait; input and cancellation are disabled.",
                 )
                 .style(theme::notice()),
-                notice,
-            );
-        } else {
-            frame.render_widget(
-                Paragraph::new("Detected Git target is read-only. <enter> to register.")
-                    .style(theme::muted()),
                 notice,
             );
         }
@@ -490,6 +488,20 @@ mod tests {
         assert!(form.pane.is_some());
         form.paste("must not change");
         assert_eq!(form.fields[0], "feature-task");
+    }
+
+    #[test]
+    fn ready_form_has_no_git_hint_and_keeps_the_suggested_id() {
+        let form = ready();
+        let text = screen(&form, 80, 14);
+        assert!(!text.contains("Detected Git target"), "{text}");
+        assert!(!text.contains("to register."), "{text}");
+        assert!(text.contains("feature-task"), "{text}");
+        assert!(text.contains("Workspace: /work/linked task"), "{text}");
+        assert!(text.contains("Branch: feature/task"), "{text}");
+        // Without an empty hint area, all three editors fit at this height.
+        assert!(text.contains("3 / 3 — Type"), "{text}");
+        assert!(text.contains("Save: <enter>"), "{text}");
     }
 
     #[test]
