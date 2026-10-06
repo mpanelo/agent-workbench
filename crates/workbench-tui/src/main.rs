@@ -1651,10 +1651,10 @@ mod tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
-        // A 78x16 centered popup: outside it, only the context footer changes.
+        // A 58x9 centered popup: outside it, only the context footer changes.
         for y in 0..23 {
             for x in 0..100 {
-                if !(11..89).contains(&x) || !(4..20).contains(&y) {
+                if !(21..79).contains(&x) || !(7..16).contains(&y) {
                     assert_eq!(
                         buffer[(x, y)],
                         baseline[(x, y)],
@@ -1667,8 +1667,8 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(footer.contains("Unregister only: u"));
-        assert!(footer.contains("Clean up workspace: c"));
+        assert!(footer.contains("Unregister: u"));
+        assert!(footer.contains("Clean: c"));
         assert!(!footer.contains("Respond:"));
         assert_eq!(interaction.selected_id.as_deref(), Some("B"));
         assert_eq!(interaction.work_list_offset, 0);

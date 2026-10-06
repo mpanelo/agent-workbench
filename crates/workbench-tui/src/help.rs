@@ -89,9 +89,7 @@ impl Context {
                 "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→"
             }
             Self::Unregister => "Unregister entry: <enter> | Cancel: Esc/Ctrl-C | Help: ?",
-            Self::Removal { blocked: false } => {
-                "Unregister only: u | Clean up workspace: c | Cancel: Esc | Help: ?"
-            }
+            Self::Removal { blocked: false } => "Unregister: u | Clean: c | Cancel: Esc | Help: ?",
             Self::Removal { blocked: true } => "Cancel: Esc | Help: ?",
             Self::Cleanup => {
                 "Choose: Tab/←/→ | Confirm: <enter> | Cancel: Esc/q/<c-c> | Scroll: <c-d>/<c-u> | Help: ?"
@@ -318,13 +316,13 @@ mod tests {
             (Context::Work, "Remove: c", "Unregister: u"),
             (
                 Context::Removal { blocked: false },
-                "Unregister only: u",
+                "Unregister: u",
                 "Respond: r",
             ),
             (
                 Context::Removal { blocked: true },
                 "Cancel: Esc",
-                "Unregister only: u",
+                "Unregister: u",
             ),
             (
                 Context::Cleanup,
@@ -416,12 +414,12 @@ mod tests {
         help.refresh_context(available);
         assert!(!help.is_open());
         assert!(help.event(&key(KeyCode::Char('?')), available, 24));
-        assert!(screen(&mut help, 100, 24).contains("Unregister only: u"));
+        assert!(screen(&mut help, 100, 24).contains("Unregister: u"));
         help.refresh_context(blocked);
         let text = screen(&mut help, 100, 24);
         assert!(text.contains("Cancel: Esc"));
-        assert!(!text.contains("Unregister only: u"));
-        assert!(!text.contains("Clean up workspace: c"));
+        assert!(!text.contains("Unregister: u"));
+        assert!(!text.contains("Clean: c"));
         assert!(help.event(&key(KeyCode::Char('u')), blocked, 24));
         assert!(help.is_open());
         assert!(help.event(&key(KeyCode::Esc), blocked, 24));

@@ -112,6 +112,11 @@ item. The menu keeps the actions distinct and discloses what each keeps/removes:
   linked worktree. Keep branch and review history; unregister only after verified
   cleanup success.
 
+The compact menu shows the work ID, `Unregister: u`, `Clean: c`, short scope
+descriptions, and a cancel/help footer. Workspace paths and generic warning text
+are omitted here; full consequences remain in the next confirmation. Warnings
+appear only when registration changes or load failures block an action.
+
 Opening the menu or choosing an action does not itself remove anything. Its
 captured registration cannot be retargeted by refreshes; changed/removed entries
 disable choices until reopened and load errors pause choices until recovery.
