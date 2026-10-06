@@ -48,7 +48,12 @@ WORK keeps an aligned ID/status list in registration order and shows details,
 including work type, for the selected item separately. `!` marks items needing
 attention; `Tab` jumps to the next one.
 Status changes and expanding prompts don't reorder the list or change selection.
-Pressing `y` shows inline approval feedback: a green checkmark confirms the key
+Press `r` to respond. Recognized approvals replace the help bar with response
+choices without covering the request: `y` approves once, `n` rejects and opens a
+reply, `<enter>` opens the reply editor, and `Esc` cancels. Other prompts open
+the reply editor directly. A changed request disables the response choices until
+you cancel and reopen the bar.
+Approving shows inline feedback: a green checkmark confirms the key
 was sent, then clears after 1.5 seconds. It does not imply the agent has resumed;
 the displayed agent status continues to reflect observations.
 Use `<c-d>` / `<c-u>` to scroll the selected item's details. The old `a` shortcut
@@ -77,19 +82,20 @@ literal question mark. `<c-d>` means Control+D; `<enter>` means the Enter key.
 | Work / sessions | `w` / `s` |
 | Select an item | `j` / `k` or `↓` / `↑` |
 | Open the selected agent pane | `<enter>` in WORK |
-| Reply to an agent | `r` in WORK; `<enter>` sends |
+| Respond to an agent | `r` in WORK; reply editor uses `<enter>` to send |
 | Review the selected item's diff | `d` in WORK |
 | Edit ID and description | `e` in WORK |
 | Unregister an item | `u` in WORK |
 | Clean up a workmux workspace | `c` in WORK |
-| Approve a request once | `y` in WORK |
-| Reject and compose instructions | `n` in WORK |
+| Approve a request once | `y` in the response bar |
+| Reject and compose instructions | `n` in the response bar |
+| Write a reply / cancel | `<enter>` / `Esc` in the response bar |
 | Acknowledge a finished turn | `x` in WORK |
 | Next item needing attention | `Tab` in WORK |
 | Register a pane | `r` or `<enter>` in SESSIONS |
 | Toggle agent-only / all panes | `f` in SESSIONS |
 | Scroll half a page | `<c-d>` / `<c-u>` outside text inputs |
-| Quit | `q` outside text inputs |
+| Quit | `q` in the main views |
 
 Forms support arrow-key cursor movement, Tab to switch fields, and `<c-u>` to
 clear a field. `Esc` cancels an edit or reply before saving or sending.

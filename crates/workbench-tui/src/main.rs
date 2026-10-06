@@ -7,8 +7,7 @@ use tokio::{
     time::{self, MissedTickBehavior},
 };
 use workbench_core::{
-    ActionError, ApprovalDecision, ApprovalRequest, Engine, Snapshot, WorkItemState,
-    attention_items, validate_agent_input,
+    ActionError, Engine, Snapshot, WorkItemState, attention_items, validate_agent_input,
 };
 
 mod cleanup;
@@ -501,6 +500,7 @@ async fn event_loop(
                         if registration.pane.is_some() { help::Context::Registration }
                         else if reviews.is_open() { help::Context::Review }
                         else if interaction.draft.is_some() { help::Context::Reply }
+                        else if let Some(bar) = &interaction.response_bar { help::Context::Response { changed: bar.changed, can_reject: bar.can_reject() } }
                         else { help::Context::view(*view, interaction.show_all_panes) }
                     }) };
                     if help.event(&event, context, terminal.size()?.height) {
@@ -611,8 +611,8 @@ async fn event_loop(
                         }
                         if interaction.sending { continue; }
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc => return Ok(RunExit::Quit),
-                            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(RunExit::Quit),
+                            KeyCode::Char('q') | KeyCode::Esc if interaction.response_bar.is_none() => return Ok(RunExit::Quit),
+                            KeyCode::Char('c') if interaction.response_bar.is_none() && key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(RunExit::Quit),
                             _ => {
                                 if let Some(id) = navigate(key, &state, view, &mut scroll, interaction, terminal.size()?.height)
                                     && let Some(exit) = finish_switch(&id, interaction, engine.try_switch_work_item(&id).await) {
@@ -706,33 +706,13 @@ fn navigate(
         return None;
     }
     let items = state.items();
-    match key.code {
-        KeyCode::Char('y' | 'n')
-            if *view == ui::View::Work
-                && key.kind == KeyEventKind::Press
-                && key.modifiers.is_empty() =>
-        {
-            let decision = if key.code == KeyCode::Char('y') {
-                ApprovalDecision::ApproveOnce
-            } else {
-                ApprovalDecision::RejectAndReply
-            };
-            match interaction
-                .selected(items)
-                .map(|item| ApprovalRequest::capture(item, decision))
-            {
-                Some(Ok(request)) => interaction.approval_requested = Some(request),
-                Some(Err(error)) => {
-                    interaction.approval_feedback = None;
-                    interaction.message = Some(error.to_string());
-                }
-                None => {
-                    interaction.approval_feedback = None;
-                    interaction.message =
-                        Some("Select a WAITING approval item in WORK first.".into())
-                }
-            }
+    if interaction.response_bar.is_some() {
+        if *view == ui::View::Work {
+            interaction.response_key(key, items);
         }
+        return None;
+    }
+    match key.code {
         KeyCode::Char('x') if *view == ui::View::Work => {
             match interaction
                 .selected(items)
@@ -784,7 +764,13 @@ fn navigate(
             }
             interaction.message = Some("Select an item in the current view first.".into());
         }
-        KeyCode::Char('r') if view.is_item_view() => interaction.begin_reply(items),
+        KeyCode::Char('r')
+            if view.is_item_view()
+                && key.kind == KeyEventKind::Press
+                && key.modifiers.is_empty() =>
+        {
+            interaction.begin_response(items)
+        }
         KeyCode::Char('c') if *view == ui::View::Work => {
             interaction.cleanup_requested = interaction
                 .selected(items)
@@ -843,7 +829,9 @@ fn navigate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use workbench_core::{AgentStatus, PaneAvailability, WorkItem, WorkItemKind};
+    use workbench_core::{
+        AgentStatus, ApprovalDecision, ApprovalRequest, PaneAvailability, WorkItem, WorkItemKind,
+    };
 
     #[test]
     fn tmux_switch_keeps_the_event_loop_and_selection_state() {
@@ -910,12 +898,29 @@ mod tests {
     }
 
     #[test]
-    fn approval_keys_are_work_only_plain_press_actions_not_draft_or_busy_actions() {
+    fn approval_keys_require_the_response_bar_and_are_plain_press_actions() {
         let state = approval_state();
         for code in ['y', 'n'] {
             for mut view in [ui::View::Work, ui::View::Sessions] {
                 let mut interaction = interaction::Interaction::default();
                 interaction.sync(state.items());
+                navigate(
+                    KeyCode::Char(code),
+                    &state,
+                    &mut view,
+                    &mut 0,
+                    &mut interaction,
+                    24,
+                );
+                assert!(interaction.approval_requested.is_none());
+                navigate(
+                    KeyCode::Char('r'),
+                    &state,
+                    &mut view,
+                    &mut 0,
+                    &mut interaction,
+                    24,
+                );
                 navigate(
                     KeyCode::Char(code),
                     &state,
@@ -942,6 +947,7 @@ mod tests {
             let mut view = ui::View::Work;
             let mut interaction = interaction::Interaction::default();
             interaction.sync(state.items());
+            interaction.begin_response(state.items());
             for modifiers in [
                 KeyModifiers::CONTROL,
                 KeyModifiers::ALT,
@@ -980,6 +986,15 @@ mod tests {
             );
             assert!(interaction.approval_requested.is_none());
             interaction.sending = false;
+            navigate(
+                KeyCode::Esc,
+                &state,
+                &mut view,
+                &mut 0,
+                &mut interaction,
+                24,
+            );
+            assert!(interaction.response_bar.is_none());
             interaction.begin_reply(state.items());
             navigate(
                 KeyCode::Char(code),
@@ -1053,6 +1068,60 @@ mod tests {
         let feedback = interaction.approval_feedback.as_ref().unwrap();
         assert_eq!(feedback.item_id, "waiting");
         assert_eq!(feedback.label(), "✓ Approval sent");
+    }
+
+    #[test]
+    fn response_mode_keeps_selection_and_allows_only_responses_help_and_detail_scrolling() {
+        let state = approval_state();
+        let mut interaction = interaction::Interaction::default();
+        interaction.sync(state.items());
+        let mut view = ui::View::Work;
+        let mut scroll = 4;
+        navigate(
+            KeyCode::Char('r'),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.response_bar.is_some());
+        for key in [
+            KeyCode::Char('j'),
+            KeyCode::Down,
+            KeyCode::Char('e'),
+            KeyCode::Char('u'),
+            KeyCode::Char('c'),
+            KeyCode::Char('s'),
+            KeyCode::Char('q'),
+            KeyCode::Tab,
+        ] {
+            assert!(navigate(key, &state, &mut view, &mut scroll, &mut interaction, 24).is_none());
+            assert_eq!(interaction.selected_id.as_deref(), Some("waiting"));
+            assert_eq!(view, ui::View::Work);
+            assert!(interaction.maintenance_requested.is_none());
+            assert!(interaction.cleanup_requested.is_none());
+        }
+        navigate(
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert!(scroll > 4);
+        navigate(
+            KeyCode::Enter,
+            &state,
+            &mut view,
+            &mut scroll,
+            &mut interaction,
+            24,
+        );
+        assert!(interaction.response_bar.is_none());
+        assert_eq!(interaction.draft.as_ref().unwrap().item_id, "waiting");
+        assert!(interaction.approval_requested.is_none());
     }
 
     #[test]

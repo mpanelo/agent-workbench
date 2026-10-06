@@ -85,6 +85,15 @@ impl ApprovalRequest {
     pub fn decision(&self) -> ApprovalDecision {
         self.decision
     }
+
+    /// Whether a refreshed observation still describes the request the user saw.
+    /// Sending still rechecks the live pane and registration independently.
+    pub fn is_current(&self, state: &WorkItemState) -> bool {
+        state.item == self.item
+            && state.status == AgentStatus::WaitingForInput
+            && state.pane == PaneAvailability::Present
+            && state.attention_prompt.as_deref() == Some(self.prompt.as_str())
+    }
 }
 
 impl Engine {
@@ -310,6 +319,28 @@ mod tests {
         state.pane = PaneAvailability::Present;
         state.attention_prompt = Some("Please choose a plan".into());
         assert!(ApprovalRequest::capture(&state, ApprovalDecision::ApproveOnce).is_err());
+    }
+
+    #[test]
+    fn refreshed_request_requires_the_same_registration_prompt_and_live_waiting_state() {
+        let original = state();
+        let request = ApprovalRequest::capture(&original, ApprovalDecision::ApproveOnce).unwrap();
+        assert!(request.is_current(&original));
+        for field in 0..6 {
+            let mut changed = original.clone();
+            match field {
+                0 => changed.item.pane_id = "%99".into(),
+                1 => changed.item.workspace = "/other".into(),
+                2 => changed.attention_prompt = Some("new request".into()),
+                3 => changed.status = AgentStatus::Running,
+                4 => changed.pane = PaneAvailability::Missing,
+                _ => changed.pane = PaneAvailability::Unavailable,
+            }
+            assert!(!request.is_current(&changed));
+        }
+        let mut cosmetic = original;
+        cosmetic.status_detail = "refreshed explanation".into();
+        assert!(request.is_current(&cosmetic));
     }
 
     #[cfg(unix)]

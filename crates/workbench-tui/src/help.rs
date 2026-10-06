@@ -15,6 +15,7 @@ pub enum Context {
     Sessions { all: bool },
     Review,
     Reply,
+    Response { changed: bool, can_reject: bool },
     Registration,
     Edit,
     Unregister,
@@ -39,6 +40,7 @@ impl Context {
             Self::Sessions { .. } => "SESSIONS",
             Self::Review => "REVIEW",
             Self::Reply => "REPLY",
+            Self::Response { .. } => "RESPONSE",
             Self::Registration => "REGISTER",
             Self::Edit => "EDIT DETAILS",
             Self::Unregister => "UNREGISTER",
@@ -51,7 +53,7 @@ impl Context {
     pub fn hints(self) -> &'static str {
         match self {
             Self::Work => {
-                "Approve once: y | Reject and reply: n | Edit: e | Unregister: u | Clean up: c | Acknowledge finished turn: x | Views: w/s | Quit: q | Select: j/k | Open: <enter> | Reply: r | Review: d | Scroll details: <c-d>/<c-u> | Help: ?"
+                "Respond: r | Edit: e | Unregister: u | Clean up: c | Acknowledge finished turn: x | Views: w/s | Quit: q | Select: j/k | Open: <enter> | Review: d | Scroll details: <c-d>/<c-u> | Help: ?"
             }
             Self::Sessions { all: false } => {
                 "All panes: f | Views: w/s | Quit: q | Select: j/k | Register: <enter>/r | Scroll: <c-d>/<c-u> | Help: ?"
@@ -64,6 +66,19 @@ impl Context {
             }
             Self::Reply => {
                 "Send: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear: <c-u> | Move cursor: ←/→"
+            }
+            Self::Response {
+                changed: false,
+                can_reject: true,
+            } => {
+                "Approve once: y | Reject: n | Reply: <enter> | Cancel: Esc | Scroll: <c-d>/<c-u> | Help: ?"
+            }
+            Self::Response {
+                changed: false,
+                can_reject: false,
+            } => "Approve once: y | Reply: <enter> | Cancel: Esc | Scroll: <c-d>/<c-u> | Help: ?",
+            Self::Response { changed: true, .. } => {
+                "Request changed; cancel and reopen. | Cancel: Esc | Scroll: <c-d>/<c-u> | Help: ?"
             }
             Self::Registration => {
                 "Field: Tab/Shift-Tab/↑/↓ | Toggle type: Space | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→"
@@ -106,11 +121,31 @@ impl Context {
             _ => &[],
         };
         lines.extend(extras.iter().map(|hint| theme::shortcut_line(hint)));
-        if self == Self::Work {
+        if matches!(self, Self::Response { .. }) {
             lines.push(Line::styled(
                 "Approval shortcuts require a supported, current approval prompt.",
                 theme::muted(),
             ));
+        }
+        if matches!(
+            self,
+            Self::Response {
+                changed: false,
+                can_reject: true
+            }
+        ) {
+            lines.push(Line::styled(
+                "Reject sends the rejection first, then opens a reply for instructions.",
+                theme::muted(),
+            ));
+        } else if matches!(
+            self,
+            Self::Response {
+                changed: false,
+                can_reject: false
+            }
+        ) {
+            lines.push(Line::styled("No supported rejection shortcut for this prompt; inspect the agent pane to reject.", theme::muted()));
         }
         if self.text_input() {
             lines.push(Line::styled(
@@ -285,6 +320,30 @@ mod tests {
             ),
             (Context::Review, "Back: Esc", "Unregister: u"),
             (Context::Reply, "Send: <enter>", "Save: <enter>"),
+            (
+                Context::Response {
+                    changed: false,
+                    can_reject: true,
+                },
+                "Approve once: y",
+                "Respond: r",
+            ),
+            (
+                Context::Response {
+                    changed: true,
+                    can_reject: true,
+                },
+                "Request changed",
+                "Approve once: y",
+            ),
+            (
+                Context::Response {
+                    changed: false,
+                    can_reject: false,
+                },
+                "Approve once: y",
+                "Reject: n",
+            ),
             (Context::Registration, "Toggle type: Space", "Send: <enter>"),
             (Context::Edit, "Clear field: <c-u>", "Toggle type: Space"),
             (
@@ -306,10 +365,17 @@ mod tests {
             for hint in context.hints().split(" | ") {
                 assert!(text.contains(hint), "missing {hint}: {text}");
             }
-            assert_eq!(text.contains("Approve once: y"), context == Context::Work);
             assert_eq!(
-                text.contains("Reject and reply: n"),
-                context == Context::Work
+                text.contains("Approve once: y"),
+                matches!(context, Context::Response { changed: false, .. })
+            );
+            assert_eq!(
+                text.contains("Reject: n"),
+                context
+                    == Context::Response {
+                        changed: false,
+                        can_reject: true
+                    }
             );
         }
         assert_eq!(Context::view(View::Work, false), Context::Work);

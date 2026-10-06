@@ -274,6 +274,12 @@ pub(crate) fn render_work(
     frame.render_widget(
         theme::footer(if interaction.draft.is_some() {
             crate::help::Context::Reply.hints()
+        } else if let Some(bar) = &interaction.response_bar {
+            crate::help::Context::Response {
+                changed: bar.changed,
+                can_reject: bar.can_reject(),
+            }
+            .hints()
         } else {
             crate::help::Context::Work.hints()
         }),
@@ -926,7 +932,7 @@ mod tests {
         let text = work_screen(&state, 80, 10, &mut 0);
         assert_eq!(
             text.lines().last().unwrap().trim_end(),
-            "Approve once: y | Reject and reply: n | Edit: e | Unregister: u | … | Help: ?"
+            "Respond: r | Edit: e | Unregister: u | Clean up: c | … | Help: ?"
         );
         assert_eq!(text.lines().nth(8).unwrap().trim_end(), "");
         let text = screen(None, 80, 10, &mut 0);
@@ -966,7 +972,7 @@ mod tests {
             "HIDDEN_RUNNING  RUNNING",
             "Details — ABC-123",
             "Open: <enter>",
-            "Reply: r",
+            "Respond: r",
             "Help: ?",
         ] {
             assert!(text.contains(expected), "missing {expected:?}: {text}");
@@ -999,7 +1005,7 @@ mod tests {
         assert!(work.contains("Options:"));
         assert!(work.contains("› 1. Yes, proceed (y)"));
         let narrow = work_screen(&state, 80, 24, &mut 0);
-        for hint in ["Approve once: y", "Reject and reply: n", "Help: ?"] {
+        for hint in ["Respond: r", "Help: ?"] {
             assert!(narrow.contains(hint));
         }
     }
@@ -1175,6 +1181,80 @@ mod tests {
             AppState::from_refresh(Ok(snapshot()), Ok(vec![item, other])),
             request,
         )
+    }
+
+    #[test]
+    fn response_bar_replaces_only_the_footer_and_leaves_the_request_viewport_intact() {
+        let (state, _) = approval_fixture();
+        for (width, height) in [(120, 30), (80, 24), (40, 14), (1, 1), (0, 1)] {
+            let mut interaction = Interaction::default();
+            interaction.sync(state.items());
+            let mut scroll = 0;
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
+                .unwrap();
+            let baseline = terminal.backend().buffer().clone();
+            interaction.begin_response(state.items());
+            terminal
+                .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            for y in 0..height - 1 {
+                for x in 0..width {
+                    assert_eq!(buffer[(x, y)], baseline[(x, y)]);
+                }
+            }
+            if width >= 80 {
+                let footer: String = buffer
+                    .content()
+                    .chunks(usize::from(width))
+                    .last()
+                    .unwrap()
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect();
+                for hint in ["Approve once: y", "Reject: n", "Cancel: Esc", "Help: ?"] {
+                    assert!(footer.contains(hint), "{footer}");
+                }
+                assert!(!footer.contains("Unregister"));
+            }
+            assert_eq!(interaction.selected_id.as_deref(), Some("ABC-123"));
+            interaction.response_key(crossterm::event::KeyCode::Esc.into(), state.items());
+            terminal
+                .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
+                .unwrap();
+            assert_eq!(terminal.backend().buffer(), &baseline);
+        }
+    }
+
+    #[test]
+    fn changed_response_bar_shows_recovery_in_the_footer_without_overlaying_the_prompt() {
+        let (mut state, _) = approval_fixture();
+        let mut interaction = Interaction::default();
+        interaction.sync(state.items());
+        interaction.begin_response(state.items());
+        if let Some(Ok(items)) = &mut state.work_items {
+            items[0].attention_prompt = Some("A new question remains visible".into());
+        }
+        interaction.sync(state.items());
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("A new question remains visible"), "{text}");
+        assert!(
+            text.contains("Request changed; cancel and reopen."),
+            "{text}"
+        );
+        assert!(!text.contains("Approve once: y"), "{text}");
     }
 
     #[test]
@@ -1507,7 +1587,7 @@ mod tests {
             assert!(!rows[1].contains(label));
             assert_eq!(
                 rows[2],
-                "Approve once: y | Reject and reply: n | Edit: e | Unregister: u | … | Help: ?"
+                "Respond: r | Edit: e | Unregister: u | Clean up: c | … | Help: ?"
             );
             assert_eq!(state.items(), std::slice::from_ref(&original));
             assert_eq!(state.items()[0].item.kind.to_string(), full_name);

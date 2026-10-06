@@ -126,6 +126,28 @@ impl ApprovalFeedback {
     }
 }
 
+/// The response bar holds the original requests, never a replacement prompt.
+#[derive(Debug)]
+pub(crate) struct ResponseBar {
+    approve: ApprovalRequest,
+    reject: Option<ApprovalRequest>,
+    pub changed: bool,
+}
+
+impl ResponseBar {
+    pub fn item_id(&self) -> &str {
+        self.approve.item_id()
+    }
+
+    pub fn can_reject(&self) -> bool {
+        self.reject.is_some()
+    }
+
+    fn observe(&mut self, items: &[WorkItemState]) {
+        self.changed |= !items.iter().any(|item| self.approve.is_current(item));
+    }
+}
+
 #[derive(Default, Debug)]
 pub(crate) struct Interaction {
     pub selected_id: Option<String>,
@@ -146,9 +168,71 @@ pub(crate) struct Interaction {
     pub acknowledgement_requested: Option<workbench_core::CompletionAcknowledgement>,
     pub approval_requested: Option<ApprovalRequest>,
     pub approval_feedback: Option<ApprovalFeedback>,
+    pub response_bar: Option<ResponseBar>,
 }
 
 impl Interaction {
+    pub fn begin_response(&mut self, items: &[WorkItemState]) {
+        if self.sending || self.draft.is_some() || self.response_bar.is_some() {
+            return;
+        }
+        let requests = self.selected(items).and_then(|item| {
+            Some((
+                ApprovalRequest::capture(item, ApprovalDecision::ApproveOnce).ok()?,
+                ApprovalRequest::capture(item, ApprovalDecision::RejectAndReply).ok(),
+            ))
+        });
+        if let Some((approve, reject)) = requests {
+            self.response_bar = Some(ResponseBar {
+                approve,
+                reject,
+                changed: false,
+            });
+        } else {
+            self.begin_reply(items);
+        }
+    }
+
+    pub fn response_key(&mut self, key: KeyEvent, items: &[WorkItemState]) {
+        if self.sending
+            || key.kind != crossterm::event::KeyEventKind::Press
+            || !key.modifiers.is_empty()
+        {
+            return;
+        }
+        let Some(bar) = &mut self.response_bar else {
+            return;
+        };
+        bar.observe(items);
+        if key.code == KeyCode::Esc {
+            self.response_bar = None;
+            return;
+        }
+        if bar.changed {
+            return;
+        }
+        if key.code == KeyCode::Enter {
+            let item_id = bar.item_id().to_owned();
+            self.response_bar = None;
+            self.draft = Some(Draft {
+                item_id,
+                text: String::new(),
+                cursor: InputCursor::default(),
+            });
+            self.message = None;
+            return;
+        }
+        let request = match key.code {
+            KeyCode::Char('y') => Some(bar.approve.clone()),
+            KeyCode::Char('n') => bar.reject.clone(),
+            _ => None,
+        };
+        if let Some(request) = request {
+            self.response_bar = None;
+            self.approval_requested = Some(request);
+        }
+    }
+
     pub fn begin_approval(&mut self, request: &ApprovalRequest) {
         self.sending = true;
         self.approval_feedback = None;
@@ -298,6 +382,9 @@ impl Interaction {
     }
 
     pub fn sync(&mut self, items: &[WorkItemState]) {
+        if let Some(bar) = &mut self.response_bar {
+            bar.observe(items);
+        }
         if self
             .selected_id
             .as_ref()
@@ -477,6 +564,132 @@ mod tests {
         item.status = AgentStatus::WaitingForInput;
         item.attention_prompt = Some("Would you like to run the following command?\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)".into());
         ApprovalRequest::capture(&item, decision).unwrap()
+    }
+
+    fn response_items() -> Vec<WorkItemState> {
+        let mut items = items(&["approved-task", "other"]);
+        items[0].status = AgentStatus::WaitingForInput;
+        items[0].attention_prompt = Some("Would you like to run the following command?\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)".into());
+        items
+    }
+
+    #[test]
+    fn response_bar_binds_approval_and_rejection_without_opening_a_composer() {
+        for (key, decision) in [
+            ('y', ApprovalDecision::ApproveOnce),
+            ('n', ApprovalDecision::RejectAndReply),
+        ] {
+            let items = response_items();
+            let mut interaction = Interaction::default();
+            interaction.sync(&items);
+            interaction.begin_response(&items);
+            assert_eq!(
+                interaction.response_bar.as_ref().unwrap().item_id(),
+                "approved-task"
+            );
+            assert!(interaction.draft.is_none());
+            assert!(!interaction.sending);
+            assert!(interaction.approval_requested.is_none());
+            interaction.selected_id = Some("other".into());
+            interaction.response_key(KeyCode::Char(key).into(), &items);
+            assert!(interaction.response_bar.is_none());
+            let request = interaction.approval_requested.as_ref().unwrap();
+            assert_eq!(request.item_id(), "approved-task");
+            assert_eq!(request.decision(), decision);
+            assert!(request.is_current(&items[0]));
+        }
+    }
+
+    #[test]
+    fn changed_or_missing_requests_disable_the_bar_until_it_is_reopened() {
+        let original = response_items();
+        for field in 0..4 {
+            let mut interaction = Interaction::default();
+            interaction.sync(&original);
+            interaction.begin_response(&original);
+            let mut changed = original.clone();
+            match field {
+                0 => changed[0].attention_prompt = Some("new request".into()),
+                1 => changed[0].status = AgentStatus::Running,
+                2 => changed[0].item.pane_id = "%9".into(),
+                _ => {
+                    changed.remove(0);
+                }
+            }
+            interaction.sync(&changed);
+            assert!(interaction.response_bar.as_ref().unwrap().changed);
+            for key in ['y', 'n'] {
+                interaction.response_key(KeyCode::Char(key).into(), &changed);
+                assert!(interaction.approval_requested.is_none());
+            }
+            interaction.response_key(KeyCode::Enter.into(), &changed);
+            assert!(interaction.draft.is_none());
+            interaction.sync(&original);
+            assert!(interaction.response_bar.as_ref().unwrap().changed);
+            interaction.response_key(KeyCode::Esc.into(), &original);
+            assert!(interaction.response_bar.is_none());
+            assert!(interaction.draft.is_none());
+            assert!(!interaction.sending);
+            interaction.selected_id = Some("approved-task".into());
+            interaction.begin_response(&original);
+            assert!(!interaction.response_bar.as_ref().unwrap().changed);
+        }
+    }
+
+    #[test]
+    fn ordinary_or_unsupported_prompts_keep_the_direct_reply_flow() {
+        let mut states = response_items();
+        for status in [
+            AgentStatus::Complete,
+            AgentStatus::Unknown,
+            AgentStatus::WaitingForInput,
+        ] {
+            states[0].status = status;
+            states[0].attention_prompt = Some("Please choose an approach".into());
+            let mut interaction = Interaction::default();
+            interaction.sync(&states);
+            interaction.begin_response(&states);
+            assert!(interaction.response_bar.is_none());
+            assert_eq!(interaction.draft.as_ref().unwrap().item_id, "approved-task");
+            assert!(interaction.approval_requested.is_none());
+        }
+    }
+
+    #[test]
+    fn enter_opens_an_empty_reply_for_the_captured_item_without_sending_a_decision() {
+        let states = response_items();
+        let mut interaction = Interaction::default();
+        interaction.sync(&states);
+        interaction.begin_response(&states);
+        interaction.selected_id = Some("other".into());
+        interaction.response_key(KeyCode::Enter.into(), &states);
+        assert!(interaction.response_bar.is_none());
+        assert!(interaction.approval_requested.is_none());
+        assert!(!interaction.sending);
+        let draft = interaction.draft.as_ref().unwrap();
+        assert_eq!(draft.item_id, "approved-task");
+        assert!(draft.text.is_empty());
+    }
+
+    #[test]
+    fn approval_only_prompts_do_not_offer_an_unsupported_rejection() {
+        let mut states = response_items();
+        states[0].attention_prompt = Some(states[0].attention_prompt.as_ref().unwrap().replace(
+            "No, and tell Codex what to do differently",
+            "No, continue without permissions",
+        ));
+        let mut interaction = Interaction::default();
+        interaction.sync(&states);
+        interaction.begin_response(&states);
+        assert!(!interaction.response_bar.as_ref().unwrap().can_reject());
+        interaction.response_key(KeyCode::Char('n').into(), &states);
+        assert!(interaction.approval_requested.is_none());
+        assert!(interaction.response_bar.is_some());
+        interaction.response_key(KeyCode::Char('y').into(), &states);
+        assert_eq!(
+            interaction.approval_requested.as_ref().unwrap().decision(),
+            ApprovalDecision::ApproveOnce
+        );
     }
 
     #[test]

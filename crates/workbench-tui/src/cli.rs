@@ -19,8 +19,10 @@ WORK keeps a stable list with separate selected-item details. ! marks attention.
 In WORK, x acknowledges the selected TURN FINISHED observation for this
 Workbench run. New activity/input or changed completion evidence requeues it.
 Acknowledgement does not finish work, mark code reviewed, or dismiss input requests.
-In WORK, y approves a recognized Codex request once; n rejects it and
-opens a reply for instructions. Changed or unsupported prompts must be inspected.
+In WORK, r responds: recognized approvals replace the help bar with choices.
+In that response bar, y approves once, n rejects and opens a reply, <enter>
+opens the reply editor, and Esc cancels. Changed requests require reopening
+the bar; other prompts open the reply editor directly.
 In REVIEW, Space saves file marks; r reloads while restoring unchanged marks.
 Marks persist across restarts; changed captured diffs require re-review.
 In SESSIONS, j/k or arrows select a pane; <enter> or r opens registration with
@@ -36,7 +38,7 @@ Cancel is selected by default; Tab/Left/Right selects cleanup, then Enter confir
 Cleanup keeps the branch and review history; dirty or ambiguous targets are blocked.
 Short descriptions are limited to 120 Unicode characters; --title is a legacy
 alias for --short-description. When omitted, the description defaults to the ID.
-j/k or arrows select; <enter> opens the pane; r composes a single-line reply.
+j/k or arrows select; <enter> opens the pane in WORK; replies are single-line.
 <c-d>/<c-u> scroll details in WORK, or the current view elsewhere, half a page.
 ? shows the current view's keybindings.
 In text fields, ? remains literal text.
