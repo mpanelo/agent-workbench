@@ -48,6 +48,9 @@ WORK keeps an aligned ID/status list in registration order and shows details,
 including work type, for the selected item separately. `!` marks items needing
 attention; `Tab` jumps to the next one.
 Status changes and expanding prompts don't reorder the list or change selection.
+Pressing `y` shows inline approval feedback: a green checkmark confirms the key
+was sent, then clears after 1.5 seconds. It does not imply the agent has resumed;
+the displayed agent status continues to reflect observations.
 Use `<c-d>` / `<c-u>` to scroll the selected item's details. The old `a` shortcut
 also returns to WORK.
 

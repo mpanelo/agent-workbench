@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::AppState;
-use crate::interaction::Interaction;
+use crate::interaction::{ApprovalPhase, Interaction};
 use crate::theme;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -88,8 +88,9 @@ pub(crate) fn render_work(
                 .min(items.len().saturating_sub(usize::from(list.height)));
             // Measure all registered IDs, not only visible rows, so scrolling
             // and status changes cannot shift the columns. Reserve space for
-            // selection, two gaps and attention; share very narrow screens.
-            let available = usize::from(list.width).saturating_sub(7);
+            // selection, gaps, attention and a feedback glyph. Reserve the same
+            // space even without feedback so approval never shifts the columns.
+            let available = usize::from(list.width).saturating_sub(10);
             let id_width = items
                 .iter()
                 .map(|entry| Line::from(visible(&entry.item.id)).width())
@@ -120,12 +121,23 @@ pub(crate) fn render_work(
                     work_cell(&entry.status.to_string(), status_width),
                     theme::status(entry.status),
                 ));
-                if state
+                let attention = state
                     .attention
                     .iter()
-                    .any(|attention| attention.item.id == item.id)
+                    .any(|attention| attention.item.id == item.id);
+                heading.push(Span::styled(
+                    if attention { "  !" } else { "   " },
+                    theme::notice(),
+                ));
+                if let Some(feedback) = interaction
+                    .approval_feedback
+                    .as_ref()
+                    .filter(|feedback| feedback.item_id == item.id)
                 {
-                    heading.push(Span::styled("  !", theme::notice()));
+                    heading.push(Span::styled(
+                        format!("  {}", feedback.label()),
+                        approval_feedback_style(feedback.phase),
+                    ));
                 }
                 lines.push(selectable_line(Line::from(heading), selected, list.width));
             }
@@ -136,12 +148,28 @@ pub(crate) fn render_work(
                 *scroll = 0;
                 interaction.detail_item_id = selected_id;
             }
+            let feedback = interaction
+                .approval_feedback
+                .as_ref()
+                .filter(|feedback| selected.is_some_and(|state| feedback.item_id == state.item.id));
+            let mut title = vec![Span::raw("Details")];
+            if let Some(feedback) = feedback {
+                title.push(Span::raw(" — "));
+                title.push(Span::styled(
+                    feedback.label(),
+                    approval_feedback_style(feedback.phase),
+                ));
+            }
+            if let Some(state) = selected {
+                title.push(Span::raw(format!(" — {}", visible(&state.item.id))));
+            }
             let block = Block::bordered()
-                .title(selected.map_or_else(
-                    || "Details".into(),
-                    |state| format!("Details — {}", visible(&state.item.id)),
-                ))
-                .border_style(theme::border(true))
+                .title(Line::from(title))
+                .border_style(if feedback.is_some_and(|feedback| feedback.is_pulsing()) {
+                    Style::default().fg(theme::GREEN)
+                } else {
+                    theme::border(true)
+                })
                 .title_style(theme::accent());
             let inner = block.inner(details);
             frame.render_widget(block, details);
@@ -256,6 +284,14 @@ pub(crate) fn render_work(
 // Keep attention in a fixed column even when no current item has the longest
 // status label. This is presentation sizing, not an agent-state decision.
 const WORK_STATUS_WIDTH: usize = 17; // WAITING_FOR_INPUT
+
+fn approval_feedback_style(phase: ApprovalPhase) -> Style {
+    match phase {
+        ApprovalPhase::Checking => theme::notice(),
+        ApprovalPhase::Sent => Style::default().fg(theme::GREEN),
+        ApprovalPhase::Failed => theme::error(),
+    }
+}
 
 fn work_cell(text: &str, width: usize) -> String {
     if width == 0 {
@@ -1122,6 +1158,135 @@ mod tests {
                 .collect();
             assert_eq!(rendered, "  Branch: feature/λ\\u{1b}");
         }
+    }
+
+    fn approval_fixture() -> (AppState, workbench_core::ApprovalRequest) {
+        let mut item = registered(PaneAvailability::Present, WorkItemKind::Implementation);
+        item.status = AgentStatus::WaitingForInput;
+        item.attention_prompt = Some("Would you like to run the following command?\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)".into());
+        let request = workbench_core::ApprovalRequest::capture(
+            &item,
+            workbench_core::ApprovalDecision::ApproveOnce,
+        )
+        .unwrap();
+        let mut other = item.clone();
+        other.item.id = "other".into();
+        (
+            AppState::from_refresh(Ok(snapshot()), Ok(vec![item, other])),
+            request,
+        )
+    }
+
+    #[test]
+    fn approval_feedback_is_inline_green_and_does_not_move_rows_or_fake_running() {
+        let (state, request) = approval_fixture();
+        let mut interaction = Interaction::default();
+        interaction.sync(state.items());
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let mut scroll = 0;
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
+            .unwrap();
+        let baseline = terminal.backend().buffer().clone();
+        interaction.begin_approval(&request);
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
+            .unwrap();
+        theme::assert_text_style(
+            terminal.backend().buffer(),
+            "… Checking approval",
+            theme::YELLOW,
+            theme::SURFACE,
+        );
+        interaction.finish_approval(&request, Ok(()));
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
+            .unwrap();
+        let confirmed = terminal.backend().buffer();
+        theme::assert_text_style(confirmed, "✓ Approval sent", theme::GREEN, theme::SURFACE);
+        assert_eq!(confirmed[(0, 3)].fg, theme::GREEN); // selected details border
+        for y in [1, 2] {
+            // ID, actual status, and attention retain their exact cells.
+            for x in 0..31 {
+                assert_eq!(confirmed[(x, y)], baseline[(x, y)]);
+            }
+        }
+        assert_eq!(interaction.selected_id.as_deref(), Some("ABC-123"));
+        assert_eq!(state.items()[0].status, AgentStatus::WaitingForInput);
+        assert_eq!(state.attention.len(), 2);
+        assert!(interaction.message.is_none());
+        let after_send = std::time::Instant::now();
+        assert!(
+            interaction.tick_approval_feedback(after_send + std::time::Duration::from_millis(300))
+        );
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
+            .unwrap();
+        assert_eq!(terminal.backend().buffer()[(0, 3)].fg, theme::TEAL);
+        assert!(
+            interaction.tick_approval_feedback(after_send + std::time::Duration::from_millis(1500))
+        );
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
+            .unwrap();
+        assert_eq!(terminal.backend().buffer(), &baseline);
+    }
+
+    #[test]
+    fn approval_feedback_stays_with_its_item_and_fits_narrow_terminals() {
+        let (mut state, request) = approval_fixture();
+        let mut interaction = Interaction::default();
+        interaction.sync(state.items());
+        interaction.begin_approval(&request);
+        interaction.finish_approval(&request, Ok(()));
+        interaction.move_selection(state.items(), 1);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        let rows: Vec<String> = terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(80)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+            .collect();
+        assert!(rows[1].contains("✓ Approval sent"));
+        assert!(!rows[2].contains("✓"));
+        assert!(rows[3].contains("Details — other"));
+        assert_eq!(terminal.backend().buffer()[(0, 3)].fg, theme::TEAL);
+        if let Some(Ok(items)) = &mut state.work_items {
+            items[0].status = AgentStatus::Running;
+        }
+        interaction.move_selection(state.items(), -1);
+        for (width, height) in [(40, 14), (24, 8), (1, 1), (0, 1)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+                .unwrap();
+            if width == 40 {
+                let text: String = terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect();
+                assert!(text.contains("RUNNING"), "{text}");
+                assert!(text.contains("✓"), "{text}");
+            }
+        }
+        interaction.finish_approval(&request, Err(workbench_core::ApprovalError::Changed));
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        theme::assert_text_style(
+            terminal.backend().buffer(),
+            "✗ Approval failed",
+            theme::RED,
+            theme::SURFACE,
+        );
     }
 
     #[test]

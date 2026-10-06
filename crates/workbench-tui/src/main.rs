@@ -377,10 +377,7 @@ async fn event_loop(
             completed = approvals.join_next(), if !approvals.is_empty() => {
                 match completed {
                     Some(Ok((request, result))) => interaction.finish_approval(&request, result),
-                    _ => {
-                        interaction.sending = false;
-                        interaction.message = Some("Approval task stopped. Not retried; inspect the pane before retrying.".into());
-                    }
+                    _ => interaction.fail_approval_task(),
                 }
                 redraw = true;
             }
@@ -495,6 +492,7 @@ async fn event_loop(
                 redraw = true;
             }
             _ = input_tick.tick() => {
+                redraw |= interaction.tick_approval_feedback(std::time::Instant::now());
                 while event::poll(Duration::ZERO)? {
                     redraw = true;
                     let event = event::read()?;
@@ -622,8 +620,7 @@ async fn event_loop(
                                     }
                                 state.apply_acknowledgement(interaction);
                                 if let Some(request) = interaction.approval_requested.take() {
-                                    interaction.sending = true;
-                                    interaction.message = Some(format!("Checking approval for {}…", request.item_id()));
+                                    interaction.begin_approval(&request);
                                     let engine = Arc::clone(&engine);
                                     approvals.spawn(async move {
                                         let result = engine.respond_to_approval(&request).await;
@@ -725,8 +722,12 @@ fn navigate(
                 .map(|item| ApprovalRequest::capture(item, decision))
             {
                 Some(Ok(request)) => interaction.approval_requested = Some(request),
-                Some(Err(error)) => interaction.message = Some(error.to_string()),
+                Some(Err(error)) => {
+                    interaction.approval_feedback = None;
+                    interaction.message = Some(error.to_string());
+                }
                 None => {
+                    interaction.approval_feedback = None;
                     interaction.message =
                         Some("Select a WAITING approval item in WORK first.".into())
                 }
@@ -1048,13 +1049,10 @@ mod tests {
             ApprovalRequest::capture(&state.attention[0], ApprovalDecision::ApproveOnce).unwrap();
         interaction.finish_approval(&request, Ok(()));
         assert!(interaction.draft.is_none());
-        assert!(
-            interaction
-                .message
-                .as_ref()
-                .unwrap()
-                .contains("Approved once for waiting")
-        );
+        assert!(interaction.message.is_none());
+        let feedback = interaction.approval_feedback.as_ref().unwrap();
+        assert_eq!(feedback.item_id, "waiting");
+        assert_eq!(feedback.label(), "✓ Approval sent");
     }
 
     #[test]

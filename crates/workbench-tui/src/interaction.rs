@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use workbench_core::{
     ActionError, ApprovalDecision, ApprovalError, ApprovalRequest, MAX_INPUT_BYTES, Snapshot,
@@ -94,6 +96,36 @@ impl Draft {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ApprovalPhase {
+    Checking,
+    Sent,
+    Failed,
+}
+
+/// Local input-delivery feedback, never an inferred agent status.
+#[derive(Debug)]
+pub(crate) struct ApprovalFeedback {
+    pub item_id: String,
+    pub phase: ApprovalPhase,
+    expires_at: Option<Instant>,
+    pulse_until: Option<Instant>,
+}
+
+impl ApprovalFeedback {
+    pub fn label(&self) -> &'static str {
+        match self.phase {
+            ApprovalPhase::Checking => "… Checking approval",
+            ApprovalPhase::Sent => "✓ Approval sent",
+            ApprovalPhase::Failed => "✗ Approval failed",
+        }
+    }
+
+    pub fn is_pulsing(&self) -> bool {
+        self.pulse_until.is_some()
+    }
+}
+
 #[derive(Default, Debug)]
 pub(crate) struct Interaction {
     pub selected_id: Option<String>,
@@ -113,17 +145,93 @@ pub(crate) struct Interaction {
     pub attention_tracker: workbench_core::AttentionTracker,
     pub acknowledgement_requested: Option<workbench_core::CompletionAcknowledgement>,
     pub approval_requested: Option<ApprovalRequest>,
+    pub approval_feedback: Option<ApprovalFeedback>,
 }
 
 impl Interaction {
+    pub fn begin_approval(&mut self, request: &ApprovalRequest) {
+        self.sending = true;
+        self.approval_feedback = None;
+        if request.decision() == ApprovalDecision::ApproveOnce {
+            self.message = None;
+            self.set_approval_feedback(request.item_id(), ApprovalPhase::Checking, Instant::now());
+        } else {
+            self.message = Some(format!("Checking approval for {}…", request.item_id()));
+        }
+    }
+
+    fn set_approval_feedback(&mut self, item_id: &str, phase: ApprovalPhase, now: Instant) {
+        let sent = phase == ApprovalPhase::Sent;
+        self.approval_feedback = Some(ApprovalFeedback {
+            item_id: item_id.into(),
+            phase,
+            expires_at: sent.then_some(now + Duration::from_millis(1500)),
+            pulse_until: sent.then_some(now + Duration::from_millis(300)),
+        });
+    }
+
+    /// Driven by the existing input tick, even when the user presses no keys.
+    pub fn tick_approval_feedback(&mut self, now: Instant) -> bool {
+        let Some(feedback) = &mut self.approval_feedback else {
+            return false;
+        };
+        if feedback.expires_at.is_some_and(|deadline| now >= deadline) {
+            self.approval_feedback = None;
+            return true;
+        }
+        if feedback.pulse_until.is_some_and(|deadline| now >= deadline) {
+            feedback.pulse_until = None;
+            return true;
+        }
+        false
+    }
+
+    pub fn fail_approval_task(&mut self) {
+        self.sending = false;
+        if let Some(feedback) = &mut self.approval_feedback {
+            feedback.phase = ApprovalPhase::Failed;
+            feedback.expires_at = None;
+            feedback.pulse_until = None;
+        }
+        self.message =
+            Some("Approval task stopped. Not retried; inspect the pane before retrying.".into());
+    }
+
     pub fn finish_approval(
         &mut self,
         request: &ApprovalRequest,
         result: Result<(), ApprovalError>,
     ) {
+        self.finish_approval_at(request, result, Instant::now());
+    }
+
+    fn finish_approval_at(
+        &mut self,
+        request: &ApprovalRequest,
+        result: Result<(), ApprovalError>,
+        now: Instant,
+    ) {
         self.sending = false;
+        if request.decision() == ApprovalDecision::ApproveOnce {
+            self.set_approval_feedback(
+                request.item_id(),
+                if result.is_ok() {
+                    ApprovalPhase::Sent
+                } else {
+                    ApprovalPhase::Failed
+                },
+                now,
+            );
+            if result.is_ok() {
+                // Inline confirmation replaces the persistent bottom notice.
+                self.message = None;
+                return;
+            }
+        } else {
+            self.approval_feedback = None;
+        }
         self.message = Some(match result {
-            Ok(()) if request.decision() == ApprovalDecision::RejectAndReply => {
+            Ok(()) => {
                 // The queue may have refreshed or moved while the key was sent.
                 // Reply to the captured item, never the newly selected row.
                 self.draft = Some(Draft {
@@ -136,7 +244,6 @@ impl Interaction {
                     request.item_id()
                 )
             }
-            Ok(()) => format!("Approved once for {}.", request.item_id()),
             Err(error) => format!(
                 "Decision for {} failed: {error} Not retried; inspect the pane before retrying.",
                 request.item_id()
@@ -363,6 +470,110 @@ mod tests {
                 completion_fingerprint: None,
             })
             .collect()
+    }
+
+    fn approval_request(decision: ApprovalDecision) -> ApprovalRequest {
+        let mut item = items(&["approved-task"]).remove(0);
+        item.status = AgentStatus::WaitingForInput;
+        item.attention_prompt = Some("Would you like to run the following command?\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)".into());
+        ApprovalRequest::capture(&item, decision).unwrap()
+    }
+
+    #[test]
+    fn approval_feedback_has_immediate_acknowledgement_and_clock_driven_expiry() {
+        let request = approval_request(ApprovalDecision::ApproveOnce);
+        let now = Instant::now();
+        let mut interaction = Interaction {
+            selected_id: Some("approved-task".into()),
+            detail_item_id: Some("approved-task".into()),
+            work_list_offset: 4,
+            message: Some("old message".into()),
+            ..Interaction::default()
+        };
+        interaction.begin_approval(&request);
+        assert!(interaction.sending);
+        assert!(interaction.message.is_none());
+        let feedback = interaction.approval_feedback.as_ref().unwrap();
+        assert_eq!(feedback.label(), "… Checking approval");
+        assert!(!feedback.is_pulsing());
+        assert!(!interaction.tick_approval_feedback(now + Duration::from_secs(120)));
+        interaction.finish_approval_at(&request, Ok(()), now);
+        assert!(!interaction.sending);
+        let feedback = interaction.approval_feedback.as_ref().unwrap();
+        assert_eq!(feedback.item_id, "approved-task");
+        assert_eq!(feedback.label(), "✓ Approval sent");
+        assert!(feedback.is_pulsing());
+        assert!(!interaction.tick_approval_feedback(now + Duration::from_millis(299)));
+        assert!(interaction.tick_approval_feedback(now + Duration::from_millis(300)));
+        assert!(!interaction.approval_feedback.as_ref().unwrap().is_pulsing());
+        assert!(!interaction.tick_approval_feedback(now + Duration::from_millis(1499)));
+        interaction.message = Some("unrelated newer message".into());
+        assert!(interaction.tick_approval_feedback(now + Duration::from_millis(1500)));
+        assert!(interaction.approval_feedback.is_none());
+        assert!(!interaction.tick_approval_feedback(now + Duration::from_secs(2)));
+        assert_eq!(
+            interaction.message.as_deref(),
+            Some("unrelated newer message")
+        );
+        assert_eq!(interaction.selected_id.as_deref(), Some("approved-task"));
+        assert_eq!(interaction.detail_item_id.as_deref(), Some("approved-task"));
+        assert_eq!(interaction.work_list_offset, 4);
+    }
+
+    #[test]
+    fn failed_or_interrupted_approvals_never_celebrate_or_expire() {
+        let request = approval_request(ApprovalDecision::ApproveOnce);
+        let now = Instant::now();
+        let mut interaction = Interaction::default();
+        interaction.begin_approval(&request);
+        interaction.finish_approval_at(&request, Err(ApprovalError::Changed), now);
+        assert!(!interaction.sending);
+        let feedback = interaction.approval_feedback.as_ref().unwrap();
+        assert_eq!(feedback.phase, ApprovalPhase::Failed);
+        assert!(!feedback.is_pulsing());
+        assert!(!interaction.tick_approval_feedback(now + Duration::from_secs(120)));
+        assert!(
+            interaction
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("Not retried")
+        );
+        interaction.begin_approval(&request);
+        assert_eq!(
+            interaction.approval_feedback.as_ref().unwrap().phase,
+            ApprovalPhase::Checking
+        );
+        assert!(interaction.message.is_none());
+        interaction.fail_approval_task();
+        assert!(!interaction.sending);
+        assert_eq!(
+            interaction.approval_feedback.as_ref().unwrap().phase,
+            ApprovalPhase::Failed
+        );
+        assert!(!interaction.tick_approval_feedback(now + Duration::from_secs(120)));
+        assert!(
+            interaction
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("task stopped")
+        );
+    }
+
+    #[test]
+    fn rejection_keeps_its_existing_reply_flow_without_approval_success_feedback() {
+        let mut interaction = Interaction::default();
+        let approve = approval_request(ApprovalDecision::ApproveOnce);
+        interaction.finish_approval(&approve, Ok(()));
+        let reject = approval_request(ApprovalDecision::RejectAndReply);
+        interaction.begin_approval(&reject);
+        assert!(interaction.approval_feedback.is_none());
+        interaction.selected_id = Some("another-item".into());
+        interaction.finish_approval(&reject, Ok(()));
+        assert!(interaction.approval_feedback.is_none());
+        assert_eq!(interaction.draft.as_ref().unwrap().item_id, "approved-task");
+        assert!(interaction.message.as_ref().unwrap().contains("Rejected"));
     }
 
     #[test]
