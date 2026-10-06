@@ -64,6 +64,15 @@ Short Description is an optional readable summary, limited to 120 characters.
 It starts empty when registering from SESSIONS and can be left blank. Work items
 can represent implementation work or code review.
 
+Missing resources are marked `PANE MISSING`, `WORKSPACE MISSING`, or
+`RESOURCES MISSING` and need attention. `UNAVAILABLE` means a resource could not
+be checked, not that it was deleted. `UNKNOWN` is reserved for uncertain agent
+activity. Details show which resource needs attention and any live agent status.
+These warnings clear when resources return; Workbench never removes registrations
+automatically or treats missing resources as completed work. After manual cleanup,
+use `u` to unregister the item. Acknowledging a finished turn cannot hide a resource
+warning.
+
 SESSIONS shows recognized coding-agent commands by default. Press `f` to show all
 panes if your agent runs through a wrapper or isn't recognized.
 Registration shows the repository only when it differs from the workspace.

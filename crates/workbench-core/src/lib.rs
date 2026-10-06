@@ -12,6 +12,7 @@ mod git;
 mod model;
 mod registration;
 mod rereview;
+mod resources;
 mod review;
 mod review_store;
 mod tmux;
@@ -28,9 +29,9 @@ pub use review::{ReviewError, ReviewSession, ReviewStatus};
 pub use tmux::DiscoveryError;
 use work_items::WorkItemStore;
 pub use work_items::{
-    AgentStatus, MAX_SHORT_DESCRIPTION_CHARS, PaneAvailability, WorkItem, WorkItemError,
-    WorkItemKind, WorkItemState, default_state_file, validate_short_description,
-    validate_work_item_id,
+    AgentStatus, MAX_SHORT_DESCRIPTION_CHARS, PaneAvailability, ResourceIssue, WorkItem,
+    WorkItemError, WorkItemKind, WorkItemState, WorkspaceAvailability, default_state_file,
+    validate_short_description, validate_work_item_id,
 };
 
 /// Discovery and work-item operations, without shell or rendering code in the API.
@@ -124,6 +125,7 @@ impl Engine {
                     Some(_) => PaneAvailability::Missing,
                 };
                 WorkItemState {
+                    workspace_availability: resources::workspace_availability(&item.workspace),
                     item,
                     status: AgentStatus::Unknown,
                     pane,

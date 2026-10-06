@@ -1,4 +1,4 @@
-use crate::{AgentStatus, PaneAvailability, WorkItem, WorkItemState};
+use crate::{AgentStatus, PaneAvailability, WorkItem, WorkItemState, WorkspaceAvailability};
 use std::{collections::HashMap, fmt};
 
 /// Acknowledgements live only in this tracker, not registration/review storage.
@@ -36,7 +36,7 @@ pub enum AttentionError {
 impl fmt::Display for AttentionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::NotFinished => "Only a present TURN FINISHED item can be acknowledged; input requests cannot be dismissed.",
+            Self::NotFinished => "Only an available TURN FINISHED item can be acknowledged; input requests cannot be dismissed, nor can resource issues.",
             Self::NoEvidence => "Completion evidence is unavailable; wait for a fresh observation.",
             Self::Changed => "The observed turn changed; select the current attention item and retry.",
         })
@@ -97,6 +97,7 @@ impl AttentionTracker {
             }
             entry.current = false;
             if state.pane == PaneAvailability::Missing
+                || state.workspace_availability == WorkspaceAvailability::Missing
                 || (state.pane == PaneAvailability::Present
                     && matches!(
                         state.status,
@@ -106,7 +107,7 @@ impl AttentionTracker {
                 entry.fingerprint = None;
                 entry.acknowledged = false;
             }
-            if state.pane == PaneAvailability::Present
+            if state.resource_issue().is_none()
                 && state.status == AgentStatus::Complete
                 && let Some(fingerprint) = state.completion_fingerprint
             {
@@ -127,14 +128,15 @@ impl AttentionTracker {
         states
             .iter()
             .filter(|state| {
-                state.needs_attention()
-                    && !(state.status == AgentStatus::Complete
-                        && self.completions.get(&state.item.id).is_some_and(|entry| {
-                            entry.acknowledged
-                                && entry.current
-                                && same_target(&entry.item, &state.item)
-                                && entry.fingerprint == state.completion_fingerprint
-                        }))
+                state.resource_issue().is_some()
+                    || (state.needs_attention()
+                        && !(state.status == AgentStatus::Complete
+                            && self.completions.get(&state.item.id).is_some_and(|entry| {
+                                entry.acknowledged
+                                    && entry.current
+                                    && same_target(&entry.item, &state.item)
+                                    && entry.fingerprint == state.completion_fingerprint
+                            })))
             })
             .cloned()
             .collect()
@@ -144,7 +146,7 @@ impl AttentionTracker {
         &self,
         state: &WorkItemState,
     ) -> Result<CompletionAcknowledgement, AttentionError> {
-        if state.status != AgentStatus::Complete || state.pane != PaneAvailability::Present {
+        if state.status != AgentStatus::Complete || state.resource_issue().is_some() {
             return Err(AttentionError::NotFinished);
         }
         let fingerprint = state
@@ -197,9 +199,10 @@ pub fn attention_items(states: &[WorkItemState]) -> Vec<WorkItemState> {
 }
 
 impl WorkItemState {
-    /// A usable pane and affirmative state evidence are both required.
+    /// Resource issues need attention independently of observed agent activity.
     pub fn needs_attention(&self) -> bool {
-        self.pane == PaneAvailability::Present && self.status.needs_attention()
+        self.resource_issue().is_some()
+            || (self.pane == PaneAvailability::Present && self.status.needs_attention())
     }
 }
 
@@ -221,9 +224,112 @@ mod tests {
             },
             status,
             pane,
+            workspace_availability: WorkspaceAvailability::Present,
             status_detail: "Observed locally.".into(),
             attention_prompt: None,
             completion_fingerprint: None,
+        }
+    }
+
+    #[test]
+    fn resource_health_matrix_is_independent_of_agent_activity() {
+        use crate::ResourceIssue;
+        for (pane, workspace, issue) in [
+            (
+                PaneAvailability::Present,
+                WorkspaceAvailability::Present,
+                None,
+            ),
+            (
+                PaneAvailability::Missing,
+                WorkspaceAvailability::Present,
+                Some(ResourceIssue::PaneMissing),
+            ),
+            (
+                PaneAvailability::Unavailable,
+                WorkspaceAvailability::Present,
+                Some(ResourceIssue::Unavailable),
+            ),
+            (
+                PaneAvailability::Present,
+                WorkspaceAvailability::Missing,
+                Some(ResourceIssue::WorkspaceMissing),
+            ),
+            (
+                PaneAvailability::Missing,
+                WorkspaceAvailability::Missing,
+                Some(ResourceIssue::ResourcesMissing),
+            ),
+            (
+                PaneAvailability::Unavailable,
+                WorkspaceAvailability::Missing,
+                Some(ResourceIssue::WorkspaceMissing),
+            ),
+            (
+                PaneAvailability::Present,
+                WorkspaceAvailability::Unavailable,
+                Some(ResourceIssue::Unavailable),
+            ),
+            (
+                PaneAvailability::Missing,
+                WorkspaceAvailability::Unavailable,
+                Some(ResourceIssue::PaneMissing),
+            ),
+            (
+                PaneAvailability::Unavailable,
+                WorkspaceAvailability::Unavailable,
+                Some(ResourceIssue::Unavailable),
+            ),
+        ] {
+            for status in [
+                AgentStatus::Running,
+                AgentStatus::WaitingForInput,
+                AgentStatus::Idle,
+                AgentStatus::Complete,
+                AgentStatus::Unknown,
+            ] {
+                let mut item = state("A", status, pane);
+                item.workspace_availability = workspace;
+                assert_eq!(item.resource_issue(), issue);
+                assert_eq!(
+                    item.needs_attention(),
+                    issue.is_some() || status.needs_attention()
+                );
+                assert_eq!(item.status, status);
+            }
+        }
+    }
+
+    #[test]
+    fn resource_issues_cannot_be_acknowledged_or_hidden_by_an_old_completion() {
+        let mut finished = state("A", AgentStatus::Complete, PaneAvailability::Present);
+        finished.completion_fingerprint = Some(14);
+        for availability in [
+            WorkspaceAvailability::Missing,
+            WorkspaceAvailability::Unavailable,
+        ] {
+            let mut tracker = AttentionTracker::default();
+            tracker.observe(&[finished.clone()]);
+            let target = tracker.capture(&finished).unwrap();
+            tracker.acknowledge(&target).unwrap();
+            let mut broken = finished.clone();
+            broken.workspace_availability = availability;
+            // Even without a tracker refresh, resource issues cannot be hidden.
+            assert_eq!(tracker.items(&[broken.clone()]), [broken.clone()]);
+            assert_eq!(tracker.observe(&[broken.clone()]), [broken.clone()]);
+            assert_eq!(
+                tracker.capture(&broken).unwrap_err(),
+                AttentionError::NotFinished
+            );
+            assert_eq!(tracker.acknowledge(&target), Err(AttentionError::Changed));
+            let restored = tracker.observe(&[finished.clone()]);
+            if availability == WorkspaceAvailability::Missing {
+                assert_eq!(restored, [finished.clone()]);
+                assert_eq!(tracker.acknowledge(&target), Err(AttentionError::Changed));
+            } else {
+                // A temporary access failure does not invent a new completed turn.
+                assert!(restored.is_empty());
+            }
         }
     }
 
@@ -296,7 +402,11 @@ mod tests {
             uncertain.status = status;
             uncertain.pane = pane;
             uncertain.completion_fingerprint = None;
-            assert!(tracker.observe(&[uncertain]).is_empty());
+            let queue = tracker.observe(&[uncertain]);
+            assert_eq!(
+                queue.len(),
+                usize::from(pane == PaneAvailability::Unavailable)
+            );
             assert_eq!(tracker.acknowledge(&captured), Err(AttentionError::Changed));
             assert!(tracker.observe(&[finished.clone()]).is_empty());
         }
@@ -341,7 +451,7 @@ mod tests {
                 }
             }
             let queue = tracker.observe(&[next]);
-            assert_eq!(queue.len(), usize::from(change < 4));
+            assert_eq!(queue.len(), 1);
             assert_eq!(tracker.acknowledge(&captured), Err(AttentionError::Changed));
             assert_eq!(tracker.observe(&[finished.clone()]), [finished.clone()]);
         }
@@ -359,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn queue_contains_only_live_waiting_and_complete_items_in_stable_order() {
+    fn queue_contains_agent_attention_and_resource_issues_in_registration_order() {
         let states = vec![
             state("running", AgentStatus::Running, PaneAvailability::Present),
             state("complete", AgentStatus::Complete, PaneAvailability::Present),
@@ -383,7 +493,7 @@ mod tests {
                 .iter()
                 .map(|state| state.item.id.as_str())
                 .collect::<Vec<_>>(),
-            ["complete", "waiting"]
+            ["complete", "waiting", "missing", "unavailable"]
         );
         assert_eq!(queue[0], states[1]);
         assert_eq!(queue[1], states[3]);

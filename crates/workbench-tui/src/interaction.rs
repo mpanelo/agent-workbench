@@ -552,6 +552,7 @@ mod tests {
                 },
                 status: AgentStatus::Unknown,
                 pane: PaneAvailability::Present,
+                workspace_availability: workbench_core::WorkspaceAvailability::Present,
                 status_detail: "Unsupported foreground command.".into(),
                 attention_prompt: None,
                 completion_fingerprint: None,

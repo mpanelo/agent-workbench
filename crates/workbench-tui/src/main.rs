@@ -1261,6 +1261,7 @@ mod tests {
         let mut state = state(&[("A", AgentStatus::Complete)]);
         if let Some(Ok(items)) = &mut state.work_items {
             items[0].completion_fingerprint = Some(42);
+            items[0].item.workspace = directory.path().into();
         }
         let original = state.items()[0].item.clone();
         engine.register_work_item(original.clone()).unwrap();
@@ -1318,6 +1319,7 @@ mod tests {
         let mut state = state(&[("A", AgentStatus::Complete)]);
         if let Some(Ok(items)) = &mut state.work_items {
             items[0].completion_fingerprint = Some(42);
+            items[0].item.workspace = directory.path().into();
         }
         let original = state.items()[0].item.clone();
         engine.register_work_item(original.clone()).unwrap();
@@ -1523,6 +1525,13 @@ mod tests {
         let path = directory.path().join("items.json");
         let engine = Engine::new(&path);
         let mut stale = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        if let Some(Ok(items)) = &mut stale.work_items {
+            for item in items {
+                item.item.workspace = workspace.clone();
+            }
+        }
         let a = stale.items()[0].item.clone();
         let b = stale.items()[1].item.clone();
         engine.register_work_item(a.clone()).unwrap();
@@ -1551,6 +1560,18 @@ mod tests {
         let mut fresh = stale.clone();
         fresh.reload_registry(&engine);
         assert_eq!(fresh.items()[0].item, updated);
+        assert_eq!(fresh.items()[0].status, AgentStatus::Running);
+        std::fs::remove_dir(&workspace).unwrap();
+        fresh.reload_registry(&engine);
+        assert_eq!(fresh.items()[0].status, AgentStatus::Running);
+        assert_eq!(
+            fresh.items()[0].resource_issue(),
+            Some(workbench_core::ResourceIssue::WorkspaceMissing)
+        );
+        assert_eq!(fresh.attention.len(), 2);
+        std::fs::create_dir(&workspace).unwrap();
+        fresh.reload_registry(&engine);
+        assert!(fresh.items()[0].resource_issue().is_none());
         assert_eq!(fresh.items()[0].status, AgentStatus::Running);
         engine.unregister_work_item(&b).unwrap();
         let mut pending_refresh = stale;
@@ -1809,6 +1830,7 @@ mod tests {
                     },
                     status: *status,
                     pane: PaneAvailability::Present,
+                    workspace_availability: workbench_core::WorkspaceAvailability::Present,
                     status_detail: "Observed locally.".into(),
                     attention_prompt: None,
                     completion_fingerprint: None,

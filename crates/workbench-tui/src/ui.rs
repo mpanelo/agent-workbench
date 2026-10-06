@@ -117,10 +117,11 @@ pub(crate) fn render_work(
                     ),
                     theme::accent(),
                 )];
-                heading.push(Span::styled(
-                    work_cell(&entry.status.to_string(), status_width),
-                    theme::status(entry.status),
-                ));
+                let (label, style) = entry.resource_issue().map_or_else(
+                    || (entry.status.to_string(), theme::status(entry.status)),
+                    |issue| (issue.to_string(), theme::resource_issue(issue)),
+                );
+                heading.push(Span::styled(work_cell(&label, status_width), style));
                 let attention = state
                     .attention
                     .iter()
@@ -190,7 +191,18 @@ pub(crate) fn render_work(
                     work_kind_label(item.kind),
                     theme::work_kind(item.kind),
                 ));
-                if state.status != workbench_core::AgentStatus::Complete {
+                if state.resource_issue().is_some()
+                    && state.pane == workbench_core::PaneAvailability::Present
+                {
+                    lines.push(metadata(
+                        "Agent",
+                        &state.status.to_string(),
+                        theme::status(state.status),
+                    ));
+                }
+                if state.pane == workbench_core::PaneAvailability::Present
+                    && state.status != workbench_core::AgentStatus::Complete
+                {
                     lines.push(metadata("Status", &state.status_detail, theme::muted()));
                 }
                 match state.pane {
@@ -201,6 +213,27 @@ pub(crate) fn render_work(
                     workbench_core::PaneAvailability::Unavailable => {
                         lines.push(Line::styled("  Agent pane unavailable.", theme::notice()))
                     }
+                }
+                match state.workspace_availability {
+                    workbench_core::WorkspaceAvailability::Present => {}
+                    workbench_core::WorkspaceAvailability::Missing => {
+                        lines.push(Line::styled(
+                            "  Workspace directory missing.",
+                            theme::notice(),
+                        ));
+                    }
+                    workbench_core::WorkspaceAvailability::Unavailable => {
+                        lines.push(Line::styled(
+                            "  Workspace inaccessible or not a directory.",
+                            theme::notice(),
+                        ));
+                    }
+                }
+                if state.resource_issue().is_some() {
+                    lines.push(Line::styled(
+                        "  Registration kept. Unregister after manual cleanup.",
+                        theme::muted(),
+                    ));
                 }
                 lines.push(metadata(
                     "Repository",
@@ -215,7 +248,9 @@ pub(crate) fn render_work(
                 if let Some(branch) = &item.branch {
                     lines.push(metadata("Branch", branch, theme::muted()));
                 }
-                if state.status == workbench_core::AgentStatus::WaitingForInput {
+                if state.pane == workbench_core::PaneAvailability::Present
+                    && state.status == workbench_core::AgentStatus::WaitingForInput
+                {
                     lines.push(Line::from(""));
                     lines.push(Line::styled("  Agent requests input:", theme::notice()));
                     if let Some(prompt) = &state.attention_prompt {
@@ -289,7 +324,7 @@ pub(crate) fn render_work(
 
 // Keep attention in a fixed column even when no current item has the longest
 // status label. This is presentation sizing, not an agent-state decision.
-const WORK_STATUS_WIDTH: usize = 17; // WAITING_FOR_INPUT
+const WORK_STATUS_WIDTH: usize = 17; // Agent and resource labels share the column.
 
 fn approval_feedback_style(phase: ApprovalPhase) -> Style {
     match phase {
@@ -886,6 +921,7 @@ mod tests {
             },
             status: AgentStatus::Unknown,
             pane,
+            workspace_availability: workbench_core::WorkspaceAvailability::Present,
             status_detail: "Unsupported foreground command.".into(),
             attention_prompt: None,
             completion_fingerprint: None,
@@ -1450,9 +1486,9 @@ mod tests {
         );
         let text = work_screen(&unknown, 120, 15, &mut 0);
         for expected in [
-            "WORK • attention: 0",
+            "WORK • attention: 1",
             "Discovery unavailable",
-            "ABC-123  UNKNOWN",
+            "ABC-123  UNAVAILABLE",
             "Agent pane unavailable",
         ] {
             assert!(text.contains(expected), "{text}");
@@ -1605,7 +1641,7 @@ mod tests {
     }
 
     #[test]
-    fn work_view_shows_saved_metadata_and_unknown_status_for_both_types() {
+    fn work_view_shows_saved_metadata_and_resource_labels_for_both_types() {
         for kind in [WorkItemKind::Implementation, WorkItemKind::ExternalReview] {
             for pane in [
                 PaneAvailability::Present,
@@ -1620,7 +1656,6 @@ mod tests {
                 let text = work_screen(&state, 120, 15, &mut 0);
                 for expected in [
                     "WORK",
-                    "ABC-123  UNKNOWN",
                     "Fix retries",
                     "/work/repo",
                     "/work/ABC-123",
@@ -1629,6 +1664,12 @@ mod tests {
                 ] {
                     assert!(text.contains(expected), "missing {expected:?} in {text}");
                 }
+                let label = match pane {
+                    PaneAvailability::Present => "UNKNOWN",
+                    PaneAvailability::Missing => "PANE MISSING",
+                    PaneAvailability::Unavailable => "UNAVAILABLE",
+                };
+                assert!(text.contains(&format!("ABC-123  {label}")), "{text}");
                 assert!(!text.contains("%14"), "{text}");
                 assert!(!text.contains("Pane:"), "{text}");
                 match pane {
@@ -1645,6 +1686,100 @@ mod tests {
     }
 
     #[test]
+    fn resource_warnings_show_live_activity_and_do_not_hide_pending_questions() {
+        use workbench_core::WorkspaceAvailability;
+        for (pane, workspace, label) in [
+            (
+                PaneAvailability::Present,
+                WorkspaceAvailability::Missing,
+                "WORKSPACE MISSING",
+            ),
+            (
+                PaneAvailability::Missing,
+                WorkspaceAvailability::Present,
+                "PANE MISSING",
+            ),
+            (
+                PaneAvailability::Missing,
+                WorkspaceAvailability::Missing,
+                "RESOURCES MISSING",
+            ),
+            (
+                PaneAvailability::Unavailable,
+                WorkspaceAvailability::Present,
+                "UNAVAILABLE",
+            ),
+            (
+                PaneAvailability::Present,
+                WorkspaceAvailability::Unavailable,
+                "UNAVAILABLE",
+            ),
+        ] {
+            for status in [
+                AgentStatus::Running,
+                AgentStatus::WaitingForInput,
+                AgentStatus::Complete,
+            ] {
+                let mut item = registered(pane, WorkItemKind::Implementation);
+                item.workspace_availability = workspace;
+                item.status = status;
+                item.attention_prompt = (status == AgentStatus::WaitingForInput
+                    && pane == PaneAvailability::Present)
+                    .then(|| {
+                        "Please choose how to proceed.\nOptions:\n1. Keep working\n2. Stop".into()
+                    });
+                let state = AppState::from_refresh(Ok(snapshot()), Ok(vec![item.clone()]));
+                assert_eq!(state.attention, [item.clone()]);
+                let mut interaction = Interaction {
+                    selected_id: Some(item.item.id.clone()),
+                    ..Interaction::default()
+                };
+                let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+                terminal
+                    .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                let rows: Vec<String> = buffer
+                    .content()
+                    .chunks(100)
+                    .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+                    .collect();
+                let text = rows.join("\n");
+                assert!(
+                    rows[1].starts_with(&format!("> ABC-123  {label}")),
+                    "{text}"
+                );
+                assert_eq!(rows[1].find('!'), Some(30));
+                assert!(!rows[1].contains("Build"));
+                theme::assert_text_style(
+                    buffer,
+                    label,
+                    if label == "UNAVAILABLE" {
+                        theme::YELLOW
+                    } else {
+                        theme::PEACH
+                    },
+                    theme::SURFACE,
+                );
+                assert!(text.contains("Registration kept."));
+                assert!(!text.contains("%14"));
+                if pane == PaneAvailability::Present {
+                    assert!(text.contains(&format!("Agent: {status}")), "{text}");
+                    if status == AgentStatus::WaitingForInput {
+                        assert!(text.contains("Please choose how to proceed."));
+                        assert!(text.contains("2. Stop"));
+                    }
+                } else {
+                    assert!(!text.contains("Agent: "), "{text}");
+                }
+                assert_eq!(state.items(), [item]);
+                work_screen(&state, 1, 1, &mut 0);
+                work_screen(&state, 30, 6, &mut 0);
+            }
+        }
+    }
+
+    #[test]
     fn discovery_failure_keeps_work_items_visible_and_state_errors_are_actionable() {
         let state = AppState {
             discovery: Some(Err("tmux was not found".into())),
@@ -1656,7 +1791,7 @@ mod tests {
         };
         let text = work_screen(&state, 120, 15, &mut 0);
         assert!(text.contains("Discovery unavailable"));
-        assert!(text.contains("ABC-123  UNKNOWN"));
+        assert!(text.contains("ABC-123  UNAVAILABLE"));
         assert!(text.contains("Agent pane unavailable."));
         assert!(!text.contains("%14"));
         let state = AppState {
@@ -1715,7 +1850,7 @@ mod tests {
     }
 
     #[test]
-    fn status_and_prompt_changes_never_move_list_rows_or_change_selection() {
+    fn status_prompt_and_resource_changes_never_move_list_rows_or_change_selection() {
         let items = ["A", "B", "C", "D", "E", "F"]
             .into_iter()
             .map(|id| {
@@ -1734,17 +1869,59 @@ mod tests {
         let mut scroll = 0;
         let mut initial_row = None;
         let mut initial_offset = None;
-        for status in [
-            AgentStatus::Running,
-            AgentStatus::WaitingForInput,
-            AgentStatus::Complete,
-            AgentStatus::Unknown,
-            AgentStatus::Running,
+        for (status, pane, workspace) in [
+            (
+                AgentStatus::Running,
+                PaneAvailability::Present,
+                workbench_core::WorkspaceAvailability::Present,
+            ),
+            (
+                AgentStatus::WaitingForInput,
+                PaneAvailability::Present,
+                workbench_core::WorkspaceAvailability::Present,
+            ),
+            (
+                AgentStatus::Complete,
+                PaneAvailability::Present,
+                workbench_core::WorkspaceAvailability::Present,
+            ),
+            (
+                AgentStatus::Unknown,
+                PaneAvailability::Present,
+                workbench_core::WorkspaceAvailability::Present,
+            ),
+            (
+                AgentStatus::Running,
+                PaneAvailability::Present,
+                workbench_core::WorkspaceAvailability::Missing,
+            ),
+            (
+                AgentStatus::Unknown,
+                PaneAvailability::Missing,
+                workbench_core::WorkspaceAvailability::Present,
+            ),
+            (
+                AgentStatus::Unknown,
+                PaneAvailability::Missing,
+                workbench_core::WorkspaceAvailability::Missing,
+            ),
+            (
+                AgentStatus::Unknown,
+                PaneAvailability::Unavailable,
+                workbench_core::WorkspaceAvailability::Unavailable,
+            ),
+            (
+                AgentStatus::Running,
+                PaneAvailability::Present,
+                workbench_core::WorkspaceAvailability::Present,
+            ),
         ] {
             if let Some(Ok(items)) = &mut state.work_items {
                 items[0].status = AgentStatus::WaitingForInput;
                 items[0].attention_prompt = Some("UNSELECTED PROMPT".repeat(500));
                 items[5].status = status;
+                items[5].pane = pane;
+                items[5].workspace_availability = workspace;
                 items[5].attention_prompt = Some("SELECTED PROMPT\n".repeat(200));
             }
             state.refresh_attention(&mut interaction.attention_tracker);
@@ -1845,6 +2022,14 @@ mod tests {
             AgentStatus::Unknown,
         ] {
             assert!(Line::from(status.to_string()).width() <= WORK_STATUS_WIDTH);
+        }
+        for issue in [
+            workbench_core::ResourceIssue::PaneMissing,
+            workbench_core::ResourceIssue::WorkspaceMissing,
+            workbench_core::ResourceIssue::ResourcesMissing,
+            workbench_core::ResourceIssue::Unavailable,
+        ] {
+            assert!(Line::from(issue.to_string()).width() <= WORK_STATUS_WIDTH);
         }
     }
 

@@ -93,6 +93,8 @@ pub struct WorkItemState {
     pub item: WorkItem,
     pub status: AgentStatus,
     pub pane: PaneAvailability,
+    /// Availability of the saved workspace directory, independent of the agent.
+    pub workspace_availability: WorkspaceAvailability,
     /// Local observation only; never persisted and never contains terminal text.
     pub status_detail: String,
     /// Bounded visible approval context, only for a current detected input request.
@@ -101,6 +103,51 @@ pub struct WorkItemState {
     /// Opaque hash of completion evidence (screen or native session/turn identity).
     /// Used only for session-local acknowledgement; never terminal text.
     pub completion_fingerprint: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkspaceAvailability {
+    Present,
+    Missing,
+    /// Access failed, or the path exists but is not a directory.
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResourceIssue {
+    PaneMissing,
+    WorkspaceMissing,
+    ResourcesMissing,
+    Unavailable,
+}
+
+impl fmt::Display for ResourceIssue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::PaneMissing => "PANE MISSING",
+            Self::WorkspaceMissing => "WORKSPACE MISSING",
+            Self::ResourcesMissing => "RESOURCES MISSING",
+            Self::Unavailable => "UNAVAILABLE",
+        })
+    }
+}
+
+impl WorkItemState {
+    /// Confirmed absence takes precedence over an inconclusive check of the
+    /// other resource. Neither changes the independently observed agent status.
+    pub fn resource_issue(&self) -> Option<ResourceIssue> {
+        match (self.pane, self.workspace_availability) {
+            (PaneAvailability::Missing, WorkspaceAvailability::Missing) => {
+                Some(ResourceIssue::ResourcesMissing)
+            }
+            (_, WorkspaceAvailability::Missing) => Some(ResourceIssue::WorkspaceMissing),
+            (PaneAvailability::Missing, _) => Some(ResourceIssue::PaneMissing),
+            (PaneAvailability::Unavailable, _) | (_, WorkspaceAvailability::Unavailable) => {
+                Some(ResourceIssue::Unavailable)
+            }
+            (PaneAvailability::Present, WorkspaceAvailability::Present) => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1004,7 +1051,9 @@ mod tests {
     fn disappearance_and_discovery_failure_do_not_delete_registration() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::new(directory.path().join("items.json"));
-        let registered = item("ABC-123", WorkItemKind::Implementation);
+        let mut registered = item("ABC-123", WorkItemKind::Implementation);
+        registered.workspace = directory.path().join("workspace");
+        fs::create_dir(&registered.workspace).unwrap();
         engine.register_work_item(registered.clone()).unwrap();
         let present = Snapshot {
             sessions: vec![Session {
@@ -1034,7 +1083,37 @@ mod tests {
             assert_eq!(states[0].item, registered);
             assert_eq!(states[0].status, AgentStatus::Unknown);
             assert_eq!(states[0].pane, expected);
+            assert_eq!(
+                states[0].workspace_availability,
+                WorkspaceAvailability::Present
+            );
         }
+        let saved = fs::read(directory.path().join("items.json")).unwrap();
+        fs::remove_dir(&registered.workspace).unwrap();
+        for (snapshot, issue) in [
+            (Some(&present), ResourceIssue::WorkspaceMissing),
+            (Some(&Snapshot::default()), ResourceIssue::ResourcesMissing),
+            (None, ResourceIssue::WorkspaceMissing),
+        ] {
+            let states = engine.work_item_states(snapshot).unwrap();
+            assert_eq!(
+                states[0].workspace_availability,
+                WorkspaceAvailability::Missing
+            );
+            assert_eq!(states[0].resource_issue(), Some(issue));
+            assert!(states[0].needs_attention());
+            assert_eq!(states[0].item, registered);
+        }
+        fs::create_dir(&registered.workspace).unwrap();
+        assert!(
+            engine.work_item_states(Some(&present)).unwrap()[0]
+                .resource_issue()
+                .is_none()
+        );
+        assert_eq!(
+            fs::read(directory.path().join("items.json")).unwrap(),
+            saved
+        );
         assert_eq!(engine.work_items().unwrap(), [registered]);
     }
 

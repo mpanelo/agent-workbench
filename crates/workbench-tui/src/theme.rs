@@ -8,7 +8,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph, Widget},
 };
-use workbench_core::{AgentStatus, ReviewStatus, WorkItemKind};
+use workbench_core::{AgentStatus, ResourceIssue, ReviewStatus, WorkItemKind};
 
 pub const BASE: Color = Color::Rgb(30, 30, 46);
 pub const MANTLE: Color = Color::Rgb(24, 24, 37);
@@ -95,6 +95,16 @@ pub fn review_status(status: ReviewStatus) -> Style {
         ReviewStatus::Unreviewed => SUBTEXT,
         ReviewStatus::ChangedAfterReview => PEACH,
     })
+}
+
+pub fn resource_issue(issue: ResourceIssue) -> Style {
+    Style::default()
+        .fg(if issue == ResourceIssue::Unavailable {
+            YELLOW
+        } else {
+            PEACH
+        })
+        .add_modifier(Modifier::BOLD)
 }
 
 /// Action-first hints, with keys accented independently of action labels.

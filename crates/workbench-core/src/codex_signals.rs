@@ -722,6 +722,7 @@ mod tests {
             },
             status,
             pane: PaneAvailability::Present,
+            workspace_availability: crate::WorkspaceAvailability::Present,
             status_detail: String::new(),
             attention_prompt: None,
             completion_fingerprint: None,

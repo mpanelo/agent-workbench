@@ -217,6 +217,7 @@ mod tests {
             },
             status: AgentStatus::WaitingForInput,
             pane: PaneAvailability::Present,
+            workspace_availability: crate::WorkspaceAvailability::Present,
             status_detail: "approval".into(),
             attention_prompt: current_approval_prompt(&PaneObservation {
                 command: "codex".into(),

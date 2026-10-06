@@ -1342,7 +1342,11 @@ cat '{}/'$5
             id: id.into(),
             title: "Task".into(),
             repository: "/work".into(),
-            workspace: "/work".into(),
+            workspace: if id == "B" {
+                directory.path().join("missing-workspace")
+            } else {
+                directory.path().into()
+            },
             branch: None,
             kind: WorkItemKind::Implementation,
             pane_id: pane_id.into(),
@@ -1410,6 +1414,10 @@ cat '{}/'$5
                 .unwrap();
             assert_eq!(states[0].status, expected);
             assert_eq!(states[1].status, expected);
+            assert_eq!(states[0].workspace_availability, crate::WorkspaceAvailability::Present);
+            assert_eq!(states[1].workspace_availability, crate::WorkspaceAvailability::Missing);
+            assert_eq!(states[1].resource_issue(), Some(crate::ResourceIssue::WorkspaceMissing));
+            assert!(states[1].needs_attention());
             assert_eq!(
                 states[0].attention_prompt.is_some(),
                 expected == AgentStatus::WaitingForInput
@@ -1546,7 +1554,7 @@ cat '{}/'$5
                 id: "M4".into(),
                 title: "Observe".into(),
                 repository: "/work".into(),
-                workspace: "/work".into(),
+                workspace: directory.path().into(),
                 branch: None,
                 kind: WorkItemKind::Implementation,
                 pane_id: id.clone(),
@@ -1662,7 +1670,7 @@ cat '{}/'$5
             .unwrap();
         assert_eq!(states[0].pane, PaneAvailability::Missing);
         assert_eq!(states[0].status, AgentStatus::Unknown);
-        assert!(crate::attention_items(&states).is_empty());
+        assert_eq!(crate::attention_items(&states).len(), 1);
         assert!(states[0].attention_prompt.is_none());
         assert_eq!(engine.work_items().unwrap().len(), 1);
     }
