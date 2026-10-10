@@ -14,7 +14,7 @@ Usage:
   workbench codex-notify JSON [--state-file PATH]  # completion callback
   workbench --help
 
-The TUI defaults to WORK; w (or the legacy a alias) returns there, s shows sessions.
+The TUI defaults to WORK; w returns there, s shows sessions.
 WORK keeps a stable list with separate selected-item details. ! marks attention.
 In WORK, x acknowledges the selected TURN FINISHED observation for this
 Workbench run. New activity/input or changed completion evidence requeues it.
@@ -36,8 +36,8 @@ another confirmation, keeping pane, files, branch, worktree and review history.
 c in that menu previews cleanup of the entire owned workmux window and linked worktree.
 Cancel is selected by default; Tab/Left/Right selects cleanup, then Enter confirms.
 Cleanup keeps the branch and review history; dirty or ambiguous targets are blocked.
-Short descriptions are limited to 120 Unicode characters; --title is a legacy
-alias for --short-description. When omitted, the description defaults to the ID.
+Short descriptions are limited to 120 Unicode characters. Use --short-description;
+when omitted, the description defaults to the ID.
 j/k or arrows select; <enter> opens the pane in WORK; replies are single-line.
 <c-d>/<c-u> scroll details in WORK, or the current view elsewhere, half a page.
 ? shows the current view's keybindings, except in Clean Up Options where controls
@@ -130,7 +130,6 @@ pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Options,
             "--state-file"
                 | "--diff-base"
                 | "--id"
-                | "--title"
                 | "--short-description"
                 | "--kind"
                 | "--repository"
@@ -162,12 +161,8 @@ pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Options,
             let repository = absolute(PathBuf::from(required(&mut flags, "--repository")?))?;
             let workspace = absolute(PathBuf::from(required(&mut flags, "--workspace")?))?;
             let pane_id = string_flag(&mut flags, "--pane")?;
-            let description = optional_string(&mut flags, "--short-description")?;
-            let legacy_title = optional_string(&mut flags, "--title")?;
-            if description.is_some() && legacy_title.is_some() {
-                return Err("Use --short-description or --title, not both.".into());
-            }
-            let title = description.or(legacy_title).unwrap_or_else(|| id.clone());
+            let title =
+                optional_string(&mut flags, "--short-description")?.unwrap_or_else(|| id.clone());
             let branch = optional_string(&mut flags, "--branch")?;
             Command::Register(WorkItem {
                 id,
@@ -269,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn short_description_flag_and_legacy_alias_are_mutually_exclusive() {
+    fn short_description_uses_only_the_current_flag_and_rejects_the_removed_alias() {
         let base = args(&[
             "register",
             "--id",
@@ -283,17 +278,27 @@ mod tests {
             "--pane",
             "%1",
         ]);
-        for flag in ["--short-description", "--title"] {
+        let mut argv = base.clone();
+        argv.extend(args(&["--short-description", "Fix retries"]));
+        let Command::Register(item) = parse(argv).unwrap().command else {
+            panic!("expected registration")
+        };
+        assert_eq!(item.title, "Fix retries");
+        for flags in [
+            vec!["--title", "Old flag"],
+            vec!["--short-description", "First", "--title", "Second"],
+            vec!["--title", "First", "--short-description", "Second"],
+        ] {
             let mut argv = base.clone();
-            argv.extend(args(&[flag, "Fix retries"]));
-            let Command::Register(item) = parse(argv).unwrap().command else {
-                panic!("expected registration")
-            };
-            assert_eq!(item.title, "Fix retries");
+            argv.extend(args(&flags));
+            assert!(
+                parse(argv)
+                    .unwrap_err()
+                    .contains("Unknown argument \"--title\"")
+            );
         }
-        let mut both = base.clone();
-        both.extend(args(&["--short-description", "First", "--title", "Second"]));
-        assert!(parse(both).unwrap_err().contains("not both"));
+        assert!(!HELP.contains("--title"));
+        assert!(!HELP.contains("legacy"));
         assert!(parse(args(&["list", "--short-description", "unused"])).is_err());
         let mut duplicate = base;
         duplicate.extend(args(&[

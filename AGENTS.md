@@ -81,6 +81,11 @@ Prefer the Rust standard library where reasonable.
 
 Do not introduce heavy dependencies without a clear need.
 
+Do not add legacy or backward-compatibility aliases for commands, flags,
+keybindings, or renamed APIs. Use the current names only; do not retain
+superseded names as aliases. This does not authorize discarding existing saved
+data or changing its schema without a migration.
+
 ## Core Responsibilities
 
 `workbench-core` owns:

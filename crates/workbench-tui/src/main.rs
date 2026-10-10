@@ -858,9 +858,9 @@ fn navigate(
         }
         KeyCode::Down => *scroll = scroll.saturating_add(1),
         KeyCode::Up => *scroll = scroll.saturating_sub(1),
-        KeyCode::Char('a' | 'w' | 's') => {
+        KeyCode::Char('w' | 's') => {
             *view = match key.code {
-                KeyCode::Char('a' | 'w') => ui::View::Work,
+                KeyCode::Char('w') => ui::View::Work,
                 _ => ui::View::Sessions,
             };
             *scroll = 0;
@@ -2192,6 +2192,56 @@ mod tests {
             );
             assert_eq!(scroll, 10);
             assert_eq!(interaction.draft.as_ref().unwrap().text, "yes");
+        }
+    }
+
+    #[test]
+    fn removed_work_alias_is_inactive_and_current_view_bindings_still_work() {
+        let state = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
+        for mut view in [ui::View::Work, ui::View::Sessions] {
+            let previous_view = view;
+            let mut interaction = interaction::Interaction {
+                selected_id: Some("B".into()),
+                detail_item_id: Some("B".into()),
+                work_list_offset: 4,
+                message: Some("existing notice".into()),
+                reveal_selection: false,
+                reveal_pane: false,
+                ..Default::default()
+            };
+            let mut scroll = 12;
+            assert!(
+                navigate(
+                    KeyCode::Char('a'),
+                    &state,
+                    &mut view,
+                    &mut scroll,
+                    &mut interaction,
+                    24
+                )
+                .is_none()
+            );
+            assert_eq!(view, previous_view);
+            assert_eq!(scroll, 12);
+            assert_eq!(interaction.selected_id.as_deref(), Some("B"));
+            assert_eq!(interaction.detail_item_id.as_deref(), Some("B"));
+            assert_eq!(interaction.work_list_offset, 4);
+            assert_eq!(interaction.message.as_deref(), Some("existing notice"));
+            assert!(!interaction.reveal_selection);
+            assert!(!interaction.reveal_pane);
+            for (key, expected) in [('w', ui::View::Work), ('s', ui::View::Sessions)] {
+                navigate(
+                    KeyCode::Char(key),
+                    &state,
+                    &mut view,
+                    &mut scroll,
+                    &mut interaction,
+                    24,
+                );
+                assert_eq!(view, expected);
+                assert_eq!(scroll, 0);
+                assert_eq!(interaction.selected_id.as_deref(), Some("B"));
+            }
         }
     }
 

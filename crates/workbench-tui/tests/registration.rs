@@ -14,7 +14,7 @@ fn register(path: &std::path::Path, id: &str, kind: &str, pane: &str) -> std::pr
             "/work/task workspace",
             "--pane",
             pane,
-            "--title",
+            "--short-description",
             "Fix retries — λ",
             "--state-file",
         ])
@@ -102,7 +102,7 @@ fn corrupt_state_and_invalid_registration_exit_with_errors_without_losing_data()
 }
 
 #[test]
-fn short_description_limit_and_alias_work_through_the_cli_without_data_loss() {
+fn short_description_limit_and_removed_flag_rejection_preserve_saved_data() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("items.json");
     let attempt = |id: &str, flag: &str, description: &str| {
@@ -133,20 +133,26 @@ fn short_description_limit_and_alias_work_through_the_cli_without_data_loss() {
     assert!(!failed.status.success());
     assert!(String::from_utf8_lossy(&failed.stderr).contains("at most 120 characters"));
     assert!(!path.exists());
-    for (id, flag) in [("new", "--short-description"), ("legacy", "--title")] {
-        let output = attempt(id, flag, &"🙂".repeat(limit));
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
+    let removed = attempt("removed", "--title", "Do not register");
+    assert!(!removed.status.success());
+    assert!(String::from_utf8_lossy(&removed.stderr).contains("Unknown argument \"--title\""));
+    assert!(!path.exists());
+    let output = attempt("new", "--short-description", &"🙂".repeat(limit));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stored = fs::read(&path).unwrap();
+    let removed = attempt("removed", "--title", "Do not register");
+    assert!(!removed.status.success());
+    assert!(String::from_utf8_lossy(&removed.stderr).contains("Unknown argument \"--title\""));
+    assert_eq!(fs::read(&path).unwrap(), stored);
     for flag in ["--short-description", "--title"] {
         assert!(!attempt("long", flag, &too_long).status.success());
         assert_eq!(fs::read(&path).unwrap(), stored);
     }
     let items = workbench_core::Engine::new(&path).work_items().unwrap();
-    assert_eq!(items.len(), 2);
+    assert_eq!(items.len(), 1);
     assert!(items.iter().all(|item| item.title.chars().count() == limit));
 }

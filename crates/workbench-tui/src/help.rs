@@ -104,13 +104,11 @@ impl Context {
             Self::Work => &[
                 "Select (arrows): ↑/↓",
                 "Next attention item: Tab",
-                "Work (legacy alias): a",
                 "Sessions: s",
                 "Quit (alternatives): Esc/<c-c>",
             ],
             Self::Sessions { .. } => &[
                 "Select (arrows): ↑/↓",
-                "Work (legacy alias): a",
                 "Sessions: s",
                 "Quit (alternatives): Esc/<c-c>",
             ],
@@ -361,6 +359,8 @@ mod tests {
             assert!(!text.contains(excluded), "{text}");
             assert!(!text.contains("Home"));
             assert!(!text.contains("F1"));
+            assert!(!text.contains("legacy alias"));
+            assert!(!text.contains("Work: a"));
             for hint in context.hints().split(" | ") {
                 assert!(text.contains(hint), "missing {hint}: {text}");
             }
