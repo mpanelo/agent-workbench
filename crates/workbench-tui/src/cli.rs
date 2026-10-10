@@ -31,16 +31,17 @@ editable. <enter> confirms; Tab changes fields; Esc cancels. Missing Git metadat
 blocks SESSIONS registration; workbench register remains available manually.
 SESSIONS defaults to recognized agent commands; f toggles all panes.
 In WORK, e edits Work ID and Short Description together; Tab changes fields.
-u opens unregister confirmation. Unregistering
-removes only the Workbench entry, keeping pane, branch, worktree and review history.
-c previews cleanup of the entire owned workmux window and linked worktree.
+In WORK, c opens Clean Up Options. Inside it, u unregisters directly without
+another confirmation, keeping pane, files, branch, worktree and review history.
+c in that menu previews cleanup of the entire owned workmux window and linked worktree.
 Cancel is selected by default; Tab/Left/Right selects cleanup, then Enter confirms.
 Cleanup keeps the branch and review history; dirty or ambiguous targets are blocked.
 Short descriptions are limited to 120 Unicode characters; --title is a legacy
 alias for --short-description. When omitted, the description defaults to the ID.
 j/k or arrows select; <enter> opens the pane in WORK; replies are single-line.
 <c-d>/<c-u> scroll details in WORK, or the current view elsewhere, half a page.
-? shows the current view's keybindings.
+? shows the current view's keybindings, except in Clean Up Options where controls
+are shown inline and the bottom help bar is hidden.
 In text fields, ? remains literal text.
 <enter> submits a reply and Esc cancels. Tab selects the next unacknowledged attention item.
 While composing a reply, <c-u> clears the draft instead of scrolling.

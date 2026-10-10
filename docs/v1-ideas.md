@@ -105,8 +105,8 @@ Implemented: `c` in WORK opens a lazygit-style removal menu for the captured wor
 item. The menu keeps the actions distinct and discloses what each keeps/removes:
 
 - Unregister only (`u` inside the menu): remove the registration; keep pane,
-  workspace, branch, and saved review history. Open the existing explicit
-  unregister confirmation.
+  workspace, branch, and saved review history. Apply directly from the menu,
+  without a second confirmation; core revalidates the captured registration.
 - Clean up workspace (`c` inside the menu): open the existing ownership/safety
   preview and cancel-first confirmation for the entire workmux window and its
   linked worktree. Keep branch and review history; unregister only after verified
@@ -117,13 +117,15 @@ The compact **Clean Up Options** menu shows the work ID and key-first action row
 `c    Close workmux window. Remove worktree.`, followed by `Esc  Cancel`.
 The WORK action is labeled **Clean Up**. All menu controls are shown inline;
 there is no help entry or `?` help behavior here, and the bottom help bar is hidden.
-Workspace paths and generic warning text are omitted; full consequences remain
-in the next confirmation. Warnings appear only when registration changes or load
-failures block an action.
+Workspace paths and generic warning text are omitted; workspace deletion still
+has its full preview and confirmation. Warnings appear when registration changes
+or load failures block an action, or when direct unregister fails.
 
-Opening the menu or choosing an action does not itself remove anything. Its
-captured registration cannot be retargeted by refreshes; changed/removed entries
-disable choices until reopened and load errors pause choices until recovery.
+Opening the menu alone does not remove anything. Pressing `u` unregisters its
+captured target directly; the popup locks input until the operation finishes,
+closes on success, and shows errors in place. The old unregister confirmation
+screen was removed. Refreshes cannot retarget the operation; changed/removed
+entries disable choices until reopened and load errors pause choices until recovery.
 Existing cleanup restrictions and revalidation are unchanged. Blocked or failed
 cleanup never falls back to unregistering. `Esc` cancels; `<enter>` does not choose
 a default action. These menu controls were approved; the old standalone `u`

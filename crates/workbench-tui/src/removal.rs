@@ -1,5 +1,5 @@
-//! Read-only action picker. Existing confirmation flows and core safety policy
-//! remain responsible for unregistering and workspace cleanup.
+//! Captured-target actions. Unregister uses core validation directly; workspace
+//! cleanup retains its separate safety preview and confirmation.
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     Frame,
@@ -23,6 +23,8 @@ pub struct RemovalUi {
     item: Option<WorkItem>,
     changed: bool,
     unavailable: bool,
+    saving: bool,
+    error: Option<String>,
 }
 
 impl RemovalUi {
@@ -30,11 +32,16 @@ impl RemovalUi {
         self.item.is_some()
     }
 
+    pub fn is_saving(&self) -> bool {
+        self.saving
+    }
+
     pub fn open(&mut self, item: WorkItem) {
         if !self.is_open() {
             self.item = Some(item);
             self.changed = false;
             self.unavailable = false;
+            self.error = None;
         }
     }
 
@@ -49,12 +56,16 @@ impl RemovalUi {
 
     pub fn help_context(&self) -> help::Context {
         help::Context::Removal {
-            blocked: self.changed || self.unavailable,
+            blocked: self.changed || self.unavailable || self.saving,
         }
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Intent {
-        if !self.is_open() || key.kind != KeyEventKind::Press || !key.modifiers.is_empty() {
+        if !self.is_open()
+            || self.saving
+            || key.kind != KeyEventKind::Press
+            || !key.modifiers.is_empty()
+        {
             return Intent::None;
         }
         if key.code == KeyCode::Esc {
@@ -65,11 +76,26 @@ impl RemovalUi {
             return Intent::None;
         }
         match key.code {
-            KeyCode::Char('u') => Intent::Unregister(self.item.take().unwrap()),
+            KeyCode::Char('u') => {
+                self.saving = true;
+                self.error = None;
+                Intent::Unregister(self.item.as_ref().unwrap().clone())
+            }
             KeyCode::Char('c') => Intent::Cleanup(self.item.take().unwrap()),
             // Enter does not choose a destructive default. No other view's
             // navigation, quit, reply, paste or maintenance actions apply here.
             _ => Intent::None,
+        }
+    }
+
+    pub fn finish_unregister(&mut self, result: Result<(), String>) {
+        if !self.saving {
+            return;
+        }
+        self.saving = false;
+        match result {
+            Ok(()) => self.item = None,
+            Err(error) => self.error = Some(error),
         }
     }
 
@@ -84,15 +110,23 @@ impl RemovalUi {
         );
         frame.render_widget(Clear, bottom);
         frame.render_widget(Block::default().style(theme::text()), bottom);
-        let disabled = self.changed || self.unavailable;
+        let disabled = self.changed || self.unavailable || self.saving;
         let width = area.width.saturating_sub(4).max(area.width.min(30)).min(58);
-        let action_height = if width < 50 && area.height >= if disabled { 11 } else { 9 } {
+        let notice_height = if self.error.is_some() {
+            4
+        } else if self.saving {
+            1
+        } else if disabled {
+            2
+        } else {
+            0
+        };
+        let action_height = if width < 50 && area.height >= 9 + notice_height {
             2
         } else {
             1
         };
-        let gap = u16::from(area.height >= if disabled { 9 } else { 7 });
-        let notice_height = if disabled { 2 } else { 0 };
+        let gap = u16::from(area.height >= 7 + notice_height);
         let height = area.height.min(4 + gap + action_height * 2 + notice_height);
         let popup = Rect::new(
             area.x + (area.width - width) / 2,
@@ -149,12 +183,16 @@ impl RemovalUi {
                 area,
             );
         }
-        let message = if self.changed {
-            "Registration changed or removed. Cancel and reopen."
+        let message = if self.saving {
+            "Unregistering...".into()
+        } else if let Some(error) = &self.error {
+            format!("Unregister failed: {}", visible(error))
+        } else if self.changed {
+            "Registration changed or removed. Cancel and reopen.".into()
         } else if self.unavailable {
-            "Registration check unavailable. Wait or cancel."
+            "Registration check unavailable. Wait or cancel.".into()
         } else {
-            ""
+            String::new()
         };
         frame.render_widget(
             Paragraph::new(message)
@@ -163,7 +201,12 @@ impl RemovalUi {
             notice,
         );
         frame.render_widget(
-            Paragraph::new(key_line("Esc", "Cancel")).style(theme::panel()),
+            Paragraph::new(if self.saving {
+                Line::styled("Please wait.", theme::muted())
+            } else {
+                key_line("Esc", "Cancel")
+            })
+            .style(theme::panel()),
             cancel,
         );
     }
@@ -232,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn choices_capture_the_original_target_and_close_without_retrying() {
+    fn choices_capture_the_original_target_without_retrying() {
         for code in ['u', 'c'] {
             let original = state();
             let mut menu = menu();
@@ -251,8 +294,12 @@ mod tests {
                 }
                 _ => panic!("expected the explicit action"),
             }
-            assert!(!menu.is_open());
             assert!(matches!(menu.key(key(KeyCode::Char(code))), Intent::None));
+            if code == 'u' {
+                assert!(menu.is_saving());
+                menu.finish_unregister(Ok(()));
+            }
+            assert!(!menu.is_open());
         }
     }
 
@@ -439,5 +486,50 @@ mod tests {
             assert!(matches!(menu.key(key(KeyCode::Char('c'))), Intent::None));
             assert!(matches!(menu.key(key(KeyCode::Char('u'))), Intent::None));
         }
+    }
+
+    #[test]
+    fn direct_unregister_locks_the_popup_until_completion_and_shows_failures_in_place() {
+        let mut menu = menu();
+        let Intent::Unregister(target) = menu.key(key(KeyCode::Char('u'))) else {
+            panic!("u must unregister without Enter")
+        };
+        assert_eq!(target, state().item);
+        assert!(menu.is_open());
+        assert!(menu.is_saving());
+        for code in [
+            KeyCode::Char('u'),
+            KeyCode::Char('c'),
+            KeyCode::Esc,
+            KeyCode::Enter,
+        ] {
+            assert!(matches!(menu.key(key(code)), Intent::None));
+        }
+        let progress = screen(&menu, 100, 24);
+        assert!(progress.contains("Unregistering..."));
+        assert!(progress.contains("Please wait."));
+        assert!(!progress.contains("Esc  Cancel"));
+        assert!(!progress.contains("UNREGISTER WORK ITEM"));
+        assert!(!progress.contains("Help"));
+        for (width, height) in [(0, 0), (1, 1), (30, 8), (80, 9)] {
+            screen(&menu, width, height);
+        }
+        menu.finish_unregister(Err("State file busy; nothing removed.".into()));
+        let error = screen(&menu, 100, 24);
+        assert!(error.contains("Unregister failed: State file busy; nothing removed."));
+        assert!(error.contains("Esc  Cancel"));
+        assert!(!menu.is_saving());
+        assert!(menu.is_open());
+        assert!(matches!(menu.key(key(KeyCode::Esc)), Intent::Cancel));
+        menu.open(state().item);
+        menu.finish_unregister(Ok(())); // Completion is ignored when no unregister is pending.
+        assert!(menu.is_open());
+        assert!(!screen(&menu, 100, 24).contains("Unregister failed"));
+        assert!(matches!(
+            menu.key(key(KeyCode::Char('u'))),
+            Intent::Unregister(_)
+        ));
+        menu.finish_unregister(Ok(()));
+        assert!(!menu.is_open());
     }
 }

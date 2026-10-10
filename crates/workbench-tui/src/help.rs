@@ -19,7 +19,6 @@ pub enum Context {
     Registration,
     Edit,
     Removal { blocked: bool },
-    Unregister,
     Cleanup,
 }
 
@@ -45,7 +44,6 @@ impl Context {
             Self::Registration => "REGISTER",
             Self::Edit => "EDIT DETAILS",
             Self::Removal { .. } => "REMOVE",
-            Self::Unregister => "UNREGISTER",
             Self::Cleanup => "CLEAN UP",
         }
     }
@@ -88,7 +86,6 @@ impl Context {
             Self::Edit => {
                 "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→"
             }
-            Self::Unregister => "Unregister entry: <enter> | Cancel: Esc/Ctrl-C | Help: ?",
             Self::Removal { blocked: false } => "Unregister: u | Clean: c | Cancel: Esc",
             Self::Removal { blocked: true } => "Cancel: Esc",
             Self::Cleanup => {
@@ -353,11 +350,6 @@ mod tests {
             ),
             (Context::Registration, "Toggle type: Space", "Send: <enter>"),
             (Context::Edit, "Clear field: <c-u>", "Toggle type: Space"),
-            (
-                Context::Unregister,
-                "Unregister entry: <enter>",
-                "Clear field: <c-u>",
-            ),
         ] {
             let mut help = HelpUi {
                 context: Some(context),
@@ -487,7 +479,6 @@ mod tests {
             Context::Sessions { all: false },
             Context::Review,
             Context::Cleanup,
-            Context::Unregister,
         ] {
             let mut help = HelpUi::default();
             assert!(!help.event(&key(KeyCode::F(1)), context, 24));

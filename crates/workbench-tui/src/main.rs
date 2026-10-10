@@ -418,7 +418,11 @@ async fn event_loop(
                 match completed {
                     Some(Ok((mutation, result))) => {
                         let success = result.is_ok();
-                        maintenance.finish(result);
+                        if matches!(mutation.as_ref(), maintenance::Mutation::Unregister(_)) {
+                            removal.finish_unregister(result);
+                        } else {
+                            maintenance.finish(result);
+                        }
                         if success {
                             state.apply_detail_edit(&mutation, interaction);
                             state.reload_registry(&engine);
@@ -428,6 +432,7 @@ async fn event_loop(
                             interaction.message = Some(mutation.success_message());
                         }
                     }
+                    _ if removal.is_saving() => removal.finish_unregister(Err("Unregister task stopped unexpectedly; inspect WORK before retrying.".into())),
                     _ => maintenance.finish(Err("Maintenance task stopped unexpectedly; inspect WORK before retrying.".into())),
                 }
                 redraw = true;
@@ -517,10 +522,18 @@ async fn event_loop(
                     }
                     if removal.is_open() {
                         removal.observe(state.work_items.as_ref().and_then(|result| result.as_deref().ok()));
-                        if let Event::Key(key) = event
-                            && let Some((ticket, item)) = open_removal_action(removal.key(key), &mut maintenance, &mut cleanup) {
-                            let engine = Arc::clone(&engine);
-                            cleanup_preparations.spawn(async move { (ticket, engine.prepare_cleanup(&item).await.map_err(|e| e.to_string())) });
+                        if let Event::Key(key) = event {
+                            match open_removal_action(removal.key(key), &mut cleanup) {
+                                Some(RemovalAction::Unregister(mutation)) => {
+                                    let engine = Arc::clone(&engine);
+                                    mutations.spawn_blocking(move || { let result = mutation.execute(&engine); (mutation, result) });
+                                }
+                                Some(RemovalAction::CleanupPreview(ticket, item)) => {
+                                    let engine = Arc::clone(&engine);
+                                    cleanup_preparations.spawn(async move { (ticket, engine.prepare_cleanup(&item).await.map_err(|e| e.to_string())) });
+                                }
+                                None => {},
+                            }
                         }
                         continue;
                     }
@@ -691,19 +704,25 @@ fn finish_switch(
     }
 }
 
-/// Opening an action only enters its existing confirmation flow. Return the
-/// captured cleanup target to schedule a read-only core preview, never deletion.
+enum RemovalAction {
+    Unregister(Box<maintenance::Mutation>),
+    CleanupPreview(u64, workbench_core::WorkItem),
+}
+
+/// Unregister directly against the captured registration. Workspace deletion
+/// still needs its read-only core preview and separate safety confirmation.
 fn open_removal_action(
     intent: removal::Intent,
-    maintenance: &mut maintenance::MaintenanceUi,
     cleanup: &mut cleanup::CleanupUi,
-) -> Option<(u64, workbench_core::WorkItem)> {
+) -> Option<RemovalAction> {
     match intent {
-        removal::Intent::Unregister(item) => {
-            maintenance.open(maintenance::Request::Unregister(item));
-            None
-        }
-        removal::Intent::Cleanup(item) => Some((cleanup.open(item.clone()), item)),
+        removal::Intent::Unregister(item) => Some(RemovalAction::Unregister(Box::new(
+            maintenance::Mutation::Unregister(item),
+        ))),
+        removal::Intent::Cleanup(item) => Some(RemovalAction::CleanupPreview(
+            cleanup.open(item.clone()),
+            item,
+        )),
         removal::Intent::None | removal::Intent::Cancel => None,
     }
 }
@@ -1429,9 +1448,6 @@ mod tests {
                             assert_eq!(code, KeyCode::Char('e'));
                             assert_eq!(item.id, "hidden");
                         }
-                        maintenance::Request::Unregister(item) => {
-                            panic!("Editing must not request unregistering {}", item.id);
-                        }
                     }
                 } else {
                     assert!(interaction.maintenance_requested.is_none());
@@ -1559,7 +1575,7 @@ mod tests {
     }
 
     #[test]
-    fn removal_menu_only_routes_to_existing_confirmations_and_never_falls_back() {
+    fn removal_menu_unregisters_directly_but_cleanup_still_requires_its_safety_flow() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::new(directory.path().join("items.json"));
         let state = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
@@ -1567,7 +1583,7 @@ mod tests {
             engine.register_work_item(item.item.clone()).unwrap();
         }
         let saved = engine.work_items().unwrap();
-        for code in ['u', 'c'] {
+        for code in ['c', 'u'] {
             let mut interaction = interaction::Interaction {
                 selected_id: Some("B".into()),
                 ..Default::default()
@@ -1587,31 +1603,30 @@ mod tests {
             menu.open(interaction.removal_requested.take().unwrap());
             interaction.selected_id = Some("A".into());
             menu.observe(Some(state.items()));
-            let mut maintenance = maintenance::MaintenanceUi::default();
+            let maintenance = maintenance::MaintenanceUi::default();
             let mut cleanup = cleanup::CleanupUi::default();
-            let preview = open_removal_action(
-                menu.key(KeyCode::Char(code).into()),
-                &mut maintenance,
-                &mut cleanup,
-            );
+            let action = open_removal_action(menu.key(KeyCode::Char(code).into()), &mut cleanup);
             assert_eq!(engine.work_items().unwrap(), saved);
-            assert!(!menu.is_open());
             assert_eq!(view, ui::View::Work);
             assert_eq!(scroll, 5);
             if code == 'u' {
-                assert!(preview.is_none());
-                assert!(maintenance.is_open());
-                assert!(!cleanup.is_open());
-                let maintenance::Intent::Save(mutation) = maintenance.key(KeyCode::Enter.into())
-                else {
-                    panic!("unregister still needs confirmation")
+                let Some(RemovalAction::Unregister(mutation)) = action else {
+                    panic!("u must emit unregister directly without another confirmation")
                 };
+                assert!(menu.is_saving());
+                assert!(!maintenance.is_open());
+                assert!(!cleanup.is_open());
                 assert!(
                     matches!(mutation.as_ref(), maintenance::Mutation::Unregister(item) if item.id == "B")
                 );
-                assert_eq!(engine.work_items().unwrap(), saved); // Intent alone is not a write.
+                menu.finish_unregister(mutation.execute(&engine));
+                assert!(!menu.is_open());
+                assert_eq!(engine.work_items().unwrap(), [saved[0].clone()]);
             } else {
-                let (ticket, target) = preview.unwrap();
+                let Some(RemovalAction::CleanupPreview(ticket, target)) = action else {
+                    panic!("c must open cleanup preview, never unregister")
+                };
+                assert!(!menu.is_open());
                 assert_eq!(target, state.items()[1].item);
                 assert!(cleanup.is_open());
                 assert!(!maintenance.is_open());
@@ -1683,6 +1698,59 @@ mod tests {
             })
             .unwrap();
         assert_eq!(terminal.backend().buffer(), &baseline);
+    }
+
+    #[test]
+    fn direct_unregister_revalidates_the_captured_registration_and_keeps_failures_in_the_menu() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = Engine::new(directory.path().join("items.json"));
+        let mut original = state(&[("A", AgentStatus::Running)]).items()[0]
+            .item
+            .clone();
+        original.workspace = directory.path().join("workspace");
+        std::fs::create_dir(&original.workspace).unwrap();
+        let source = original.workspace.join("source.rs");
+        std::fs::write(&source, "keep this content").unwrap();
+        engine.register_work_item(original.clone()).unwrap();
+        let mut menu = removal::RemovalUi::default();
+        let mut cleanup = cleanup::CleanupUi::default();
+        menu.open(original.clone());
+        let Some(RemovalAction::Unregister(mutation)) =
+            open_removal_action(menu.key(KeyCode::Char('u').into()), &mut cleanup)
+        else {
+            panic!("expected direct unregister")
+        };
+        let updated = engine
+            .update_work_item_description(&original, "Changed externally")
+            .unwrap();
+        let error = mutation.execute(&engine).unwrap_err();
+        assert!(error.contains("changed since"));
+        menu.finish_unregister(Err(error));
+        assert!(menu.is_open());
+        assert!(!menu.is_saving());
+        assert!(!cleanup.is_open());
+        assert_eq!(engine.work_items().unwrap(), std::slice::from_ref(&updated));
+        assert_eq!(
+            std::fs::read_to_string(&source).unwrap(),
+            "keep this content"
+        );
+        assert!(matches!(
+            menu.key(KeyCode::Esc.into()),
+            removal::Intent::Cancel
+        ));
+        menu.open(updated.clone());
+        let Some(RemovalAction::Unregister(mutation)) =
+            open_removal_action(menu.key(KeyCode::Char('u').into()), &mut cleanup)
+        else {
+            panic!("expected explicit retry against the refreshed target")
+        };
+        menu.finish_unregister(mutation.execute(&engine));
+        assert!(!menu.is_open());
+        assert!(engine.work_items().unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&source).unwrap(),
+            "keep this content"
+        );
     }
 
     #[test]

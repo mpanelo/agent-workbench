@@ -1,4 +1,4 @@
-//! Explicit, captured-target maintenance dialogs; no tmux/Git operations.
+//! Captured-target detail editing and registry mutations; no tmux/Git operations.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -20,18 +20,13 @@ use crate::{
 #[derive(Debug)]
 pub(crate) enum Request {
     Edit(WorkItem),
-    Unregister(WorkItem),
 }
 
 impl Request {
     fn item(&self) -> &WorkItem {
         match self {
-            Self::Edit(item) | Self::Unregister(item) => item,
+            Self::Edit(item) => item,
         }
-    }
-
-    fn editing(&self) -> bool {
-        !matches!(self, Self::Unregister(_))
     }
 }
 
@@ -115,13 +110,7 @@ impl Field {
 
 impl MaintenanceUi {
     pub fn help_context(&self) -> Option<crate::help::Context> {
-        self.request.as_ref().map(|request| {
-            if request.editing() {
-                crate::help::Context::Edit
-            } else {
-                crate::help::Context::Unregister
-            }
-        })
+        self.request.as_ref().map(|_| crate::help::Context::Edit)
     }
     pub fn is_open(&self) -> bool {
         self.request.is_some()
@@ -159,60 +148,54 @@ impl MaintenanceUi {
             return Intent::Cancel;
         }
         if key.code == KeyCode::Enter && key.modifiers.is_empty() {
-            let mutation = match self.request.as_ref().expect("dialog is open") {
-                Request::Edit(item) => {
-                    if let Err(error) = validate_work_item_id(&self.id) {
-                        self.field = Field::Id;
-                        self.error = Some(error.to_string());
-                        return Intent::None;
-                    }
-                    if let Err(error) = validate_short_description(&self.text) {
-                        self.field = Field::Description;
-                        self.error = Some(error.to_string());
-                        return Intent::None;
-                    }
-                    Mutation::Details {
-                        expected: item.clone(),
-                        id: self.id.clone(),
-                        description: self.text.clone(),
-                    }
-                }
-                Request::Unregister(item) => Mutation::Unregister(item.clone()),
+            let Request::Edit(item) = self.request.as_ref().expect("dialog is open");
+            if let Err(error) = validate_work_item_id(&self.id) {
+                self.field = Field::Id;
+                self.error = Some(error.to_string());
+                return Intent::None;
+            }
+            if let Err(error) = validate_short_description(&self.text) {
+                self.field = Field::Description;
+                self.error = Some(error.to_string());
+                return Intent::None;
+            }
+            let mutation = Mutation::Details {
+                expected: item.clone(),
+                id: self.id.clone(),
+                description: self.text.clone(),
             };
             self.saving = true;
             self.error = None;
             return Intent::Save(Box::new(mutation));
         }
-        if self.request.as_ref().is_some_and(Request::editing) {
-            if matches!(
-                key.code,
-                KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down
-            ) && !key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-            {
-                self.field = if self.field == Field::Id {
-                    Field::Description
-                } else {
-                    Field::Id
-                };
-                return Intent::None;
-            }
-            let mut editor = Draft {
-                item_id: String::new(),
-                text: self.field_text().into(),
-                cursor: self.cursors[self.field.index()],
+        if matches!(
+            key.code,
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down
+        ) && !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            self.field = if self.field == Field::Id {
+                Field::Description
+            } else {
+                Field::Id
             };
-            match editor.edit(key) {
-                Ok(()) => self.apply_edit(editor),
-                Err(error) => self.error = Some(error.replace("Replies", self.field.label())),
-            }
+            return Intent::None;
+        }
+        let mut editor = Draft {
+            item_id: String::new(),
+            text: self.field_text().into(),
+            cursor: self.cursors[self.field.index()],
+        };
+        match editor.edit(key) {
+            Ok(()) => self.apply_edit(editor),
+            Err(error) => self.error = Some(error.replace("Replies", self.field.label())),
         }
         Intent::None
     }
 
     pub fn paste(&mut self, text: &str) {
-        if self.saving || !self.request.as_ref().is_some_and(Request::editing) {
+        if self.saving || !self.is_open() {
             return;
         }
         let mut editor = Draft {
@@ -301,7 +284,6 @@ impl MaintenanceUi {
             return;
         };
         theme::paint(frame);
-        let editing = request.editing();
         let item = request.item();
         let [header, body, error, footer] = Layout::vertical([
             Constraint::Length(1),
@@ -311,41 +293,27 @@ impl MaintenanceUi {
         ])
         .areas(frame.area());
         frame.render_widget(
-            Paragraph::new(if editing {
-                "EDIT WORK ITEM"
-            } else {
-                "UNREGISTER WORK ITEM"
-            })
-            .style(theme::header()),
+            Paragraph::new("EDIT WORK ITEM").style(theme::header()),
             header,
         );
-        let [details, editor] = Layout::vertical([
-            Constraint::Min(0),
-            Constraint::Length(if editing { 6 } else { 0 }),
-        ])
-        .areas(body);
+        let [details, editor] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(6)]).areas(body);
         let mut text = format!(
             "Work ID: {}\nWorkspace: {}\n\n",
             visible(&item.id),
             visible(&display_path(&item.workspace))
         );
-        if editing {
-            text.push_str("Edit Work ID and Short Description together.\nPane mapping, workspace and review marks stay unchanged.\nOld review history is retained when renaming.");
-        } else {
-            text.push_str(&format!("Short Description: {}\n\nRemove this entry from Workbench?\n\nTmux pane, branch, worktree, files and review history will be kept.", visible(&item.title)));
-        }
+        text.push_str("Edit Work ID and Short Description together.\nPane mapping, workspace and review marks stay unchanged.\nOld review history is retained when renaming.");
         frame.render_widget(
             Paragraph::new(text)
                 .style(theme::text())
                 .wrap(Wrap { trim: false }),
             details,
         );
-        if editing {
-            let [id, description] =
-                Layout::vertical([Constraint::Length(3), Constraint::Length(3)]).areas(editor);
-            self.render_field(frame, id, Field::Id);
-            self.render_field(frame, description, Field::Description);
-        }
+        let [id, description] =
+            Layout::vertical([Constraint::Length(3), Constraint::Length(3)]).areas(editor);
+        self.render_field(frame, id, Field::Id);
+        self.render_field(frame, description, Field::Description);
         if let Some(message) = &self.error {
             frame.render_widget(
                 Paragraph::new(visible(message))
@@ -357,10 +325,8 @@ impl MaintenanceUi {
         frame.render_widget(
             theme::footer(if self.saving {
                 "Saving… | Please wait"
-            } else if editing {
-                crate::help::Context::Edit.hints()
             } else {
-                crate::help::Context::Unregister.hints()
+                crate::help::Context::Edit.hints()
             }),
             footer,
         );
@@ -602,22 +568,10 @@ mod tests {
     }
 
     #[test]
-    fn unregister_requires_confirmation_and_cancel_never_emits_a_mutation() {
+    fn cancelling_an_edit_never_emits_a_mutation() {
         let mut form = MaintenanceUi::default();
-        form.open(Request::Unregister(item("A")));
-        for code in [
-            KeyCode::Char('u'),
-            KeyCode::Char('y'),
-            KeyCode::Char('q'),
-            KeyCode::Delete,
-        ] {
-            assert!(matches!(key(&mut form, code), Intent::None));
-        }
-        form.paste("text cannot confirm or change target");
-        assert!(matches!(
-            form.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)),
-            Intent::None
-        ));
+        form.open(Request::Edit(item("A")));
+        form.paste("unsaved edit");
         assert!(matches!(key(&mut form, KeyCode::Esc), Intent::Cancel));
         assert!(!form.is_open());
         form.open(Request::Edit(item("B")));
@@ -625,15 +579,7 @@ mod tests {
             form.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             Intent::Cancel
         ));
-        form.open(Request::Unregister(item("A")));
-        let Intent::Save(mutation) = key(&mut form, KeyCode::Enter) else {
-            panic!("expected unregister")
-        };
-        let Mutation::Unregister(expected) = *mutation else {
-            panic!("expected unregister mutation")
-        };
-        assert_eq!(expected, item("A"));
-        assert!(matches!(key(&mut form, KeyCode::Enter), Intent::None));
+        assert!(!form.is_open());
     }
 
     #[test]
@@ -645,13 +591,6 @@ mod tests {
         assert_eq!(
             rows[19],
             "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | …"
-        );
-        key(&mut form, KeyCode::Esc);
-        form.open(Request::Unregister(item("A")));
-        let text = screen(&form, 80, 20);
-        assert_eq!(
-            text.lines().last().unwrap().trim_end(),
-            "Unregister entry: <enter> | Cancel: Esc/Ctrl-C | Help: ?"
         );
     }
 
@@ -698,29 +637,21 @@ mod tests {
 
     #[test]
     fn dialogs_show_target_scope_counter_and_safe_controls_at_small_sizes() {
-        for request in [Request::Edit(item("A")), Request::Unregister(item("A"))] {
-            let mut form = MaintenanceUi::default();
-            form.open(request);
-            let text = screen(&form, 100, 20);
-            assert!(text.contains("Work ID: A"), "{text}");
-            assert!(text.contains("Workspace: /work/task"), "{text}");
-            assert!(text.contains("Cancel: Esc/Ctrl-C"), "{text}");
-            if matches!(form.request, Some(Request::Edit(_))) {
-                assert!(text.contains("Short Description (6/120)"), "{text}");
-                assert!(text.contains("review marks stay unchanged"), "{text}");
-            } else {
-                assert!(text.contains("Remove this entry from Workbench?"), "{text}");
-                assert!(
-                    text.contains(
-                        "Tmux pane, branch, worktree, files and review history will be kept."
-                    ),
-                    "{text}"
-                );
-                assert!(text.contains("Unregister entry: <enter>"), "{text}");
-            }
-            for (width, height) in [(80, 12), (40, 8), (1, 1), (0, 1)] {
-                screen(&form, width, height);
-            }
+        let mut form = MaintenanceUi::default();
+        form.open(Request::Edit(item("A")));
+        let text = screen(&form, 100, 20);
+        for expected in [
+            "Work ID: A",
+            "Workspace: /work/task",
+            "Cancel: Esc/Ctrl-C",
+            "Short Description (6/120)",
+            "review marks stay unchanged",
+        ] {
+            assert!(text.contains(expected), "{text}");
+        }
+        assert!(!text.contains("UNREGISTER"));
+        for (width, height) in [(80, 12), (40, 8), (1, 1), (0, 1)] {
+            screen(&form, width, height);
         }
     }
 

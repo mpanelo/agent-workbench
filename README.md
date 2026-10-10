@@ -150,14 +150,16 @@ context.
 ## Workspace cleanup
 
 Press `c` in WORK to open **Clean Up Options** for the selected item. Inside the menu,
-`u` opens unregister confirmation, `c` opens workspace-cleanup preview, and `Esc`
-cancels. Neither opening the menu nor choosing an action removes anything.
+`u` unregisters the work item directly, `c` opens workspace-cleanup preview, and
+`Esc` cancels before an action starts. Opening the menu alone removes nothing.
 All menu controls are shown inline; `?` does not open help here, and `<enter>` does
 not pick a default action. The bottom help bar is hidden while this menu is open.
 Changed or removed registrations disable the menu until you cancel and reopen it.
 
-Unregistering with `c`, then `u` removes only the Workbench entry after confirmation;
-it leaves your panes, files, branch, and review history intact.
+Unregistering with `c`, then `u` removes only the Workbench entry, without a second
+confirmation. It leaves your panes, files, branch, and review history intact.
+The menu shows progress while saving and displays any failure in place. If the
+captured registration changed, unregister fails rather than removing another item.
 
 Cleanup with `c`, then `c` removes a linked worktree and closes its **entire workmux
 window**, including companion panes and their running programs. The branch and

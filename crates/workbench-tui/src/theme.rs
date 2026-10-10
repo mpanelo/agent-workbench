@@ -408,7 +408,6 @@ mod tests {
             Context::Reply,
             Context::Registration,
             Context::Edit,
-            Context::Unregister,
             Context::Cleanup,
         ] {
             let text = context.hints();
