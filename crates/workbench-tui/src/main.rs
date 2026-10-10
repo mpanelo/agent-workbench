@@ -429,7 +429,7 @@ async fn event_loop(
                             state.refresh_attention(&mut interaction.attention_tracker);
                             state.sync_selection(interaction);
                             interaction.reveal_selection = true;
-                            interaction.message = Some(mutation.success_message());
+                            interaction.message = mutation.success_message();
                         }
                     }
                     _ if removal.is_saving() => removal.finish_unregister(Err("Unregister task stopped unexpectedly; inspect WORK before retrying.".into())),
@@ -1620,6 +1620,8 @@ mod tests {
                     matches!(mutation.as_ref(), maintenance::Mutation::Unregister(item) if item.id == "B")
                 );
                 menu.finish_unregister(mutation.execute(&engine));
+                interaction.message = mutation.success_message();
+                assert!(interaction.message.is_none());
                 assert!(!menu.is_open());
                 assert_eq!(engine.work_items().unwrap(), [saved[0].clone()]);
             } else {
@@ -1663,10 +1665,10 @@ mod tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
-        // A 58x7 centered popup: outside it, only the context footer changes.
+        // A 58x8 centered popup: outside it, only the context footer changes.
         for y in 0..23 {
             for x in 0..100 {
-                if !(21..79).contains(&x) || !(8..15).contains(&y) {
+                if !(21..79).contains(&x) || !(8..16).contains(&y) {
                     assert_eq!(
                         buffer[(x, y)],
                         baseline[(x, y)],

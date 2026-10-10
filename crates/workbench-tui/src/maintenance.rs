@@ -54,17 +54,14 @@ impl Mutation {
         .map_err(|error| error.to_string())
     }
 
-    pub fn success_message(&self) -> String {
+    pub fn success_message(&self) -> Option<String> {
         match self {
-            Self::Details { expected, id, .. } if expected.id != *id => format!(
+            Self::Details { expected, id, .. } if expected.id != *id => Some(format!(
                 "Updated {} as {id}. Pane, workspace and review marks kept.",
                 expected.id
-            ),
-            Self::Details { id, .. } => format!("Updated details for {id}."),
-            Self::Unregister(expected) => format!(
-                "Unregistered {}. Only the Workbench entry was removed; pane, branch, worktree and review history were kept.",
-                expected.id
-            ),
+            )),
+            Self::Details { id, .. } => Some(format!("Updated details for {id}.")),
+            Self::Unregister(_) => None,
         }
     }
 }
@@ -656,6 +653,28 @@ mod tests {
     }
 
     #[test]
+    fn unregister_success_is_silent_while_detail_edits_keep_their_feedback() {
+        assert!(Mutation::Unregister(item("A")).success_message().is_none());
+        let mut edit = Mutation::Details {
+            expected: item("A"),
+            id: "A".into(),
+            description: "Updated".into(),
+        };
+        assert_eq!(
+            edit.success_message().as_deref(),
+            Some("Updated details for A.")
+        );
+        let Mutation::Details { id, .. } = &mut edit else {
+            unreachable!()
+        };
+        *id = "B".into();
+        assert_eq!(
+            edit.success_message().as_deref(),
+            Some("Updated A as B. Pane, workspace and review marks kept.")
+        );
+    }
+
+    #[test]
     fn mutations_use_core_validation_and_do_not_redirect_after_external_changes() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::new(directory.path().join("items.json"));
@@ -667,7 +686,10 @@ mod tests {
             description: "Updated".into(),
         };
         edited.execute(&engine).unwrap();
-        assert!(edited.success_message().contains("Updated details for A"));
+        assert_eq!(
+            edited.success_message().as_deref(),
+            Some("Updated details for A.")
+        );
         let stale = Mutation::Unregister(original);
         assert!(
             stale

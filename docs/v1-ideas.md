@@ -113,7 +113,7 @@ item. The menu keeps the actions distinct and discloses what each keeps/removes:
   cleanup success.
 
 The compact **Clean Up Options** menu shows the work ID and key-first action rows:
-`u    Unregister work item. Keep pane and files.` and
+`u    Unregister work item. Keep pane, worktree, files, branch and review history.` and
 `c    Close workmux window. Remove worktree.`, followed by `Esc  Cancel`.
 The WORK action is labeled **Clean Up**. All menu controls are shown inline;
 there is no help entry or `?` help behavior here, and the bottom help bar is hidden.
@@ -123,9 +123,10 @@ or load failures block an action, or when direct unregister fails.
 
 Opening the menu alone does not remove anything. Pressing `u` unregisters its
 captured target directly; the popup locks input until the operation finishes,
-closes on success, and shows errors in place. The old unregister confirmation
-screen was removed. Refreshes cannot retarget the operation; changed/removed
-entries disable choices until reopened and load errors pause choices until recovery.
+closes on success without a redundant status message, and shows errors in place.
+The old unregister confirmation screen was removed. Refreshes cannot retarget
+the operation; changed/removed entries disable choices until reopened and load
+errors pause choices until recovery.
 Existing cleanup restrictions and revalidation are unchanged. Blocked or failed
 cleanup never falls back to unregistering. `Esc` cancels; `<enter>` does not choose
 a default action. These menu controls were approved; the old standalone `u`

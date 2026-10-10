@@ -157,9 +157,11 @@ not pick a default action. The bottom help bar is hidden while this menu is open
 Changed or removed registrations disable the menu until you cancel and reopen it.
 
 Unregistering with `c`, then `u` removes only the Workbench entry, without a second
-confirmation. It leaves your panes, files, branch, and review history intact.
-The menu shows progress while saving and displays any failure in place. If the
-captured registration changed, unregister fails rather than removing another item.
+confirmation. It leaves your panes, worktree, files, branch, and review history intact.
+The popup explains what stays; successful unregister closes it without an extra
+status message. The menu shows progress while saving and displays any failure in
+place. If the captured registration changed, unregister fails rather than removing
+another item.
 
 Cleanup with `c`, then `c` removes a linked worktree and closes its **entire workmux
 window**, including companion panes and their running programs. The branch and

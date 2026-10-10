@@ -121,13 +121,18 @@ impl RemovalUi {
         } else {
             0
         };
-        let action_height = if width < 50 && area.height >= 9 + notice_height {
-            2
+        let (unregister_height, cleanup_height) = if width >= 50 && area.height >= 8 + notice_height
+        {
+            (2, 1)
+        } else if width < 50 && area.height >= 11 + notice_height {
+            (4, 2)
         } else {
-            1
+            (1, 1)
         };
         let gap = u16::from(area.height >= 7 + notice_height);
-        let height = area.height.min(4 + gap + action_height * 2 + notice_height);
+        let height = area
+            .height
+            .min(4 + gap + unregister_height + cleanup_height + notice_height);
         let popup = Rect::new(
             area.x + (area.width - width) / 2,
             area.y + (area.height - height) / 2,
@@ -145,7 +150,7 @@ impl RemovalUi {
         let [target, _, actions, notice, cancel] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(gap),
-            Constraint::Length(action_height * 2),
+            Constraint::Length(unregister_height + cleanup_height),
             Constraint::Length(notice_height),
             Constraint::Length(1),
         ])
@@ -155,14 +160,14 @@ impl RemovalUi {
             target,
         );
         let [unregister, cleanup] =
-            Layout::vertical([Constraint::Length(action_height), Constraint::Min(0)])
+            Layout::vertical([Constraint::Length(unregister_height), Constraint::Min(0)])
                 .areas(actions);
         for (area, key, label, description) in [
             (
                 unregister,
                 "u",
                 "Unregister",
-                "Unregister work item. Keep pane and files.",
+                "Unregister work item. Keep pane, worktree, files, branch and review history.",
             ),
             (
                 cleanup,
@@ -171,16 +176,23 @@ impl RemovalUi {
                 "Close workmux window. Remove worktree.",
             ),
         ] {
-            let line = if disabled {
-                Line::styled(format!("     {label} (disabled)"), theme::muted())
+            let [key_area, description_area] =
+                Layout::horizontal([Constraint::Length(5), Constraint::Min(0)]).areas(area);
+            let description = if disabled {
+                Line::styled(format!("{label} (disabled)"), theme::muted())
             } else {
-                key_line(key, description)
+                frame.render_widget(
+                    Paragraph::new(Span::styled(key, theme::accent().fg(theme::PEACH)))
+                        .style(theme::panel()),
+                    key_area,
+                );
+                Line::raw(description)
             };
             frame.render_widget(
-                Paragraph::new(line)
+                Paragraph::new(description)
                     .style(theme::panel())
                     .wrap(Wrap { trim: false }),
-                area,
+                description_area,
             );
         }
         let message = if self.saving {
@@ -432,7 +444,8 @@ mod tests {
         for expected in [
             "Clean Up Options",
             "Work ID: fix-auth",
-            "u    Unregister work item. Keep pane and files.",
+            "u    Unregister work item. Keep pane, worktree, files,",
+            "branch and review history.",
             "c    Close workmux window. Remove worktree.",
             "Esc  Cancel",
         ] {
@@ -448,7 +461,7 @@ mod tests {
         assert!(!text.contains("Remove work item"));
         assert!(!text.contains("Remove options"));
         assert!(!text.contains('\u{2014}'));
-        for (width, height) in [(30, 6), (30, 10), (80, 8)] {
+        for (width, height) in [(30, 6), (30, 11), (80, 8)] {
             let text = screen(&menu, width, height);
             for expected in [
                 "Work ID: fix-auth",
@@ -461,6 +474,30 @@ mod tests {
         }
         for (width, height) in [(0, 0), (1, 1), (10, 5), (30, 6), (80, 12)] {
             screen(&menu, width, height);
+        }
+    }
+
+    #[test]
+    fn unregister_explanation_wraps_in_its_own_column_without_hiding_other_controls() {
+        let menu = menu();
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| menu.render(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(22, 11)].symbol(), "u");
+        assert_eq!(buffer[(27, 11)].symbol(), "U");
+        assert_eq!(buffer[(27, 12)].symbol(), "b");
+        assert_eq!(buffer[(22, 13)].symbol(), "c");
+        assert_eq!(buffer[(27, 13)].symbol(), "C");
+        assert_eq!(buffer[(22, 14)].symbol(), "E");
+        let narrow = screen(&menu, 30, 11);
+        for expected in [
+            "Keep pane, worktree,",
+            "files, branch and",
+            "review history.",
+            "c    Close workmux window.",
+            "Esc  Cancel",
+        ] {
+            assert!(narrow.contains(expected), "missing {expected}: {narrow}");
         }
     }
 
