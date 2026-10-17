@@ -463,7 +463,7 @@ impl ReviewUi {
                 if line.starts_with("@@") {
                     in_hunk = true;
                 }
-                Line::styled(visible(line), style)
+                Line::styled(patch_text(line, in_hunk), style)
             })
             .collect();
         let max_scroll = lines
@@ -487,6 +487,29 @@ impl ReviewUi {
             inner,
         );
     }
+}
+
+fn patch_text(line: &str, in_hunk: bool) -> String {
+    // Indentation starts after the diff marker, not at its display column.
+    let (prefix, text) = if in_hunk && line.starts_with([' ', '+', '-']) {
+        line.split_at(1)
+    } else {
+        ("", line)
+    };
+    let mut result = prefix.to_owned();
+    let mut column = 0;
+    for (index, part) in text.split('\t').enumerate() {
+        if index > 0 {
+            let spaces = 4 - column % 4;
+            result.extend(std::iter::repeat_n(' ', spaces));
+            column += spaces;
+        }
+        // Keep terminal controls escaped, but measure Unicode as display cells.
+        let part = visible(part);
+        column += Line::from(part.as_str()).width();
+        result.push_str(&part);
+    }
+    result
 }
 
 fn files(session: &ReviewSession, since_review: bool) -> &[ChangedFile] {
@@ -578,6 +601,53 @@ mod tests {
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn test_tab_stops() {
+        for (text, in_hunk, expected) in [
+            ("", false, ""),
+            ("\tcode", false, "    code"),
+            ("+\tcode", true, "+    code"),
+            ("-\tcode", true, "-    code"),
+            (" \tcode", true, "     code"),
+            ("+ \tcode", true, "+    code"),
+            ("+\t\tcode\tend\t", true, "+        code    end "),
+            ("+界\tcode", true, "+界  code"),
+            ("+e\u{301}\tcode", true, "+e\u{301}   code"),
+            (r#"+let text = "\t";"#, true, r#"+let text = "\t";"#),
+            ("--- a/file\tlabel", false, "--- a/file  label"),
+        ] {
+            assert_eq!(patch_text(text, in_hunk), expected);
+        }
+    }
+
+    #[test]
+    fn test_tab_render() {
+        let mut review = ready();
+        let patch = "@@ -1 +1,2 @@\n-\tbefore\n+\tafter\n+\t\t\x1b[31munsafe\x07\n";
+        let session = review.sessions.get_mut("A").unwrap();
+        session.diff.files.truncate(1);
+        session.diff.files[0].patch = patch.into();
+        let text = screen(&mut review, 120, 24);
+        for expected in [
+            "-    before",
+            "+    after",
+            "+        \\u{1b}[31munsafe\\u{7}",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+        assert!(!text.contains("\\t"));
+        assert!(!text.contains(['\t', '\x1b', '\x07']));
+        assert_eq!(review.sessions["A"].diff.files[0].patch, patch);
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal.draw(|frame| review.render(frame)).unwrap();
+        theme::assert_text_style(
+            terminal.backend().buffer(),
+            "+    after",
+            theme::GREEN,
+            ratatui::style::Color::Rgb(52, 64, 61),
+        );
     }
 
     #[test]
