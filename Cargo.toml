@@ -12,7 +12,7 @@ license = "MIT"
 tokio = { version = "1", features = ["macros", "rt", "process", "sync", "time", "io-util"] }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 crossterm = "0.29"
-workbench-core = { path = "crates/workbench-core" }
+workbench-core = { version = "0.1.0", path = "crates/workbench-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 fs2 = "0.4"

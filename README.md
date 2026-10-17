@@ -215,13 +215,32 @@ Run from a checkout:
 cargo run -p workbench-tui --bin workbench
 ```
 
+Rustup uses the pinned toolchain in `rust-toolchain.toml`. Install the dependency
+checker once:
+
+```sh
+cargo install cargo-deny --version 0.20.2 --locked
+```
+
 Before submitting changes:
 
 ```sh
 cargo fmt --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
+cargo deny --locked check
 ```
+
+CI runs these checks on pushes and pull requests, with a weekly dependency scan.
+Dependency checks cover RustSec advisories, allowed licenses, and crate sources.
+Report findings instead of suppressing them. Duplicate dependency versions are
+warnings.
+
+Follow the [Rust Style Guide](https://doc.rust-lang.org/style-guide/) and
+[Rust API Guidelines](https://rust-lang.github.io/api-guidelines/), using `std`
+and `core` as examples. Keep function and test names short and descriptive.
+Clippy uses its default lint groups; rustfmt uses stable Rust 2024 defaults.
+Rust-analyzer is optional for editor diagnostics.
 
 The Rust workspace separates the engine (`workbench-core`) from the terminal
 interface (`workbench-tui`). Tests use temporary repositories; Git is required.

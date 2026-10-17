@@ -341,6 +341,20 @@ External command invocation should be structured so parsing and business logic c
 Use Rust's `std` and `core` code and tests as style references: clear APIs,
 straightforward control flow, small focused helpers, and direct assertions.
 
+Follow the [Rust Style Guide](https://doc.rust-lang.org/style-guide/) and
+[Rust API Guidelines](https://rust-lang.github.io/api-guidelines/). Use the
+repository's pinned Rust toolchain and stable rustfmt defaults. Keep explicit
+2024 parsing and style editions in `rustfmt.toml`.
+
+Use Clippy's default lint groups with warnings treated as errors. Do not enable
+the entire `pedantic`, `nursery`, or `restriction` groups; review individual lint
+additions for usefulness instead.
+
+Use cargo-deny 0.20.2 to check dependency advisories, licenses, and sources with
+`deny.toml`. Report findings rather than adding advisory ignores, license
+exceptions, or source allowances without the user's approval. Duplicate
+dependency versions are warnings, not automatic failures.
+
 Keep function and test names short, descriptive, and in `snake_case`. Let the
 module or type provide context instead of repeating it in every name. Name tests
 for the operation and relevant case, not a sentence listing every assertion.
@@ -353,6 +367,7 @@ Before completing a task, run:
 cargo fmt --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
+cargo deny --locked check
 ```
 
 If a command cannot be run successfully, explain why.
