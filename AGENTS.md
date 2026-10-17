@@ -24,7 +24,7 @@ The product should complement existing tools such as tmux, workmux, Git, editors
 
 Use a Rust workspace.
 
-The initial crates should be:
+The workspace contains:
 
 ```text
 crates/
@@ -101,113 +101,23 @@ data or changing its schema without a migration.
 - workspace discovery
 - business logic
 
-The core should expose high-level operations rather than leaking shell commands or tmux implementation details.
-
-Prefer APIs conceptually similar to:
-
-```rust
-engine.work_items()
-engine.attention_items()
-engine.send_agent_input(...)
-engine.diff(...)
-engine.mark_reviewed(...)
-```
-
-The exact API may evolve.
+The core should expose high-level operations rather than leaking shell commands
+or tmux implementation details. Extend existing APIs before introducing new
+abstractions for planned features.
 
 ## Domain Model
 
-The initial domain concepts include:
-
-### WorkItem
-
-Represents a unit of developer work.
-
-A work item may originate from:
+`WorkItem` represents a unit of developer work, originating from:
 
 - an implementation task
 - an external pull request being reviewed
 
-Potential fields:
+Keep work items independent of Jira, GitHub, and any one coding-agent vendor.
+Keep domain identity separate from transport details.
 
-```rust
-struct WorkItem {
-    id: WorkItemId,
-    title: String,
-    repository: PathBuf,
-    workspace: PathBuf,
-    branch: Option<String>,
-    kind: WorkItemKind,
-}
-```
-
-Do not couple work items directly to Jira or GitHub.
-
-Those integrations may be added later.
-
-### WorkItemKind
-
-Conceptually:
-
-```rust
-enum WorkItemKind {
-    Implementation,
-    ExternalReview,
-}
-```
-
-### Agent
-
-Represents a coding-agent session associated with a work item.
-
-Possible initial fields:
-
-```rust
-struct Agent {
-    id: AgentId,
-    work_item_id: WorkItemId,
-    transport: AgentTransportId,
-}
-```
-
-Do not assume only one coding-agent vendor.
-
-### AgentStatus
-
-Initial states:
-
-```rust
-enum AgentStatus {
-    Running,
-    WaitingForInput,
-    Idle,
-    Complete,
-    Unknown,
-}
-```
-
-Perfect status detection is not required.
-
-Unknown state must be supported gracefully.
-
-### EngineEvent
-
-The engine should eventually expose changes as events.
-
-Conceptually:
-
-```rust
-enum EngineEvent {
-    WorkItemAdded(...),
-    WorkItemUpdated(...),
-    AgentStatusChanged(...),
-    AgentNeedsInput(...),
-    DiffChanged(...),
-    ReviewInvalidated(...),
-}
-```
-
-Do not over-engineer the event system during the first milestone.
+Support unknown agent state gracefully. Perfect status detection is not required.
+Use the core's models as the source of truth for field names and state variants.
+Keep event handling simple and driven by current needs.
 
 ## Adapters
 
@@ -236,9 +146,9 @@ The important requirement is separation between infrastructure and presentation.
 
 ## Tmux
 
-For v0, tmux is the primary agent transport.
+Tmux is the primary agent transport.
 
-The core should be able to discover:
+Discovery belongs in the core and includes:
 
 - sessions
 - windows
@@ -256,7 +166,7 @@ Do not replace tmux.
 
 ## Git
 
-Git functionality will eventually include:
+Git functionality includes:
 
 - changed files
 - local diffs
@@ -266,16 +176,15 @@ Git functionality will eventually include:
 
 Prefer using Git as the source of truth.
 
-Initial versions may invoke the `git` CLI rather than embedding a Git implementation.
+Prefer the existing Git CLI adapter over introducing an embedded Git implementation.
 
 ## Review Model
 
 Review is a first-class feature.
 
-Eventually the engine should track:
+Preserve the engine's review tracking:
 
 - files reviewed
-- hunks reviewed
 - review snapshot/revision
 - files modified after review
 - changes requiring re-review
@@ -284,8 +193,6 @@ The key product behavior is:
 
 > Once a developer reviews agent-generated code, later agent edits should not force them to rediscover the entire diff.
 
-This is not required in the first milestone.
-
 ## TUI
 
 The TUI should be keyboard-first.
@@ -293,6 +200,10 @@ The TUI should be keyboard-first.
 Ask the user before adding any new keybindings, including alternative bindings.
 Scope keybindings to the current view or input mode. Help must list only bindings
 applicable to that context; a key may have different meanings in different views.
+
+Keep help and footers lean. Omit common navigation keys such as `j/k` and arrows
+without disabling them. Do not list the help-opening shortcut inside help.
+Avoid duplicate explanations across dialogs, footers, and success messages.
 
 Primary views:
 
@@ -309,6 +220,20 @@ order, with details in a separate viewport. Status/prompt changes must not move
 the selected item or its list row. Acknowledging attention keeps the item visible.
 
 Rendering code should receive state from the core and emit user intents/actions back to the core.
+
+## Terminal Safety
+
+Treat agent output, filenames, and diffs as untrusted display content. Escape
+terminal control characters so they cannot execute terminal commands or distort
+the layout. Render ordinary whitespace naturally in code diffs. Keep stored
+patch bytes unchanged; display formatting must not alter review tracking.
+
+## Cleanup Safety
+
+Require user confirmation before closing agent panes or windows or removing
+worktrees. Recheck the exact target and ownership immediately before acting.
+Never discard dirty files implicitly. If the target changed or ownership is
+uncertain, stop and explain the problem instead of forcing cleanup.
 
 ## Error Handling
 
@@ -335,6 +260,9 @@ Prefer unit tests for:
 - review calculations
 
 External command invocation should be structured so parsing and business logic can be tested independently of actually running tmux or Git.
+
+Add a regression test for bug fixes. For rendering changes, cover narrow
+terminals, Unicode, and control characters where relevant.
 
 ## Code Quality
 
@@ -379,7 +307,7 @@ When given a task:
 1. Inspect the existing repository first.
 2. Preserve the architecture described here.
 3. Propose major architectural changes before implementing them.
-4. Keep changes narrowly scoped to the requested milestone.
+4. Keep changes narrowly scoped to the requested task.
 5. Avoid speculative abstractions for features that do not yet exist.
 6. Prefer simple implementations that can evolve.
 7. Add tests for meaningful core behavior.
@@ -389,6 +317,8 @@ When given a task:
    - architectural decisions
    - tests performed
    - remaining limitations
+
+Use concise, plain language in documentation and UI text. Do not use em dashes.
 
 ## Commit Messages
 
@@ -403,6 +333,11 @@ Every commit must use this format:
 Start the subject with a capitalized imperative verb and describe the specific
 change. Separate the subject from the body with a blank line. The body must
 explain what changed and why.
+
+Sign every commit with `git commit -S`. Never fall back to an unsigned commit.
+Push only with explicit user approval. Push authorization is limited to the
+current session and must not carry over to future sessions. Report signing or
+push failures rather than bypassing them.
 
 ## Explicitly Out of Scope for v0
 
@@ -430,16 +365,12 @@ Do not implement unless specifically requested:
 - UniFFI
 - mobile applications
 
-## Current Priority
+## Planning
 
-Build the smallest useful vertical slice first:
+Keep milestone history and feature proposals in the planning documents:
 
-```text
-tmux
-  ↓
-Rust core discovers sessions/windows/panes
-  ↓
-TUI displays them
-```
+- [v0 specification](docs/v0-spec.md)
+- [v1 ideas](docs/v1-ideas.md)
+- [v2 ideas](docs/v2-ideas.md)
 
-Once that works reliably, proceed to work-item registration and agent supervision.
+These documents provide context, not authorization to begin unrequested work.
