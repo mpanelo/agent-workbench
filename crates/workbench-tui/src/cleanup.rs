@@ -26,7 +26,6 @@ pub struct CleanupUi {
     executing: bool,
     proceed: bool,
     error: Option<String>,
-    scroll: u16,
     pub generation: u64,
 }
 
@@ -42,7 +41,6 @@ impl CleanupUi {
         self.executing = false;
         self.proceed = false;
         self.error = None;
-        self.scroll = 0;
         self.generation
     }
     pub fn finish_preview(&mut self, ticket: u64, result: Result<CleanupPreview, String>) {
@@ -90,22 +88,13 @@ impl CleanupUi {
         self.loading = false;
         self.generation += 1;
     }
-    pub fn key(&mut self, key: KeyEvent, height: u16) -> Intent {
+    pub fn key(&mut self, key: KeyEvent) -> Intent {
         if self.executing || !self.is_open() {
             return Intent::None;
         }
         if key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::CONTROL {
             self.close();
             return Intent::Cancel;
-        }
-        if key.modifiers == KeyModifiers::CONTROL {
-            let amount = (height.saturating_sub(3) / 2).max(1);
-            match key.code {
-                KeyCode::Char('d') => self.scroll = self.scroll.saturating_add(amount),
-                KeyCode::Char('u') => self.scroll = self.scroll.saturating_sub(amount),
-                _ => {}
-            }
-            return Intent::None;
         }
         if !key.modifiers.is_empty() {
             return Intent::None;
@@ -174,15 +163,7 @@ impl CleanupUi {
             ));
         }
         let lines = help::wrapped_lines(lines, body.width);
-        self.scroll = self
-            .scroll
-            .min((lines.len().min(usize::from(u16::MAX)) as u16).saturating_sub(body.height));
-        frame.render_widget(
-            Paragraph::new(lines)
-                .style(theme::text())
-                .scroll((self.scroll, 0)),
-            body,
-        );
+        frame.render_widget(Paragraph::new(lines).style(theme::text()), body);
         let choices = if self.executing {
             "Cleaning up… Please wait. Do not retry."
         } else if self.proceed {
@@ -284,11 +265,11 @@ mod tests {
                 ui.finish_preview(ticket, Err("blocked".into()));
             }
             for code in [KeyCode::Tab, KeyCode::Left, KeyCode::Right] {
-                assert!(matches!(ui.key(KeyEvent::from(code), 24), Intent::None));
+                assert!(matches!(ui.key(KeyEvent::from(code)), Intent::None));
                 assert!(!ui.proceed);
             }
             assert!(matches!(
-                ui.key(KeyEvent::from(KeyCode::Enter), 24),
+                ui.key(KeyEvent::from(KeyCode::Enter)),
                 Intent::Cancel
             ));
             assert!(!ui.is_open());
@@ -312,17 +293,14 @@ mod tests {
             KeyEvent::from(KeyCode::Char('q')),
             KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
         ] {
-            assert!(matches!(ui.key(key, 24), Intent::None));
+            assert!(matches!(ui.key(key), Intent::None));
             assert!(ui.is_open());
         }
         ui.finish_execution(ui.generation, Err("partly removed".into()));
         assert!(!ui.executing);
         assert!(ui.preview.is_none());
         assert!(!ui.proceed);
-        assert!(matches!(
-            ui.key(KeyEvent::from(KeyCode::Tab), 24),
-            Intent::None
-        ));
+        assert!(matches!(ui.key(KeyEvent::from(KeyCode::Tab)), Intent::None));
         assert!(!ui.proceed);
     }
 
@@ -374,15 +352,21 @@ mod tests {
     }
 
     #[test]
-    fn long_errors_can_scroll_and_choices_remain_visible_in_narrow_windows() {
+    fn long_errors_do_not_scroll_and_cancel_remains_visible_in_narrow_windows() {
         let mut ui = CleanupUi::default();
         let ticket = ui.open(item("A"));
         ui.finish_preview(ticket, Err("long error description ".repeat(30)));
         let mut terminal = Terminal::new(TestBackend::new(35, 8)).unwrap();
         terminal.draw(|frame| ui.render(frame)).unwrap();
-        ui.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL), 8);
-        terminal.draw(|frame| ui.render(frame)).unwrap();
-        assert!(ui.scroll > 0);
+        let baseline = terminal.backend().buffer().clone();
+        for code in ['d', 'u'] {
+            assert!(matches!(
+                ui.key(KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL)),
+                Intent::None
+            ));
+            terminal.draw(|frame| ui.render(frame)).unwrap();
+            assert_eq!(terminal.backend().buffer(), &baseline);
+        }
         let text = terminal
             .backend()
             .buffer()
@@ -392,7 +376,5 @@ mod tests {
             .collect::<String>();
         assert!(text.contains("> Cancel"));
         assert!(text.contains("unavailable"));
-        ui.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL), 8);
-        assert_eq!(ui.scroll, 0);
     }
 }

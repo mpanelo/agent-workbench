@@ -47,7 +47,7 @@ observations alone do not clear an acknowledgement. Terminal captures cannot
 reliably distinguish identical fast turns without native agent turn IDs.
 
 Implemented unified WORK view: stable registration-order list, attention markers,
-and a separate scrollable detail area for the selected item. Status/prompt changes
+and a separate fixed detail area for the selected item. Status/prompt changes
 do not reorder rows or change selection. Further layout/UX refinements remain open.
 
 Possible follow-up: reliable opt-in turn identifiers before considering durable

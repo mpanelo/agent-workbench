@@ -517,7 +517,7 @@ async fn event_loop(
                         else if let Some(bar) = &interaction.response_bar { help::Context::Response { changed: bar.changed, can_reject: bar.can_reject() } }
                         else { help::Context::view(*view, interaction.show_all_panes) }
                     }) };
-                    if help.event(&event, context, terminal.size()?.height) {
+                    if help.event(&event, context) {
                         continue;
                     }
                     if removal.is_open() {
@@ -539,7 +539,7 @@ async fn event_loop(
                     }
                     if cleanup.is_open() {
                         if let Event::Key(key) = event && key.kind != KeyEventKind::Release {
-                            match cleanup.key(key, terminal.size()?.height) {
+                            match cleanup.key(key) {
                                 cleanup::Intent::Cancel => cleanup_preparations.abort_all(),
                                 cleanup::Intent::Confirm(preview) => {
                                     let ticket = cleanup.generation;
@@ -645,7 +645,7 @@ async fn event_loop(
                             KeyCode::Char('q') | KeyCode::Esc if interaction.response_bar.is_none() => return Ok(RunExit::Quit),
                             KeyCode::Char('c') if interaction.response_bar.is_none() && key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(RunExit::Quit),
                             _ => {
-                                if let Some(id) = navigate(key, &state, view, &mut scroll, interaction, terminal.size()?.height)
+                                if let Some(id) = navigate(key, &state, view, &mut scroll, interaction)
                                     && let Some(exit) = finish_switch(&id, interaction, engine.try_switch_work_item(&id).await) {
                                         return Ok(exit);
                                     }
@@ -734,21 +734,9 @@ fn navigate(
     view: &mut ui::View,
     scroll: &mut u16,
     interaction: &mut interaction::Interaction,
-    height: u16,
 ) -> Option<String> {
     let key = key.into();
     if interaction.draft.is_some() || interaction.sending {
-        return None;
-    }
-    if key.modifiers == KeyModifiers::CONTROL {
-        let half_page = (height.saturating_sub(2) / 2).max(1);
-        match key.code {
-            KeyCode::Char('d') => *scroll = scroll.saturating_add(half_page),
-            KeyCode::Char('u') => *scroll = scroll.saturating_sub(half_page),
-            _ => return None,
-        }
-        interaction.reveal_selection = false;
-        interaction.reveal_pane = false;
         return None;
     }
     if key
@@ -856,8 +844,6 @@ fn navigate(
                 None
             };
         }
-        KeyCode::Down => *scroll = scroll.saturating_add(1),
-        KeyCode::Up => *scroll = scroll.saturating_sub(1),
         KeyCode::Char('w' | 's') => {
             *view = match key.code {
                 KeyCode::Char('w') => ui::View::Work,
@@ -962,7 +948,6 @@ mod tests {
                     &mut view,
                     &mut 0,
                     &mut interaction,
-                    24,
                 );
                 assert!(interaction.approval_requested.is_none());
                 navigate(
@@ -971,7 +956,6 @@ mod tests {
                     &mut view,
                     &mut 0,
                     &mut interaction,
-                    24,
                 );
                 navigate(
                     KeyCode::Char(code),
@@ -979,7 +963,6 @@ mod tests {
                     &mut view,
                     &mut 0,
                     &mut interaction,
-                    24,
                 );
                 if view == ui::View::Work {
                     let request = interaction.approval_requested.take().unwrap();
@@ -1012,7 +995,6 @@ mod tests {
                     &mut view,
                     &mut 0,
                     &mut interaction,
-                    24,
                 );
                 assert!(interaction.approval_requested.is_none());
             }
@@ -1023,7 +1005,6 @@ mod tests {
                     &mut view,
                     &mut 0,
                     &mut interaction,
-                    24,
                 );
                 assert!(interaction.approval_requested.is_none());
             }
@@ -1034,18 +1015,10 @@ mod tests {
                 &mut view,
                 &mut 0,
                 &mut interaction,
-                24,
             );
             assert!(interaction.approval_requested.is_none());
             interaction.sending = false;
-            navigate(
-                KeyCode::Esc,
-                &state,
-                &mut view,
-                &mut 0,
-                &mut interaction,
-                24,
-            );
+            navigate(KeyCode::Esc, &state, &mut view, &mut 0, &mut interaction);
             assert!(interaction.response_bar.is_none());
             interaction.begin_reply(state.items());
             navigate(
@@ -1054,7 +1027,6 @@ mod tests {
                 &mut view,
                 &mut 0,
                 &mut interaction,
-                24,
             );
             assert!(interaction.approval_requested.is_none());
             interaction
@@ -1072,7 +1044,6 @@ mod tests {
                 &mut view,
                 &mut 0,
                 &mut interaction,
-                24,
             );
             assert!(interaction.approval_requested.is_none());
             navigate(
@@ -1081,7 +1052,6 @@ mod tests {
                 &mut view,
                 &mut 0,
                 &mut interaction,
-                24,
             );
             assert!(interaction.approval_requested.is_none());
         }
@@ -1123,7 +1093,7 @@ mod tests {
     }
 
     #[test]
-    fn response_mode_keeps_selection_and_allows_only_responses_help_and_detail_scrolling() {
+    fn response_mode_keeps_selection_and_ignores_removed_scrolling_keys() {
         let state = approval_state();
         let mut interaction = interaction::Interaction::default();
         interaction.sync(state.items());
@@ -1135,7 +1105,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert!(interaction.response_bar.is_some());
         for key in [
@@ -1148,7 +1117,7 @@ mod tests {
             KeyCode::Char('q'),
             KeyCode::Tab,
         ] {
-            assert!(navigate(key, &state, &mut view, &mut scroll, &mut interaction, 24).is_none());
+            assert!(navigate(key, &state, &mut view, &mut scroll, &mut interaction).is_none());
             assert_eq!(interaction.selected_id.as_deref(), Some("waiting"));
             assert_eq!(view, ui::View::Work);
             assert!(interaction.maintenance_requested.is_none());
@@ -1160,16 +1129,14 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
-        assert!(scroll > 4);
+        assert_eq!(scroll, 4);
         navigate(
             KeyCode::Enter,
             &state,
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert!(interaction.response_bar.is_none());
         assert_eq!(interaction.draft.as_ref().unwrap().item_id, "waiting");
@@ -1198,7 +1165,6 @@ mod tests {
             &mut view,
             &mut 0,
             &mut interaction,
-            24,
         );
         assert!(interaction.acknowledgement_requested.is_some());
         state.apply_acknowledgement(&mut interaction);
@@ -1208,14 +1174,7 @@ mod tests {
         assert_eq!(state.items(), original);
         state.refresh_attention(&mut interaction.attention_tracker);
         assert_eq!(state.attention.len(), 1);
-        navigate(
-            KeyCode::Tab,
-            &state,
-            &mut view,
-            &mut 0,
-            &mut interaction,
-            24,
-        );
+        navigate(KeyCode::Tab, &state, &mut view, &mut 0, &mut interaction);
         assert_eq!(interaction.selected_id.as_deref(), Some("waiting"));
         navigate(
             KeyCode::Char('x'),
@@ -1223,7 +1182,6 @@ mod tests {
             &mut view,
             &mut 0,
             &mut interaction,
-            24,
         );
         assert!(interaction.acknowledgement_requested.is_none());
         assert!(
@@ -1240,7 +1198,6 @@ mod tests {
             &mut view,
             &mut 0,
             &mut interaction,
-            24,
         );
         assert!(interaction.acknowledgement_requested.is_none());
         assert_eq!(interaction.draft.as_ref().unwrap().item_id, "waiting");
@@ -1253,7 +1210,6 @@ mod tests {
                 &mut view,
                 &mut 0,
                 &mut interaction,
-                24,
             );
             assert!(interaction.acknowledgement_requested.is_none());
         }
@@ -1268,7 +1224,6 @@ mod tests {
             &mut view,
             &mut 0,
             &mut interaction,
-            24,
         );
         assert!(interaction.acknowledgement_requested.is_none());
         navigate(
@@ -1277,7 +1232,6 @@ mod tests {
             &mut view,
             &mut 0,
             &mut interaction,
-            24,
         );
         if let Some(Ok(items)) = &mut state.work_items {
             items[1].status = AgentStatus::WaitingForInput;
@@ -1300,7 +1254,6 @@ mod tests {
             &mut view,
             &mut 0,
             &mut interaction,
-            24,
         );
         assert!(interaction.acknowledgement_requested.is_none());
     }
@@ -1441,7 +1394,7 @@ mod tests {
             let mut interaction = interaction::Interaction::default();
             interaction.sync(state.items());
             for code in [KeyCode::Char('e'), KeyCode::Char('n'), KeyCode::Char('u')] {
-                navigate(code, &state, &mut view, &mut 0, &mut interaction, 24);
+                navigate(code, &state, &mut view, &mut 0, &mut interaction);
                 if view == ui::View::Work && code == KeyCode::Char('e') {
                     match interaction.maintenance_requested.take().unwrap() {
                         maintenance::Request::Edit(item) => {
@@ -1462,7 +1415,6 @@ mod tests {
             &mut view,
             &mut 0,
             &mut interaction,
-            24,
         );
         assert!(interaction.maintenance_requested.is_none());
         assert!(interaction.message.unwrap().contains("Select an item"));
@@ -1479,7 +1431,6 @@ mod tests {
                 &mut view,
                 &mut 0,
                 &mut interaction,
-                24,
             );
             assert!(interaction.maintenance_requested.is_none());
         }
@@ -1490,7 +1441,6 @@ mod tests {
             &mut view,
             &mut 0,
             &mut interaction,
-            24,
         );
         assert!(interaction.maintenance_requested.is_none());
     }
@@ -1509,7 +1459,6 @@ mod tests {
                 &mut view,
                 &mut 0,
                 &mut interaction,
-                24,
             );
             if view == ui::View::Work {
                 assert_eq!(
@@ -1535,14 +1484,13 @@ mod tests {
                 &mut view,
                 &mut 0,
                 &mut interaction,
-                24,
             );
             assert!(interaction.removal_requested.is_none());
         }
         for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
             let mut key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
             key.kind = kind;
-            navigate(key, &state, &mut view, &mut 0, &mut interaction, 24);
+            navigate(key, &state, &mut view, &mut 0, &mut interaction);
             assert!(interaction.removal_requested.is_none());
         }
         interaction.begin_reply(state.items());
@@ -1552,7 +1500,6 @@ mod tests {
             &mut view,
             &mut 0,
             &mut interaction,
-            24,
         );
         assert!(interaction.removal_requested.is_none());
         interaction.draft = None;
@@ -1562,7 +1509,6 @@ mod tests {
             &mut view,
             &mut 0,
             &mut interaction,
-            24,
         );
         assert!(interaction.removal_requested.is_none());
         assert!(
@@ -1596,7 +1542,6 @@ mod tests {
                 &mut view,
                 &mut scroll,
                 &mut interaction,
-                24,
             );
             assert!(interaction.maintenance_requested.is_none());
             let mut menu = removal::RemovalUi::default();
@@ -1634,7 +1579,7 @@ mod tests {
                 assert!(!maintenance.is_open());
                 cleanup.finish_preview(ticket, Err("Dirty workspace; cleanup blocked.".into()));
                 assert!(matches!(
-                    cleanup.key(KeyCode::Enter.into(), 24),
+                    cleanup.key(KeyCode::Enter.into()),
                     cleanup::Intent::Cancel
                 ));
                 assert!(!maintenance.is_open());
@@ -1864,7 +1809,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert_eq!(
             interaction.registration_requested.take().as_deref(),
@@ -1876,7 +1820,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert_eq!(interaction.selected_pane.as_deref(), Some("%3"));
         navigate(
@@ -1885,7 +1828,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert!(interaction.show_all_panes);
         assert_eq!(interaction.selected_pane.as_deref(), Some("%3"));
@@ -1896,7 +1838,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         navigate(
             KeyCode::Char('r'),
@@ -1904,7 +1845,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert_eq!(
             interaction.registration_requested.take().as_deref(),
@@ -1916,7 +1856,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert_eq!(interaction.selected_pane.as_deref(), Some("%3"));
         assert_eq!(state.items().len(), 1);
@@ -1935,7 +1874,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert!(interaction.selected_pane.is_none());
         assert!(interaction.registration_requested.is_none());
@@ -1952,7 +1890,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert!(!interaction.show_all_panes);
         view = ui::View::Work;
@@ -1962,7 +1899,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert!(!interaction.show_all_panes);
     }
@@ -2001,7 +1937,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert_eq!(interaction.selected_pane.as_deref(), Some("%2"));
         navigate(
@@ -2010,7 +1945,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert_eq!(
             interaction.registration_requested.take().as_deref(),
@@ -2022,7 +1956,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert!(interaction.registration_requested.is_none());
         assert!(interaction.draft.is_none());
@@ -2033,7 +1966,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert!(interaction.registration_requested.is_none());
         assert!(interaction.message.as_ref().unwrap().contains("live pane"));
@@ -2044,7 +1976,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert!(interaction.registration_requested.is_none());
     }
@@ -2076,32 +2007,32 @@ mod tests {
     }
 
     #[test]
-    fn vim_half_page_scroll_works_in_every_view_without_changing_selection() {
+    fn removed_scrolling_bindings_are_inactive_in_work_and_sessions() {
         let state = state(&[("A", AgentStatus::WaitingForInput)]);
         for mut view in [ui::View::Work, ui::View::Sessions] {
             let original_view = view;
             let mut interaction = interaction::Interaction::default();
             interaction.sync(state.items());
             let selected = interaction.selected_id.clone();
-            let mut scroll = 0;
-            for (key, expected) in [('d', 11), ('d', 22), ('u', 11), ('u', 0), ('u', 0)] {
+            let mut scroll = 7;
+            let reveal_selection = interaction.reveal_selection;
+            for key in ['d', 'd', 'u', 'u', 'u'] {
                 assert!(
                     navigate(
                         KeyEvent::new(KeyCode::Char(key), KeyModifiers::CONTROL),
                         &state,
                         &mut view,
                         &mut scroll,
-                        &mut interaction,
-                        24,
+                        &mut interaction
                     )
                     .is_none()
                 );
-                assert_eq!(scroll, expected);
+                assert_eq!(scroll, 7);
                 assert_eq!(view, original_view);
                 assert_eq!(interaction.selected_id, selected);
                 assert!(interaction.message.is_none());
                 assert!(interaction.draft.is_none());
-                assert!(!interaction.reveal_selection);
+                assert_eq!(interaction.reveal_selection, reveal_selection);
             }
             scroll = 7;
             navigate(
@@ -2110,7 +2041,6 @@ mod tests {
                 &mut view,
                 &mut scroll,
                 &mut interaction,
-                24,
             );
             assert_eq!(scroll, 7);
             navigate(
@@ -2119,11 +2049,10 @@ mod tests {
                 &mut view,
                 &mut scroll,
                 &mut interaction,
-                24,
             );
             assert_eq!(scroll, 7);
             for code in [KeyCode::Home, KeyCode::F(1)] {
-                navigate(code, &state, &mut view, &mut scroll, &mut interaction, 24);
+                navigate(code, &state, &mut view, &mut scroll, &mut interaction);
                 assert_eq!(scroll, 7);
                 assert_eq!(interaction.selected_id, selected);
             }
@@ -2131,31 +2060,25 @@ mod tests {
     }
 
     #[test]
-    fn vim_scroll_saturates_and_moves_at_least_one_row_on_tiny_terminals() {
+    fn removed_scrolling_keys_do_nothing_even_without_items() {
         let state = state(&[]);
         let mut view = ui::View::Work;
         let mut interaction = interaction::Interaction::default();
-        for height in [0, 1, 2, 3, 4] {
-            let mut scroll = 0;
-            navigate(
-                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
-                &state,
-                &mut view,
-                &mut scroll,
-                &mut interaction,
-                height,
-            );
-            assert_eq!(scroll, 1);
-            scroll = u16::MAX;
-            navigate(
-                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
-                &state,
-                &mut view,
-                &mut scroll,
-                &mut interaction,
-                height,
-            );
-            assert_eq!(scroll, u16::MAX);
+        for initial_offset in [0, u16::MAX] {
+            let mut scroll = initial_offset;
+            for code in ['d', 'u'] {
+                navigate(
+                    KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL),
+                    &state,
+                    &mut view,
+                    &mut scroll,
+                    &mut interaction,
+                );
+                assert_eq!(scroll, initial_offset);
+                assert_eq!(view, ui::View::Work);
+                assert!(interaction.review_requested.is_none());
+                assert!(interaction.removal_requested.is_none());
+            }
         }
     }
 
@@ -2174,7 +2097,7 @@ mod tests {
                 KeyModifiers::CONTROL | KeyModifiers::ALT,
             ),
         ] {
-            navigate(key, &state, &mut view, &mut scroll, &mut interaction, 24);
+            navigate(key, &state, &mut view, &mut scroll, &mut interaction);
             assert_eq!(scroll, 10);
             assert!(interaction.message.is_none());
             assert!(interaction.draft.is_none());
@@ -2188,7 +2111,6 @@ mod tests {
                 &mut view,
                 &mut scroll,
                 &mut interaction,
-                24,
             );
             assert_eq!(scroll, 10);
             assert_eq!(interaction.draft.as_ref().unwrap().text, "yes");
@@ -2216,8 +2138,7 @@ mod tests {
                     &state,
                     &mut view,
                     &mut scroll,
-                    &mut interaction,
-                    24
+                    &mut interaction
                 )
                 .is_none()
             );
@@ -2236,7 +2157,6 @@ mod tests {
                     &mut view,
                     &mut scroll,
                     &mut interaction,
-                    24,
                 );
                 assert_eq!(view, expected);
                 assert_eq!(scroll, 0);
@@ -2264,7 +2184,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert_eq!(interaction.selected_id.as_deref(), Some("B"));
         navigate(
@@ -2273,7 +2192,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert_eq!(
             navigate(
@@ -2281,8 +2199,7 @@ mod tests {
                 &state,
                 &mut view,
                 &mut scroll,
-                &mut interaction,
-                24
+                &mut interaction
             )
             .as_deref(),
             Some("C")
@@ -2293,7 +2210,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert_eq!(interaction.draft.as_ref().unwrap().item_id, "C");
         interaction.draft = None;
@@ -2303,7 +2219,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert_eq!(interaction.selected_id.as_deref(), Some("B"));
         navigate(
@@ -2312,7 +2227,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert_eq!(interaction.review_requested.as_deref(), Some("B"));
         navigate(
@@ -2321,7 +2235,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert_eq!(view, ui::View::Work);
         navigate(
@@ -2330,7 +2243,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert_eq!(interaction.selected_id.as_deref(), Some("B"));
         navigate(
@@ -2339,7 +2251,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert_eq!(interaction.selected_id.as_deref(), Some("B"));
         navigate(
@@ -2348,7 +2259,6 @@ mod tests {
             &mut view,
             &mut scroll,
             &mut interaction,
-            24,
         );
         assert_eq!(view, ui::View::Sessions);
         assert!(
@@ -2357,8 +2267,7 @@ mod tests {
                 &state,
                 &mut view,
                 &mut scroll,
-                &mut interaction,
-                24
+                &mut interaction
             )
             .is_none()
         );
@@ -2416,8 +2325,7 @@ mod tests {
                     &state,
                     &mut view,
                     &mut scroll,
-                    &mut interaction,
-                    24
+                    &mut interaction
                 )
                 .is_none()
             );
@@ -2427,7 +2335,6 @@ mod tests {
                 &mut view,
                 &mut scroll,
                 &mut interaction,
-                24,
             );
             assert!(interaction.draft.is_none());
             assert!(state.attention.is_empty());
@@ -2437,7 +2344,6 @@ mod tests {
                 &mut view,
                 &mut scroll,
                 &mut interaction,
-                24,
             );
             assert!(interaction.review_requested.is_none());
         }

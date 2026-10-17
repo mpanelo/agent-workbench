@@ -53,13 +53,13 @@ impl Context {
     pub fn hints(self) -> &'static str {
         match self {
             Self::Work => {
-                "Respond: r | Edit: e | Clean Up: c | Acknowledge finished turn: x | Views: w/s | Quit: q | Select: j/k | Open: <enter> | Review: d | Scroll details: <c-d>/<c-u> | Help: ?"
+                "Respond: r | Edit: e | Clean Up: c | Acknowledge finished turn: x | Views: w/s | Quit: q | Select: j/k | Open: <enter> | Review: d | Help: ?"
             }
             Self::Sessions { all: false } => {
-                "All panes: f | Views: w/s | Quit: q | Select: j/k | Register: <enter>/r | Scroll: <c-d>/<c-u> | Help: ?"
+                "All panes: f | Views: w/s | Quit: q | Select: j/k | Register: <enter>/r | Help: ?"
             }
             Self::Sessions { all: true } => {
-                "Agents only: f | Views: w/s | Quit: q | Select: j/k | Register: <enter>/r | Scroll: <c-d>/<c-u> | Help: ?"
+                "Agents only: f | Views: w/s | Quit: q | Select: j/k | Register: <enter>/r | Help: ?"
             }
             Self::Review => {
                 "Select: j/k | Toggle mark: Space | Scroll: <c-d>/<c-u> | Pan: h/l | Reload: r | Full/since: c | Pending: Tab | Back: Esc | Quit: q | Help: ?"
@@ -70,15 +70,13 @@ impl Context {
             Self::Response {
                 changed: false,
                 can_reject: true,
-            } => {
-                "Approve once: y | Reject: n | Reply: <enter> | Cancel: Esc | Scroll: <c-d>/<c-u> | Help: ?"
-            }
+            } => "Approve once: y | Reject: n | Reply: <enter> | Cancel: Esc | Help: ?",
             Self::Response {
                 changed: false,
                 can_reject: false,
-            } => "Approve once: y | Reply: <enter> | Cancel: Esc | Scroll: <c-d>/<c-u> | Help: ?",
+            } => "Approve once: y | Reply: <enter> | Cancel: Esc | Help: ?",
             Self::Response { changed: true, .. } => {
-                "Request changed; cancel and reopen. | Cancel: Esc | Scroll: <c-d>/<c-u> | Help: ?"
+                "Request changed; cancel and reopen. | Cancel: Esc | Help: ?"
             }
             Self::Registration => {
                 "Field: Tab/Shift-Tab/↑/↓ | Toggle type: Space | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→"
@@ -88,9 +86,7 @@ impl Context {
             }
             Self::Removal { blocked: false } => "Unregister: u | Clean: c | Cancel: Esc",
             Self::Removal { blocked: true } => "Cancel: Esc",
-            Self::Cleanup => {
-                "Choose: Tab/←/→ | Confirm: <enter> | Cancel: Esc/q/<c-c> | Scroll: <c-d>/<c-u> | Help: ?"
-            }
+            Self::Cleanup => "Choose: Tab/←/→ | Confirm: <enter> | Cancel: Esc/q/<c-c> | Help: ?",
         }
     }
 
@@ -163,7 +159,6 @@ impl Context {
 #[derive(Default)]
 pub struct HelpUi {
     context: Option<Context>,
-    scroll: u16,
 }
 
 impl HelpUi {
@@ -173,7 +168,7 @@ impl HelpUi {
 
     /// Consume all input while open so dismissing help never activates a view
     /// action, submits a draft, quits the app, or pastes into an editor.
-    pub fn event(&mut self, event: &Event, context: Context, height: u16) -> bool {
+    pub fn event(&mut self, event: &Event, context: Context) -> bool {
         if let Event::Key(key) = event
             && key.kind != KeyEventKind::Release
         {
@@ -191,29 +186,11 @@ impl HelpUi {
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                 {
                     self.context = None;
-                } else if plain || key.modifiers == KeyModifiers::CONTROL {
-                    let page = height.saturating_sub(2).max(1);
-                    match key.code {
-                        KeyCode::Down | KeyCode::Char('j') if plain => {
-                            self.scroll = self.scroll.saturating_add(1)
-                        }
-                        KeyCode::Up | KeyCode::Char('k') if plain => {
-                            self.scroll = self.scroll.saturating_sub(1)
-                        }
-                        KeyCode::Char('d') if !plain => {
-                            self.scroll = self.scroll.saturating_add((page / 2).max(1))
-                        }
-                        KeyCode::Char('u') if !plain => {
-                            self.scroll = self.scroll.saturating_sub((page / 2).max(1))
-                        }
-                        _ => {}
-                    }
                 }
                 return true;
             }
             if toggle {
                 self.context = Some(context);
-                self.scroll = 0;
                 return true;
             }
         }
@@ -236,23 +213,12 @@ impl HelpUi {
             header,
         );
         let lines = wrapped_lines(context.lines(), body.width);
-        let count = lines.len().min(usize::from(u16::MAX)) as u16;
-        self.scroll = self.scroll.min(count.saturating_sub(body.height));
-        frame.render_widget(
-            Paragraph::new(lines)
-                .style(theme::text())
-                .scroll((self.scroll, 0)),
-            body,
-        );
-        frame.render_widget(
-            theme::footer("Close: Esc/q/? | Scroll: j/k/<c-d>/<c-u>"),
-            footer,
-        );
+        frame.render_widget(Paragraph::new(lines).style(theme::text()), body);
+        frame.render_widget(theme::footer("Close: Esc/q/?"), footer);
     }
 }
 
-// Explicit display-width wrapping keeps scroll bounds exact, including at
-// narrow widths, without enabling Ratatui's unstable line-count API.
+// Explicit display-width wrapping preserves styled text at narrow widths.
 pub(crate) fn wrapped_lines(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
     if width == 0 {
         return Vec::new();
@@ -351,7 +317,6 @@ mod tests {
         ] {
             let mut help = HelpUi {
                 context: Some(context),
-                scroll: 0,
             };
             let text = screen(&mut help, 80, 40);
             assert!(text.contains(&format!("KEYBINDINGS — {}", context.title())));
@@ -393,14 +358,13 @@ mod tests {
             for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
                 assert!(!help.event(
                     &Event::Key(KeyEvent::new(KeyCode::Char('?'), modifiers)),
-                    context,
-                    24
+                    context
                 ));
                 assert!(!help.is_open());
             }
             // Cancellation belongs to the popup, not a hidden help screen.
-            assert!(!help.event(&key(KeyCode::Esc), context, 24));
-            assert!(help.event(&key(KeyCode::Char('?')), Context::Work, 24));
+            assert!(!help.event(&key(KeyCode::Esc), context));
+            assert!(help.event(&key(KeyCode::Char('?')), Context::Work));
             assert!(help.is_open());
         }
     }
@@ -418,8 +382,7 @@ mod tests {
             // '?' often arrives with SHIFT.
             assert!(help.event(
                 &Event::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT)),
-                context,
-                24
+                context
             ));
             for event in [
                 key(KeyCode::Enter),
@@ -431,21 +394,20 @@ mod tests {
                 key(KeyCode::F(1)),
                 Event::Paste("do not insert".into()),
             ] {
-                assert!(help.event(&event, context, 24));
+                assert!(help.event(&event, context));
                 assert!(help.is_open());
             }
-            assert!(help.event(&close, context, 24));
+            assert!(help.event(&close, context));
             assert!(!help.is_open());
-            assert!(!help.event(&key(KeyCode::Char('e')), context, 24));
+            assert!(!help.event(&key(KeyCode::Char('e')), context));
         }
         let mut help = HelpUi::default();
         let mut release = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
         release.kind = KeyEventKind::Release;
-        assert!(!help.event(&Event::Key(release), context, 24));
+        assert!(!help.event(&Event::Key(release), context));
         assert!(!help.event(
             &Event::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::ALT)),
-            context,
-            24
+            context
         ));
     }
 
@@ -459,7 +421,7 @@ mod tests {
                 cursor: crate::interaction::InputCursor::default(),
             };
             let question = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT);
-            assert!(!help.event(&Event::Key(question), context, 24));
+            assert!(!help.event(&Event::Key(question), context));
             draft.edit(question).unwrap();
             assert_eq!(draft.text, "Why?");
             draft
@@ -467,7 +429,7 @@ mod tests {
                 .unwrap();
             let cursor = draft.cursor;
             let f1 = KeyEvent::from(KeyCode::F(1));
-            assert!(!help.event(&Event::Key(f1), context, 24));
+            assert!(!help.event(&Event::Key(f1), context));
             draft.edit(f1).unwrap();
             assert!(!help.is_open());
             assert_eq!(draft.item_id, "A");
@@ -481,51 +443,72 @@ mod tests {
             Context::Cleanup,
         ] {
             let mut help = HelpUi::default();
-            assert!(!help.event(&key(KeyCode::F(1)), context, 24));
+            assert!(!help.event(&key(KeyCode::F(1)), context));
             assert!(!help.is_open());
         }
     }
 
     #[test]
-    fn narrow_help_wraps_scrolls_clamps_and_resets_without_losing_bindings() {
-        let context = Context::Work;
-        let mut help = HelpUi::default();
-        help.event(&key(KeyCode::Char('?')), context, 8);
-        let mut pages = String::new();
-        for _ in 0..30 {
-            pages.push_str(&screen(&mut help, 20, 8));
-            help.event(
-                &Event::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)),
-                context,
-                8,
-            );
+    fn help_stays_at_the_top_even_when_opened_from_review() {
+        for context in [Context::Work, Context::Review] {
+            let mut help = HelpUi::default();
+            help.event(&key(KeyCode::Char('?')), context);
+            let baseline = screen(&mut help, 40, 8);
+            for event in [
+                key(KeyCode::Char('j')),
+                key(KeyCode::Char('k')),
+                key(KeyCode::Down),
+                key(KeyCode::Up),
+                key(KeyCode::PageDown),
+                key(KeyCode::PageUp),
+                key(KeyCode::Home),
+                Event::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)),
+                Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)),
+            ] {
+                assert!(help.event(&event, context));
+                assert_eq!(screen(&mut help, 40, 8), baseline);
+            }
+            assert!(!baseline.lines().last().unwrap().contains("Scroll"));
+            let wide = screen(&mut help, 120, 40);
+            assert!(wide.contains("Quit (alternatives)") || context == Context::Review);
+            for (width, height) in [(1, 1), (0, 0), (5, 3)] {
+                screen(&mut help, width, height);
+            }
+            help.event(&key(KeyCode::Esc), context);
+            assert!(!help.is_open());
         }
-        let compact: String = pages.chars().filter(|ch| !ch.is_whitespace()).collect();
-        assert!(compact.contains("Scrolldetails:<c-d>/<c-u>"));
-        assert!(compact.contains("Quit(alternatives):Esc/<c-c>"));
-        assert!(help.scroll > 0);
-        let before = help.scroll;
-        help.event(&key(KeyCode::PageDown), context, 8);
-        help.event(&key(KeyCode::PageUp), context, 8);
-        assert_eq!(help.scroll, before);
-        help.event(
-            &Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)),
-            context,
-            8,
-        );
-        let before = help.scroll;
-        help.event(&key(KeyCode::Home), context, 8);
-        assert_eq!(help.scroll, before);
-        help.scroll = u16::MAX;
-        screen(&mut help, 80, 40);
-        assert_eq!(help.scroll, 0);
-        for (width, height) in [(1, 1), (0, 0), (5, 3)] {
-            screen(&mut help, width, height);
+    }
+
+    #[test]
+    fn scrolling_hints_only_apply_to_code_review_not_other_views_or_modals() {
+        for context in [
+            Context::Work,
+            Context::Sessions { all: false },
+            Context::Sessions { all: true },
+            Context::Reply,
+            Context::Response {
+                changed: false,
+                can_reject: true,
+            },
+            Context::Response {
+                changed: false,
+                can_reject: false,
+            },
+            Context::Response {
+                changed: true,
+                can_reject: true,
+            },
+            Context::Registration,
+            Context::Edit,
+            Context::Removal { blocked: false },
+            Context::Removal { blocked: true },
+            Context::Cleanup,
+        ] {
+            assert!(!context.hints().contains("Scroll"));
+            assert!(!context.hints().contains("<c-d>"));
         }
-        help.event(&key(KeyCode::Esc), context, 8);
-        help.event(&key(KeyCode::Char('?')), Context::Review, 8);
-        assert_eq!(help.context, Some(Context::Review));
-        assert_eq!(help.scroll, 0);
+        assert!(Context::Review.hints().contains("Scroll: <c-d>/<c-u>"));
+        assert!(Context::Reply.hints().contains("Clear: <c-u>"));
     }
 
     #[test]

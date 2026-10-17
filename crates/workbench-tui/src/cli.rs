@@ -39,12 +39,12 @@ Cleanup keeps the branch and review history; dirty or ambiguous targets are bloc
 Short descriptions are limited to 120 Unicode characters. Use --short-description;
 when omitted, the description defaults to the ID.
 j/k or arrows select; <enter> opens the pane in WORK; replies are single-line.
-<c-d>/<c-u> scroll details in WORK, or the current view elsewhere, half a page.
+<c-d>/<c-u> scroll only the code diff in REVIEW, half a page.
 ? shows the current view's keybindings, except in Clean Up Options where controls
 are shown inline and the bottom help bar is hidden.
 In text fields, ? remains literal text.
 <enter> submits a reply and Esc cancels. Tab selects the next unacknowledged attention item.
-While composing a reply, <c-u> clears the draft instead of scrolling.
+While composing a reply, <c-u> clears the draft.
 d opens local diff review; j/k select files, Space toggles reviewed, Esc returns.
 Review defaults to HEAD (staged, unstaged, and untracked changes). --diff-base REV
 compares the working tree directly to that local commit/ref, including committed

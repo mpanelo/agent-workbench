@@ -31,6 +31,9 @@ pub(crate) fn render_work(
     scroll: &mut u16,
     interaction: &mut Interaction,
 ) {
+    // This shared viewport offset is only used to reveal selections in SESSIONS.
+    // WORK details always render from the top.
+    *scroll = 0;
     theme::paint(frame);
     let [header, body, notice, composer, footer] = Layout::vertical([
         Constraint::Length(1),
@@ -145,10 +148,7 @@ pub(crate) fn render_work(
             frame.render_widget(Paragraph::new(std::mem::take(&mut lines)), list);
             let selected = interaction.selected(items);
             let selected_id = selected.map(|state| state.item.id.clone());
-            if interaction.detail_item_id != selected_id {
-                *scroll = 0;
-                interaction.detail_item_id = selected_id;
-            }
+            interaction.detail_item_id = selected_id;
             let feedback = interaction
                 .approval_feedback
                 .as_ref()
@@ -262,20 +262,11 @@ pub(crate) fn render_work(
             } else {
                 lines.push(Line::from("Select a work item to inspect its details."));
             }
-            let max_scroll = lines
-                .len()
-                .saturating_sub(usize::from(inner.height))
-                .min(usize::from(u16::MAX)) as u16;
-            *scroll = (*scroll).min(max_scroll);
-            frame.render_widget(
-                Paragraph::new(std::mem::take(&mut lines)).scroll((*scroll, 0)),
-                inner,
-            );
+            frame.render_widget(Paragraph::new(std::mem::take(&mut lines)), inner);
         }
     }
     if !lines.is_empty() {
         frame.render_widget(Paragraph::new(lines), body);
-        *scroll = 0;
     }
     interaction.reveal_selection = false;
     if let Some(message) = &interaction.message {
@@ -1047,7 +1038,7 @@ mod tests {
     }
 
     #[test]
-    fn full_reason_and_command_render_and_remain_accessible_by_page_scrolling() {
+    fn full_reason_and_command_render_when_the_viewport_has_room_but_do_not_scroll() {
         let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         waiting.status = AgentStatus::WaitingForInput;
         waiting.attention_prompt = Some(format!(
@@ -1074,39 +1065,27 @@ mod tests {
         let mut interaction = Interaction::default();
         interaction.sync(&state.attention);
         let mut scroll = 0;
-        let mut pages = String::new();
         let mut view = View::Work;
-        for _ in 0..20 {
-            terminal
-                .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
-                .unwrap();
-            pages.extend(
-                terminal
-                    .backend()
-                    .buffer()
-                    .content()
-                    .iter()
-                    .map(|cell| cell.symbol()),
-            );
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
+            .unwrap();
+        let baseline = terminal.backend().buffer().clone();
+        for code in ['d', 'u'] {
             crate::navigate(
                 crossterm::event::KeyEvent::new(
-                    crossterm::event::KeyCode::Char('d'),
+                    crossterm::event::KeyCode::Char(code),
                     crossterm::event::KeyModifiers::CONTROL,
                 ),
                 &state,
                 &mut view,
                 &mut scroll,
                 &mut interaction,
-                10,
             );
+            terminal
+                .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
+                .unwrap();
+            assert_eq!(terminal.backend().buffer(), &baseline);
         }
-        assert!(pages.contains("END-OF-REASON"));
-        assert!(pages.contains("git -c commit.gpgsign=false"));
-        assert!(pages.contains("Packer installation"));
-        assert!(pages.contains("Options:"));
-        assert!(pages.contains("› 1. Yes, proceed (y)"));
-        assert!(pages.contains("3. No, and tell Codex what to do differently (esc)"));
-        assert!(pages.contains("Permission applies only to this command prefix."));
         assert_eq!(interaction.selected_id.as_deref(), Some("ABC-123"));
     }
 
@@ -2083,7 +2062,7 @@ mod tests {
     }
 
     #[test]
-    fn detail_scrolling_is_independent_of_the_list_and_resets_only_for_a_new_item() {
+    fn details_stay_at_the_top_without_moving_the_selected_list_row() {
         let items = ["A", "B"]
             .into_iter()
             .map(|id| {
@@ -2108,7 +2087,7 @@ mod tests {
         terminal
             .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
             .unwrap();
-        assert_eq!(scroll, 10);
+        assert_eq!(scroll, 0);
         let text: String = terminal
             .backend()
             .buffer()
@@ -2118,7 +2097,7 @@ mod tests {
             .collect();
         assert!(text.contains("> B  WAITING_FOR_INPUT"));
         assert!(text.contains("Details — B"));
-        assert!(text.contains("PROMPT FOR B"));
+        assert!(text.contains("Type: Build"));
         let mut updated = state.clone();
         if let Some(Ok(items)) = &mut updated.work_items {
             items[1]
@@ -2131,7 +2110,7 @@ mod tests {
         terminal
             .draw(|frame| render_work(frame, &updated, &mut scroll, &mut interaction))
             .unwrap();
-        assert_eq!(scroll, 10);
+        assert_eq!(scroll, 0);
         interaction.move_selection(state.items(), -1);
         terminal
             .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))

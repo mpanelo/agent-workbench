@@ -56,8 +56,6 @@ you cancel and reopen the bar.
 Approving shows inline feedback: a green checkmark confirms the key
 was sent, then clears after 1.5 seconds. It does not imply the agent has resumed;
 the displayed agent status continues to reflect observations.
-Use `<c-d>` / `<c-u>` to scroll the selected item's details. The old `a` shortcut
-also returns to WORK.
 
 A Work ID is your unique task label, such as `fix-auth` or `PR-42`.
 Short Description is an optional readable summary, limited to 120 characters.
@@ -104,11 +102,15 @@ controls inline instead. In text inputs, `?` types a literal question mark.
 | Next item needing attention | `Tab` in WORK |
 | Register a pane | `r` or `<enter>` in SESSIONS |
 | Toggle agent-only / all panes | `f` in SESSIONS |
-| Scroll half a page | `<c-d>` / `<c-u>` outside text inputs |
+| Scroll the code diff half a page | `<c-d>` / `<c-u>` in REVIEW |
 | Quit | `q` in the main views |
 
 Forms support arrow-key cursor movement, Tab to switch fields, and `<c-u>` to
 clear a field. `Esc` cancels an edit or reply before saving or sending.
+
+Only the code diff viewer supports manual scrolling. Other views and popups stay
+at the top; enlarge the terminal to see more text. List selection and text editing
+still keep the selected item or cursor visible automatically.
 Replies are single-line messages. If sending fails, inspect the agent pane before
 retrying: some input may already have arrived.
 
