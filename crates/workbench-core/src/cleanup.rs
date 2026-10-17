@@ -1296,19 +1296,18 @@ esac
 
     #[tokio::test]
     async fn test_command_limits() {
+        let directory = tempfile::tempdir().unwrap();
         let client = WorkmuxClient {
             executable: "/bin/sleep".into(),
             limit: Duration::from_millis(20),
             pane: None,
         };
-        assert!(
-            client
-                .run(Path::new("/private/tmp"), &["2"], None)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("timed out")
-        );
+        let error = client
+            .run(directory.path(), &["2"], None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("timed out"), "{error}");
         assert!(read_bounded(&b"12345"[..], 4).await.is_err());
     }
 }

@@ -554,8 +554,8 @@ pub(crate) mod tests {
 
     // Synthetic repositories have isolated Git config and never use the user's
     // signing key, hooks, index, branches, or working files.
-    pub(crate) fn git(root: &Path, values: &[&str]) -> String {
-        let output = std::process::Command::new("git")
+    fn git_output(root: &Path, values: &[&str]) -> std::process::Output {
+        std::process::Command::new("git")
             .current_dir(root)
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -568,7 +568,11 @@ pub(crate) mod tests {
             ])
             .args(values)
             .output()
-            .unwrap();
+            .unwrap()
+    }
+
+    pub(crate) fn git(root: &Path, values: &[&str]) -> String {
+        let output = git_output(root, values);
         assert!(
             output.status.success(),
             "git {values:?}: {}",
@@ -797,12 +801,17 @@ pub(crate) mod tests {
         fs::write(root.join("source.txt"), "main branch\n").unwrap();
         git(&root, &["add", "--", "."]);
         git(&root, &["commit", "-m", "Synthetic main"]);
-        let output = std::process::Command::new("git")
-            .current_dir(&root)
-            .args(["merge", "other"])
-            .output()
-            .unwrap();
-        assert!(!output.status.success());
+        let output = git_output(&root, &["merge", "other"]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "expected merge conflicts: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !git(&root, &["ls-files", "--unmerged"]).is_empty(),
+            "fixture merge did not create unmerged entries"
+        );
         assert!(
             matches!(engine.diff("A", None).await, Err(GitError::Invalid(message)) if message.contains("conflicts"))
         );
