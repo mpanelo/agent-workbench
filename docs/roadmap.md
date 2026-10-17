@@ -84,6 +84,14 @@ needs separate lifecycle/layout investigation and approval of its controls.
 
 ## Follow-ups without an agreed release or scope
 
+- Neovim integration: open the selected diff file in Neovim from REVIEW, ideally
+  at the relevant line. Scope how to reuse an existing editor or open a new
+  instance, where it appears in tmux, and how to return to Workbench. Decide how
+  diff positions map to file lines, including deleted files, historical content,
+  and changes-since-review. Distinguish the live workspace from the captured
+  review snapshot and define refresh behavior after edits. Preserve unsaved
+  editor buffers and review marks. The release target, interaction, and any
+  keybindings need agreement before implementation.
 - Review-history housekeeping: preview saved contexts without a matching current
   registration. They may remain useful after re-registration or an ID rename.
   Deletion must be opt-in, explain the loss of marks and snapshots, and establish
