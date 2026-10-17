@@ -999,8 +999,13 @@ mod tests {
         let text = screen(None, 80, 10, &mut 0);
         assert_eq!(
             text.lines().last().unwrap().trim_end(),
-            "Agents only: f | Views: w/s | Quit: q | Register: <enter>/r | Help: ?"
+            "Agents only: f | Work: w | Quit: q | Register: <enter>/r | Help: ?"
         );
+        let text = work_screen(&state, 200, 10, &mut 0);
+        let footer = text.lines().last().unwrap();
+        assert!(footer.contains("Sessions: s"));
+        assert!(!footer.contains("Work: w"));
+        assert!(!footer.contains("Views:"));
     }
 
     #[test]

@@ -53,13 +53,13 @@ impl Context {
     pub fn hints(self) -> &'static str {
         match self {
             Self::Work => {
-                "Respond: r | Edit: e | Clean Up: c | Acknowledge finished turn: x | Views: w/s | Quit: q | Open: <enter> | Review: d | Help: ?"
+                "Respond: r | Edit: e | Clean Up: c | Acknowledge finished turn: x | Sessions: s | Quit: q | Open: <enter> | Review: d | Help: ?"
             }
             Self::Sessions { all: false } => {
-                "All panes: f | Views: w/s | Quit: q | Register: <enter>/r | Help: ?"
+                "All panes: f | Work: w | Quit: q | Register: <enter>/r | Help: ?"
             }
             Self::Sessions { all: true } => {
-                "Agents only: f | Views: w/s | Quit: q | Register: <enter>/r | Help: ?"
+                "Agents only: f | Work: w | Quit: q | Register: <enter>/r | Help: ?"
             }
             Self::Review => {
                 "Toggle mark: Space | Scroll: <c-d>/<c-u> | Pan: h/l | Reload: r | Full/since: c | Pending: Tab | Back: Esc | Quit: q | Help: ?"
@@ -96,12 +96,8 @@ impl Context {
             .map(theme::shortcut_line)
             .collect();
         let extras: &[&str] = match self {
-            Self::Work => &[
-                "Next attention item: Tab",
-                "Sessions: s",
-                "Quit (alternatives): Esc/<c-c>",
-            ],
-            Self::Sessions { .. } => &["Sessions: s", "Quit (alternatives): Esc/<c-c>"],
+            Self::Work => &["Next attention item: Tab", "Quit (alternatives): Esc/<c-c>"],
+            Self::Sessions { .. } => &["Quit (alternatives): Esc/<c-c>"],
             Self::Review => &["Quit (alternative): <c-c>"],
             _ => &[],
         };
@@ -312,6 +308,16 @@ mod tests {
             assert!(!text.contains("F1"));
             assert!(!text.contains("legacy alias"));
             assert!(!text.contains("Work: a"));
+            assert!(!text.contains("Views:"));
+            assert!(!context.hints().contains("Views:"));
+            assert_eq!(
+                text.matches("Sessions: s").count(),
+                usize::from(context == Context::Work)
+            );
+            assert_eq!(
+                text.matches("Work: w").count(),
+                usize::from(matches!(context, Context::Sessions { .. }))
+            );
             for hidden in ["j/k", "↑", "↓", "←", "→", "(arrows)"] {
                 assert!(!text.contains(hidden), "unexpected {hidden}: {text}");
                 assert!(!context.hints().contains(hidden));
