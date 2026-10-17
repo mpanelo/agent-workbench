@@ -246,6 +246,9 @@ The Rust workspace separates the engine (`workbench-core`) from the terminal
 interface (`workbench-tui`). Tests use temporary repositories; Git is required.
 Tests requiring a live tmux server are opt-in.
 
+See [status detection](docs/status-detection.md) for implementation details and
+testing, and the [roadmap](docs/roadmap.md) for open proposals.
+
 ## License
 
 [MIT](LICENSE).

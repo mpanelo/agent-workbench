@@ -54,29 +54,16 @@ ambiguous context is ignored, never guessed from the working directory.
 - `Stop` may trigger continuation, so only a matching `agent-turn-complete`
   notification marks completion. Native session/turn identity also makes
   session-only acknowledgements stable across scrolling and resizing.
-- Permission hooks are candidates, not proof of a human decision: other hooks
-  may auto-approve. Workbench requires a recognized visible dialog first.
-- Structured `request_user_input` questions retain bounded questions/options;
-  matching live dialog chrome confirms them. Invalid/rejected calls don't become
-  WAITING. Free-form answers are handled in Codex; Workbench doesn't store answers.
-- Answered questions clear through the matching tool callback. Interruptions,
-  session end, and final completion clear pending requests without claiming task
-  success. Subagent events and superseded turns cannot finish the root turn.
-- Escape at a Codex TUI approval dialog interrupts the turn; it isn't the same
-  event sequence as an app-server client declining an approval and continuing.
-- Codex has no approval-denial-resolved hook or permission tool-call ID. An
-  unrelated tool callback cannot clear waiting. After denial, recognized live
-  activity clears waiting; merely hiding the dialog by scrolling does not.
-  Until that evidence or another resolving callback arrives, waiting can persist.
-- Liveness is checked on every refresh. Missing/dead panes, replaced processes,
-  different tmux servers, and reused PIDs cannot reuse the signal. A quiet turn
-  does **not** time out after ten seconds. Signals expire after 24 hours without
-  a callback; a lost completion callback can leave RUNNING until newer evidence,
-  process exit, or expiry. This isn't a fully authoritative event stream.
+- Approval and structured question hooks require a recognized live dialog before
+  claiming human attention. Scrolling a confirmed request out of view does not
+  resolve it. Free-form answers are handled in Codex; Workbench does not store answers.
+- Hooks are observational: they cannot grant permissions or bypass the existing
+  approval shortcuts' exact-current-dialog safety check.
+- A quiet turn does not time out after ten seconds. Signals expire after 24 hours
+  without a callback. A lost completion callback can leave RUNNING until newer
+  evidence, process exit, or expiry; this is not a fully authoritative event stream.
 - Prose questions in an ordinary final response are finished turns, not native
   input requests. `request_user_input_async` in other clients isn't supported.
-- Existing approval shortcuts still require the exact current terminal dialog;
-  native question payloads cannot grant permissions or bypass that recheck.
 
 Callbacks return neutral `{}` and make no permission decisions, continuation
 requests, or agent input. They do not read transcripts, retain submitted prompts,
@@ -86,26 +73,31 @@ stored beside the registration file in `*.codex-signals.json`, with owner-only
 permissions. Pending content clears on resolution; old records are bounded and
 expire. Treat pending questions like private project data when backing up state.
 
+## Troubleshooting
+
+- If status stays `UNKNOWN`, check that both callback commands can find the
+  Workbench binary, use the same state file, and inherit the correct tmux context.
+  Verify `/hooks` trust and restart/resume Codex so `SessionStart` is observed.
+  Unsupported process layouts or missing callbacks leave terminal detection as
+  the fallback, which can be inconclusive when activity is hidden.
+- If RUNNING remains after a response, check the `notify` command and any wrapper.
+  `Stop` is not a substitute for the completion notification. Inspect the agent
+  pane before assuming a quiet turn or lost notification means the task finished.
+- If waiting persists after denying an approval, inspect the agent pane. The
+  tested integration lacks a denial-resolved hook; recognized resumed activity
+  or another resolving event must clear the request. Scrolling alone cannot.
+
+## Disable hooks
+
 To disable this integration, remove only Workbench's hook entries and its notify
 callback (preserving others), then restart Codex. Existing metadata can be removed
 with the agent stopped; terminal detection requires no setup.
 
+## Reference
+
+See [status detection](status-detection.md) for signal precedence, lifecycle
+transitions, identity validation, storage bounds, and developer tests.
+
 See the [official OpenAI hook guide](https://learn.chatgpt.com/docs/hooks) and
 [notification configuration](https://learn.chatgpt.com/docs/config-file/config-advanced#notifications)
 for Codex's hook trust and callback contracts.
-
-## Testing
-
-Unit tests cover transitions, stale ordering, interruption, continuation, prompt
-confirmation/resolution, storage limits, process ancestry, and stable completion
-acknowledgements. For an optional real-runtime smoke test:
-
-```sh
-cargo build --workspace
-python3 scripts/test-codex-signals.py
-```
-
-The script uses disposable configuration, its own tmux server and terminal, and a
-fake localhost Responses provider. It does not touch live panes or user settings,
-need authentication, or make paid model calls. Its trust bypass is restricted to
-the generated fixture; production setup must use `/hooks` instead.

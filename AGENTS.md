@@ -20,6 +20,9 @@ The product should make it easy to:
 
 The product should complement existing tools such as tmux, workmux, Git, editors, and coding agents rather than replace them.
 
+The practical benchmark is supervising four to six concurrent workspaces without
+remembering tmux window numbers or rediscovering which code was already reviewed.
+
 ## Architecture
 
 Use a Rust workspace.
@@ -365,12 +368,13 @@ Do not implement unless specifically requested:
 - UniFFI
 - mobile applications
 
-## Planning
+## Documentation
 
-Keep milestone history and feature proposals in the planning documents:
+Keep current usage in the [README](README.md), with focused supporting guides:
 
-- [v0 specification](docs/v0-spec.md)
-- [v1 ideas](docs/v1-ideas.md)
-- [v2 ideas](docs/v2-ideas.md)
+- [Codex hook setup and troubleshooting](docs/codex-hooks.md)
+- [Status detection internals and testing](docs/status-detection.md)
+- [Open roadmap proposals](docs/roadmap.md)
 
-These documents provide context, not authorization to begin unrequested work.
+Keep shipped behavior out of the backlog. Roadmap proposals provide context,
+not authorization to begin unrequested work. Historical plans remain in Git.
