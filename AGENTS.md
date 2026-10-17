@@ -366,6 +366,20 @@ When given a task:
    - tests performed
    - remaining limitations
 
+## Commit Messages
+
+Every commit must use this format:
+
+```text
+<Capitalized imperative verb> <specific change>
+
+<explanation of what changed and why>
+```
+
+Start the subject with a capitalized imperative verb and describe the specific
+change. Separate the subject from the body with a blank line. The body must
+explain what changed and why.
+
 ## Explicitly Out of Scope for v0
 
 Do not implement unless specifically requested:
