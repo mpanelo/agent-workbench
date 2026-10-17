@@ -119,15 +119,10 @@ impl Engine {
     /// Returns false outside tmux: the caller must restore its terminal before
     /// using `focus_work_item` to attach. Errors never fall back to attachment.
     pub async fn try_switch_work_item(&self, id: &str) -> Result<bool, ActionError> {
-        self.try_switch_work_item_in_context(id, inside_tmux())
-            .await
+        self.switch_in_context(id, inside_tmux()).await
     }
 
-    async fn try_switch_work_item_in_context(
-        &self,
-        id: &str,
-        inside: bool,
-    ) -> Result<bool, ActionError> {
+    async fn switch_in_context(&self, id: &str, inside: bool) -> Result<bool, ActionError> {
         if !inside {
             return Ok(false);
         }
@@ -256,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_exact_ids_and_reports_disappeared_panes() {
+    fn test_exact_targets() {
         assert_eq!(target_for(&item(), &snapshot()).unwrap(), "$1:@2.%14");
         assert!(matches!(
             target_for(&item(), &Snapshot::default()),
@@ -273,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn encodes_reply_bytes_literally_and_submits_exactly_once() {
+    fn test_literal_reply() {
         for input in [
             ";",
             "Enter",
@@ -294,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_multiline_control_and_oversized_replies() {
+    fn test_invalid_reply() {
         for input in ["", "  ", "yes\nno", "\r", "\t", "\x1b", "\0"] {
             assert!(validate_agent_input(input).is_err());
         }
@@ -304,7 +299,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_registration_fails_before_attempting_a_transport_action() {
+    async fn test_missing_item() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::new(directory.path().join("state.json"));
         assert!(matches!(
@@ -319,7 +314,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn transport_failure_and_stale_snapshot_preserve_the_registration_and_do_not_retry() {
+    async fn test_reply_failure() {
         use std::{fs, os::unix::fs::PermissionsExt};
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("fake-tmux");
@@ -426,12 +421,12 @@ esac
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn switches_inside_tmux_without_attaching_or_sending_input() {
+    async fn test_switch_client() {
         let fixture = ReplyFixture::new();
         assert!(
             fixture
                 .engine
-                .try_switch_work_item_in_context("ABC-123", true)
+                .switch_in_context("ABC-123", true)
                 .await
                 .unwrap()
         );
@@ -453,12 +448,12 @@ esac
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn outside_tmux_defers_attachment_without_invoking_transport() {
+    async fn test_deferred_attach() {
         let fixture = ReplyFixture::new();
         assert!(
             !fixture
                 .engine
-                .try_switch_work_item_in_context("ABC-123", false)
+                .switch_in_context("ABC-123", false)
                 .await
                 .unwrap()
         );
@@ -467,14 +462,11 @@ esac
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn failed_switch_preserves_registration_and_does_not_retry_or_attach() {
+    async fn test_switch_failure() {
         let fixture = ReplyFixture::new();
         std::fs::write(fixture.path("switch-failure"), "").unwrap();
         assert!(matches!(
-            fixture
-                .engine
-                .try_switch_work_item_in_context("ABC-123", true)
-                .await,
+            fixture.engine.switch_in_context("ABC-123", true).await,
             Err(ActionError::Transport(DiscoveryError::CommandFailed {
                 code: Some(34),
                 ..
@@ -499,22 +491,16 @@ esac
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn switch_revalidates_registration_and_pane_before_changing_focus() {
+    async fn test_switch_recheck() {
         let fixture = ReplyFixture::new();
         assert!(matches!(
-            fixture
-                .engine
-                .try_switch_work_item_in_context("missing", true)
-                .await,
+            fixture.engine.switch_in_context("missing", true).await,
             Err(ActionError::UnknownWorkItem(_))
         ));
         assert!(!fixture.path("log").exists());
         std::fs::write(fixture.path("snapshot"), "").unwrap();
         assert!(matches!(
-            fixture
-                .engine
-                .try_switch_work_item_in_context("ABC-123", true)
-                .await,
+            fixture.engine.switch_in_context("ABC-123", true).await,
             Err(ActionError::MissingPane { .. })
         ));
         assert!(!fixture.path("switch").exists());
@@ -523,7 +509,7 @@ esac
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn reply_text_and_one_enter_are_separate_commands_outside_the_paste_window() {
+    async fn test_submit_after_paste() {
         use std::fs;
         let fixture = ReplyFixture::new();
         let input = "yes λ🙂 Enter ; kill-server";
@@ -560,7 +546,7 @@ esac
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_changed_registration_or_disappearing_pane_after_text_delivery_never_gets_enter() {
+    async fn test_changed_reply_target() {
         use std::fs;
         for change in ["edit", "remap", "unregister", "pane", "discovery"] {
             let fixture = ReplyFixture::new();
@@ -611,7 +597,7 @@ esac
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn text_and_enter_failures_preserve_state_and_never_retry_input() {
+    async fn test_send_failures() {
         use std::fs;
         for stage in ["text", "submit"] {
             let fixture = ReplyFixture::new();
@@ -651,7 +637,7 @@ esac
 
     #[tokio::test]
     #[ignore = "requires tmux; creates and cleans up only its own isolated test server"]
-    async fn isolated_tmux_input_is_literal_and_missing_panes_are_safe() {
+    async fn test_tmux_input() {
         struct Server(std::path::PathBuf);
         impl Drop for Server {
             fn drop(&mut self) {

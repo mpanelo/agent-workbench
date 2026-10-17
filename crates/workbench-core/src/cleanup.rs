@@ -898,7 +898,7 @@ esac
     }
 
     #[tokio::test]
-    async fn preview_is_read_only_and_includes_every_pane_ignored_paths_and_retained_branch() {
+    async fn test_preview() {
         let fixture = Fixture::new();
         fs::write(fixture.tree.join(".env"), "private fixture data").unwrap();
         let before = fs::read(fixture.engine.store.state_path()).unwrap();
@@ -914,7 +914,7 @@ esac
     }
 
     #[tokio::test]
-    async fn cleanup_delegates_exactly_one_handle_without_force_and_keeps_branch_and_reviews() {
+    async fn test_remove_workspace() {
         let fixture = Fixture::new();
         fs::write(fixture.engine.store.review_path(), "retained history").unwrap();
         let preview = fixture.preview().await;
@@ -937,7 +937,7 @@ esac
     }
 
     #[tokio::test]
-    async fn dirty_staged_unstaged_untracked_and_locked_worktrees_block_before_removal() {
+    async fn test_dirty_worktrees() {
         for kind in ["unstaged", "staged", "untracked", "locked"] {
             let fixture = Fixture::new();
             match kind {
@@ -964,7 +964,7 @@ esac
     }
 
     #[tokio::test]
-    async fn main_detached_unmanaged_and_session_targets_are_rejected() {
+    async fn test_unsupported_targets() {
         let fixture = Fixture::new();
         let mut main = fixture.item.clone();
         main.workspace = fixture.repo.clone();
@@ -1031,7 +1031,7 @@ esac
     }
 
     #[tokio::test]
-    async fn protect_workbench_shared_registrations_and_panes_outside_the_worktree() {
+    async fn test_shared_targets() {
         let mut fixture = Fixture::new();
         fixture.engine.workmux.pane = Some("%702".into());
         assert!(
@@ -1087,8 +1087,7 @@ esac
     }
 
     #[tokio::test]
-    async fn confirmation_revalidates_dirty_changed_registration_branch_and_window_before_execution()
-     {
+    async fn test_confirm_recheck() {
         for change in [
             "dirty",
             "registration",
@@ -1141,7 +1140,7 @@ esac
     }
 
     #[tokio::test]
-    async fn failed_noop_and_partial_owner_cleanup_never_unregister_or_retry() {
+    async fn test_removal_failures() {
         for outcome in ["failure", "noop", "partial"] {
             let fixture = Fixture::new();
             let preview = fixture.preview().await;
@@ -1172,7 +1171,7 @@ esac
     }
 
     #[tokio::test]
-    async fn registry_lock_and_missing_commands_fail_before_destructive_work() {
+    async fn test_setup_failures() {
         let mut fixture = Fixture::new();
         let preview = fixture.preview().await;
         let lock = fixture.engine.store.lock().unwrap();
@@ -1193,7 +1192,7 @@ esac
     }
 
     #[tokio::test]
-    async fn replaced_directory_and_symlink_targets_cannot_reuse_an_approved_preview() {
+    async fn test_replaced_worktree() {
         let fixture = Fixture::new();
         let preview = fixture.preview().await;
         let original = fixture.root.join("original-task");
@@ -1220,7 +1219,7 @@ esac
     }
 
     #[test]
-    fn staging_unregister_does_not_remove_registration_until_commit() {
+    fn test_staged_unregister() {
         let fixture = Fixture::new();
         let before = fs::read(fixture.engine.store.state_path()).unwrap();
         let lock = fixture.engine.store.lock().unwrap();
@@ -1244,7 +1243,7 @@ esac
     }
 
     #[tokio::test]
-    async fn stale_branch_message_identifies_both_names_and_dirty_files() {
+    async fn test_branch_mismatch() {
         let mut fixture = Fixture::new();
         fixture.engine.unregister_work_item(&fixture.item).unwrap();
         fixture.item.branch = Some("feature-typo".into());
@@ -1274,7 +1273,7 @@ esac
     }
 
     #[test]
-    fn parsers_reject_truncation_ambiguity_unsafe_paths_and_conflicting_ownership() {
+    fn test_invalid_ownership() {
         assert!(nul_records(b"incomplete").is_err());
         assert!(paths(b"../outside\0").is_err());
         assert!(paths(b"/outside\0").is_err());
@@ -1296,7 +1295,7 @@ esac
     }
 
     #[tokio::test]
-    async fn command_timeouts_and_output_limits_are_actionable() {
+    async fn test_command_limits() {
         let client = WorkmuxClient {
             executable: "/bin/sleep".into(),
             limit: Duration::from_millis(20),

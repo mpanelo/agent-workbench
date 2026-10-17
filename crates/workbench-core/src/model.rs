@@ -83,7 +83,7 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_only_exact_agent_executables_not_titles_or_runtimes() {
+    fn test_agent_commands() {
         for command in [
             "codex",
             "claude",
@@ -115,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_view_prunes_empty_hierarchy_preserves_ids_order_and_raw_discovery() {
+    fn test_pruned_tree() {
         let window = Window {
             id: "@1".into(),
             index: 3,

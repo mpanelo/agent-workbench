@@ -605,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_evidence_excludes_drafts_banners_and_wrapping_but_changes_with_output() {
+    fn test_completion_evidence() {
         let screen = format!("• Completed the task λ🙂\nWorked for 9s • 1:15 PM\n{FOOTER}");
         let fingerprint = |screen: &str| {
             let pane = observation(screen);
@@ -652,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn common_codex_approvals_require_live_dialog_chrome() {
+    fn test_approval_chrome() {
         for title in [
             "Would you like to run the following command?",
             "Would you like to make the following edits?",
@@ -687,7 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn current_bottom_ui_wins_over_historical_approval_or_completion() {
+    fn test_current_dialog() {
         let screen = format!(
             "{APPROVAL}\nWorked for 18s • 7:08 PM\n• Working (5m 19s • esc to interrupt)\n└ Tip: Use /export.\n{FOOTER}"
         );
@@ -699,7 +699,7 @@ mod tests {
     }
 
     #[test]
-    fn active_turns_support_bulletless_and_rate_limit_layouts() {
+    fn test_activity_layouts() {
         // Reconstructed from the reported screenshot; no transcript contents.
         let screenshot = format!(
             "Browsing the web\nRan a command\nSearched the web\n\nWorking (55s • esc to interrupt)\n\n{LIMIT}\n"
@@ -727,7 +727,7 @@ mod tests {
     }
 
     #[test]
-    fn rate_limit_and_warning_banners_preserve_ready_composer_status() {
+    fn test_ready_banners() {
         let footer = FOOTER.replace("? for shortcuts", &format!("? for shortcuts    {WARNINGS}"));
         for (activity, expected) in [
             ("Working (55s • esc to interrupt)", AgentStatus::Running),
@@ -747,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn compaction_and_adjacent_queued_questions_are_active_not_waiting() {
+    fn test_compaction_queues() {
         for screen in [
             format!("{COMPACTING}\n{FOOTER}"),
             format!("{COMPACTING}\n{LIMIT}"),
@@ -783,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn punctuated_compaction_detail_preserves_the_live_timer() {
+    fn test_compaction_timer() {
         let compacting =
             "• Compacting context (31s • esc to interrupt)\n└ Making room to continue.";
         for footer in [
@@ -814,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn expanded_composer_uses_model_workspace_footer_without_shortcuts() {
+    fn test_expanded_composer() {
         for (activity, expected) in [
             ("• Working (8s • esc to interrupt)", AgentStatus::Running),
             ("Worked for 9s • 1:15 PM", AgentStatus::Complete),
@@ -852,7 +852,7 @@ mod tests {
     }
 
     #[test]
-    fn model_footer_requires_composer_and_recognizable_chrome() {
+    fn test_model_footer() {
         for footer in [
             "GPT-6.1-Sol high",
             "GPT-6.1-Sol high · Task",
@@ -900,7 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn activity_details_cannot_uncover_historical_or_malformed_timers() {
+    fn test_invalid_timers() {
         let working = "• Working (21s • esc to interrupt)";
         for middle in [
             "• Queued follow-up inputs\n? 0 questions\nshift+↵ to answer",
@@ -954,7 +954,7 @@ mod tests {
     }
 
     #[test]
-    fn scrolling_typing_and_timed_or_message_queues_preserve_live_activity() {
+    fn test_live_activity() {
         for detail in [
             "↓ Back to bottom · esc".to_owned(),
             "New activity · ↓ Back to bottom · esc".to_owned(),
@@ -984,7 +984,7 @@ mod tests {
     }
 
     #[test]
-    fn draft_and_queued_message_contents_never_supply_the_activity_timer() {
+    fn test_draft_timers() {
         for prefix in ["New output", "Worked for 3s"] {
             let draft = "› draft text\n• Working (3s • esc to interrupt)\nGPT-6.1-Sol high · ~/work · Task\ntab to queue message";
             assert_ne!(
@@ -1022,7 +1022,7 @@ mod tests {
     }
 
     #[test]
-    fn new_layouts_do_not_match_historical_quoted_truncated_or_malformed_activity() {
+    fn test_quoted_activity() {
         for screen in [
             format!("Working (55s • esc to interrupt)\nNew output\n{LIMIT}"),
             format!("Working (55s • esc to interrupt)\n{LIMIT}\nChoose a menu item"),
@@ -1069,7 +1069,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_ready_composer_and_legacy_context_footer_are_idle() {
+    fn test_ready_composer() {
         assert_eq!(infer(&observation(FOOTER)).0, AgentStatus::Idle);
         assert_eq!(
             infer(&observation("›\n  93% context left · ? for shortcuts\n")).0,
@@ -1088,7 +1088,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_dead_copy_mode_and_ambiguous_screens_are_unknown() {
+    fn test_unknown_screens() {
         for screen in [
             "",
             "done",
@@ -1114,7 +1114,7 @@ mod tests {
     }
 
     #[test]
-    fn only_waiting_and_complete_need_attention_and_all_labels_are_stable() {
+    fn test_attention_status() {
         for (status, label, attention) in [
             (AgentStatus::Running, "RUNNING", false),
             (AgentStatus::WaitingForInput, "WAITING_FOR_INPUT", true),
@@ -1128,7 +1128,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_context_is_bounded_unicode_safe_and_contains_only_the_current_dialog() {
+    fn test_approval_context() {
         let screen = format!("Private earlier conversation\n{APPROVAL}");
         let pane = observation(&screen);
         let preview = approval_prompt(&pane, infer(&pane).0).unwrap();
@@ -1169,7 +1169,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_retains_wrapped_reason_and_command_after_metadata() {
+    fn test_wrapped_command() {
         let screen = "Earlier unrelated terminal output\n\n  Would you like to run the following command?\n\n  Environment: local\n\n  Reason: May I create the unsigned commit for the staged Packer\n  removal? Git must write to shared metadata outside this workspace.\n\n  $ git -c commit.gpgsign=false commit -m \"Remove obsolete Packer\n  installation\"\n\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again for this command (p)\n  3. No, and tell Codex what to do differently (esc)\n\n  Press enter to confirm or esc to cancel\n";
         let pane = observation(screen);
         assert_eq!(infer(&pane).0, AgentStatus::WaitingForInput);
@@ -1186,7 +1186,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_retains_numbered_details_blank_lines_and_relative_command_indentation() {
+    fn test_command_indent() {
         let screen = "  Would you like to run the following command?\n\n  Reason: Check these cases.\n  1. Read-only inspection\n  2. Preserve all existing files\n\n  $ printf '%s\\n' \\\n      'λ🙂 value'\n\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)\nPress enter to confirm or esc to cancel\n";
         let pane = observation(screen);
         let prompt = approval_prompt(&pane, infer(&pane).0).unwrap();
@@ -1196,7 +1196,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_options_preserve_wrapping_selection_and_shortcuts_only_for_current_dialog() {
+    fn test_approval_options() {
         let screen = format!(
             "{APPROVAL}\nPrior output to exclude\n  Would you like to grant these permissions?\n\n  Reason: Access λ🙂 files\n\n  1. Yes, allow once (y)\n› 2. Yes, allow access to these folders (a)\n     Preserve the existing permissions and\n     include the λ🙂 workspace.\n  3. No, and tell Codex what to do differently (esc)\n\n  Press Enter to confirm or Esc to cancel\n"
         );
@@ -1211,7 +1211,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_option_budget_is_unicode_safe_and_missing_options_are_not_invented() {
+    fn test_option_limit() {
         let screen = APPROVAL.replace(
             "Yes, proceed (y)",
             &format!("Yes, {} (y)", "λ🙂".repeat(MAX_APPROVAL_OPTIONS_CHARS)),
@@ -1235,7 +1235,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_history_footer_preserves_visible_live_activity_from_scrolling_screenshot() {
+    fn test_history_activity() {
         assert_eq!(
             infer(&observation(SCROLLING_SCREEN)).0,
             AgentStatus::Running
@@ -1266,7 +1266,7 @@ mod tests {
     }
 
     #[test]
-    fn history_footer_does_not_turn_hidden_historical_or_malformed_activity_into_a_status() {
+    fn test_invalid_history() {
         for content in [
             "Historical text only",
             "Worked for 3s",
@@ -1308,7 +1308,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn refresh_replaces_evidence_deduplicates_panes_and_isolates_failures() {
+    async fn test_refresh() {
         use crate::{Pane, Session, Window, WorkItem, WorkItemKind};
         use std::{fs, os::unix::fs::PermissionsExt};
         let directory = tempfile::tempdir().unwrap();
@@ -1461,7 +1461,7 @@ cat '{}/'$5
     }
 
     #[tokio::test]
-    async fn observation_with_no_items_does_not_need_a_transport() {
+    async fn test_empty_registry() {
         let directory = tempfile::tempdir().unwrap();
         let mut engine = Engine::new(directory.path().join("not-created.json"));
         engine.tmux.executable = "nonexistent-tmux".into();
@@ -1478,7 +1478,7 @@ cat '{}/'$5
     #[cfg(unix)]
     #[tokio::test]
     #[ignore = "requires tmux; replays Codex UI fixtures on its own isolated server"]
-    async fn isolated_tmux_observations_handle_copy_mode_and_disappearance() {
+    async fn test_tmux_observation() {
         use crate::{WorkItem, WorkItemKind};
         use std::{fs, process::Command};
         struct Server(std::path::PathBuf);

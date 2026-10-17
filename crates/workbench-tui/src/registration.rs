@@ -409,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn short_description_caps_typing_and_paste_without_partial_changes() {
+    fn test_description_limit() {
         let mut form = ready();
         form.selected = 1;
         form.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
@@ -441,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn short_description_label_counter_and_save_validation_are_visible() {
+    fn test_description_counter() {
         let mut form = ready();
         form.selected = 1;
         for (width, height) in [(120, 24), (80, 12)] {
@@ -468,7 +468,7 @@ mod tests {
     }
 
     #[test]
-    fn confirming_defaults_saves_the_bound_pane_and_disables_repeat_submission() {
+    fn test_save_defaults() {
         let mut form = ready();
         assert!(form.fields[1].is_empty());
         let RegistrationIntent::Save(saved) = key(&mut form, KeyCode::Enter) else {
@@ -491,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn ready_form_has_no_git_hint_and_keeps_the_suggested_id() {
+    fn test_suggested_id() {
         let form = ready();
         let text = screen(&form, 80, 14);
         assert!(!text.contains("Detected Git target"), "{text}");
@@ -505,7 +505,7 @@ mod tests {
     }
 
     #[test]
-    fn only_identity_fields_are_editable_and_unicode_safe() {
+    fn test_editable_fields() {
         let mut form = ready();
         form.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
         form.paste("ID λ🙂");
@@ -542,7 +542,7 @@ mod tests {
     }
 
     #[test]
-    fn save_errors_preserve_identity_edits_and_detected_target_for_retry() {
+    fn test_save_failure() {
         let mut form = ready();
         form.fields[0] = "edited-id".into();
         form.fields[1] = "edited description".into();
@@ -563,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_loading_and_stale_results_cannot_retarget_registration() {
+    fn test_stale_results() {
         let mut form = RegistrationUi::default();
         let old = form.open("%14".into());
         assert!(screen(&form, 80, 12).contains("Reading pane"));
@@ -584,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn form_renders_defaults_active_field_and_escaped_metadata_at_small_sizes() {
+    fn test_form() {
         let mut form = ready();
         let wide = screen(&form, 120, 24);
         for text in [
@@ -609,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    fn registration_shortcuts_truncate_on_one_row_at_80_columns() {
+    fn test_footer() {
         let form = ready();
         let text = screen(&form, 80, 24);
         let rows: Vec<_> = text.lines().map(str::trim_end).collect();
@@ -620,7 +620,7 @@ mod tests {
     }
 
     #[test]
-    fn field_cursors_survive_switches_failed_paste_and_render_at_the_cursor() {
+    fn test_field_cursors() {
         let mut form = ready();
         form.fields[0] = "aλ🙂z".into();
         key(&mut form, KeyCode::Left);
@@ -659,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    fn registration_uses_theme_for_active_fields_inactive_fields_and_errors() {
+    fn test_field_colors() {
         let mut form = ready();
         let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
         terminal.draw(|frame| form.render(frame)).unwrap();
@@ -678,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    fn read_only_summary_hides_duplicate_repository_and_labels_detached_head() {
+    fn test_git_summary() {
         let mut form = ready();
         let item = &mut form.draft.as_mut().unwrap().item;
         item.repository = item.workspace.clone();
@@ -695,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_metadata_blocks_saving_and_shows_recovery_instructions() {
+    fn test_git_failure() {
         let mut form = RegistrationUi::default();
         let ticket = form.open("%14".into());
         form.finish(
@@ -717,7 +717,7 @@ mod tests {
     }
 
     #[test]
-    fn detected_metadata_wraps_without_losing_spaces_or_overlapping_fields() {
+    fn test_wrapped_metadata() {
         let values = vec![
             "Workspace: /work/λ linked task".into(),
             "Branch: feature/task".into(),

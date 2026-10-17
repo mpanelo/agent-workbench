@@ -340,7 +340,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn observation_preserves_screen_and_requires_matching_complete_metadata() {
+    fn test_pane_observation() {
         let text = "\x1ecodex\x1f0\x1f0\x1e\n› λ🙂\n\x1ecodex\x1f0\x1f0\x1e\n";
         let observation = parse_observation(text).unwrap();
         assert_eq!(observation.screen, "› λ🙂\n");
@@ -374,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn groups_sessions_windows_and_panes_in_display_order() {
+    fn test_discovery_order() {
         let text = [
             row([
                 "$2",
@@ -436,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_unicode_spaces_tabs_newlines_and_backslashes() {
+    fn test_escaped_metadata() {
         let title = "⠴ Agent\tworking\nsecond line \\ #{literal}";
         let path = "/work/my repo\twith tab\nand newline";
         let snapshot = parse_snapshot(&row([
@@ -453,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn absent_optional_metadata_and_empty_title_are_supported() {
+    fn test_optional_metadata() {
         let snapshot = parse_snapshot(&row([
             "$1", "main", "@1", "0", "shell", "%1", "0", "", "", "",
         ]))
@@ -465,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn linked_windows_remain_visible_in_each_session() {
+    fn test_linked_windows() {
         let text = [
             sample(),
             row([
@@ -492,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_snapshot_drops_disappeared_panes() {
+    fn test_pane_removal() {
         let initial = parse_snapshot(
             &[
                 sample(),
@@ -519,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_malformed_fields_ids_indices_and_duplicate_panes() {
+    fn test_invalid_records() {
         for text in [
             "bad\x1e\n".to_owned(),
             sample().replace("$1", "bad"),
@@ -544,7 +544,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn interprets_command_failure_and_invalid_utf8() {
+    fn test_command_failures() {
         use std::os::unix::process::ExitStatusExt;
         let output = Output {
             status: std::process::ExitStatus::from_raw(256),
@@ -566,7 +566,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_executable_returns_actionable_error() {
+    async fn test_missing_command() {
         let mut command = Command::new("/nonexistent/agent-workbench-test-tmux");
         let error = run_command(&mut command, COMMAND_TIMEOUT)
             .await

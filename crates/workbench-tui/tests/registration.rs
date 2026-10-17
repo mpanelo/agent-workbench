@@ -24,7 +24,7 @@ fn register(path: &std::path::Path, id: &str, kind: &str, pane: &str) -> std::pr
 }
 
 #[test]
-fn registrations_survive_independent_processes_without_tmux_or_a_terminal() {
+fn test_registration_roundtrip() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("nested/work-items.json");
     for (id, kind, pane) in [
@@ -86,7 +86,7 @@ fn registrations_survive_independent_processes_without_tmux_or_a_terminal() {
 }
 
 #[test]
-fn corrupt_state_and_invalid_registration_exit_with_errors_without_losing_data() {
+fn test_invalid_registration() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("items.json");
     assert!(
@@ -102,7 +102,7 @@ fn corrupt_state_and_invalid_registration_exit_with_errors_without_losing_data()
 }
 
 #[test]
-fn short_description_limit_and_removed_flag_rejection_preserve_saved_data() {
+fn test_description_flag() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("items.json");
     let attempt = |id: &str, flag: &str, description: &str| {

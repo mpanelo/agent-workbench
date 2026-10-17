@@ -243,7 +243,7 @@ mod tests {
     use std::fs;
 
     #[tokio::test]
-    async fn renamed_items_restore_reviews_reject_old_sessions_and_keep_workspace_untouched() {
+    async fn test_renamed_item() {
         let (dir, engine) = fixture();
         let source = dir.path().join("workspace/source.txt");
         fs::write(&source, "reviewed code\n").unwrap();
@@ -292,7 +292,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn marks_survive_restart_reload_and_unmark_without_changing_registrations() {
+    async fn test_saved_marks() {
         let (dir, engine) = fixture();
         let workspace = dir.path().join("workspace");
         fs::write(workspace.join("source.txt"), "review this\n").unwrap();
@@ -340,7 +340,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reviewed_snapshot_is_the_seen_capture_not_unseen_new_agent_edits() {
+    async fn test_seen_snapshot() {
         let (dir, engine) = fixture();
         let path = Path::new("source.txt");
         let working = dir.path().join("workspace/source.txt");
@@ -366,7 +366,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn state_is_isolated_by_item_workspace_and_resolved_base_not_ref_spelling() {
+    async fn test_review_contexts() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         let base = git(&root, &["rev-parse", "HEAD"]).trim().to_owned();
@@ -423,7 +423,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn binary_rename_deletion_and_unicode_snapshots_are_durable() {
+    async fn test_file_types() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         fs::write(root.join("binary"), b"first\0binary change").unwrap();
@@ -462,7 +462,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stale_sessions_and_independent_engines_merge_file_marks() {
+    async fn test_concurrent_marks() {
         let (dir, first) = fixture();
         fs::write(dir.path().join("workspace/source.txt"), "change\n").unwrap();
         fs::write(dir.path().join("workspace/other.txt"), "new\n").unwrap();
@@ -486,7 +486,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn corrupt_busy_and_write_failures_preserve_disk_and_in_memory_marks() {
+    async fn test_save_errors() {
         let (dir, engine) = fixture();
         fs::write(dir.path().join("workspace/source.txt"), "change\n").unwrap();
         let path = Path::new("source.txt");
@@ -530,7 +530,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn independent_process_restores_review_snapshot() {
+    async fn test_process_restore() {
         // Child invocation of this exact test is a separate reader process.
         const STATE_ENV: &str = "WORKBENCH_REVIEW_CHILD_STATE";
         if let Some(state) = std::env::var_os(STATE_ENV) {
@@ -547,7 +547,7 @@ mod tests {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "review::tests::independent_process_restores_review_snapshot",
+                "review::tests::test_process_restore",
                 "--nocapture",
             ])
             .env(STATE_ENV, dir.path().join("items.json"))

@@ -740,7 +740,7 @@ mod tests {
         .unwrap()
     }
     #[test]
-    fn stop_continuation_is_not_completion_and_quiet_turns_remain_running() {
+    fn test_stop_continuation() {
         let mut records = vec![active()];
         for stamp in [3, 15_000_000] {
             transition(&mut records, binding(), event("Stop", "turn1"), stamp);
@@ -762,7 +762,7 @@ mod tests {
         assert_eq!(records[0].phase, Phase::Complete);
     }
     #[test]
-    fn scroll_copy_mode_and_multiline_drafts_do_not_replace_lifecycle_status() {
+    fn test_viewport_changes() {
         for screen in [
             None,
             Some("old history"),
@@ -780,7 +780,7 @@ mod tests {
         }
     }
     #[test]
-    fn completion_identity_and_acknowledgement_survive_viewport_changes() {
+    fn test_completion_identity() {
         let mut records = vec![active()];
         transition(&mut records, binding(), event("Complete", "turn1"), 3);
         let mut observed = state(AgentStatus::Unknown);
@@ -810,7 +810,7 @@ mod tests {
         assert_eq!(tracker.observe(&[observed]).len(), 1);
     }
     #[test]
-    fn late_events_cannot_resurrect_old_turns_or_overwrite_newer_callbacks() {
+    fn test_late_events() {
         let mut records = vec![active()];
         transition(
             &mut records,
@@ -827,7 +827,7 @@ mod tests {
         assert_eq!(records[0].phase, Phase::Running);
     }
     #[test]
-    fn session_changes_and_process_restarts_do_not_adopt_delayed_completions() {
+    fn test_session_changes() {
         let mut records = vec![active()];
         let mut start = event("SessionStart", "");
         start.session = "new-session".into();
@@ -849,7 +849,7 @@ mod tests {
         assert_eq!(records.len(), 2);
     }
     #[test]
-    fn interruptions_and_session_end_clear_pending_without_implying_success() {
+    fn test_interruption() {
         for name in ["Interrupt", "SessionEnd"] {
             let mut records = vec![active()];
             transition(&mut records, binding(), question_event(), 3);
@@ -864,7 +864,7 @@ mod tests {
         }
     }
     #[test]
-    fn permission_hooks_need_confirmation_and_auto_approval_never_creates_attention() {
+    fn test_permission_hooks() {
         let mut records = vec![active()];
         transition(
             &mut records,
@@ -879,7 +879,7 @@ mod tests {
         assert!(!records[0].pending.as_ref().unwrap().confirmed);
     }
     #[test]
-    fn confirmed_approval_survives_hidden_ui_but_live_resumed_activity_resolves_denial() {
+    fn test_hidden_approval() {
         let mut records = vec![active()];
         transition(
             &mut records,
@@ -903,7 +903,7 @@ mod tests {
         assert!(records[0].pending.is_none());
     }
     #[test]
-    fn structured_options_require_current_dialog_and_resolve_only_matching_tool() {
+    fn test_question_options() {
         let mut records = vec![active()];
         transition(&mut records, binding(), question_event(), 3);
         let mut observed = state(AgentStatus::Unknown);
@@ -931,7 +931,7 @@ mod tests {
         assert!(records[0].pending.is_none());
     }
     #[test]
-    fn multiple_questions_retain_all_options_and_never_store_answers() {
+    fn test_question_answers() {
         let mut question = question_event();
         question.questions.push(Question {
             text: "Which files?".into(),
@@ -954,7 +954,7 @@ mod tests {
         assert!(!serde_json::to_string(&records).unwrap().contains("secret"));
     }
     #[test]
-    fn unrelated_post_tool_cannot_clear_a_permission_candidate_without_a_call_id() {
+    fn test_unrelated_tool() {
         let mut records = vec![active()];
         transition(
             &mut records,
@@ -971,7 +971,7 @@ mod tests {
         assert_eq!(observed.status, AgentStatus::WaitingForInput);
     }
     #[test]
-    fn unsupported_subagents_and_malformed_payloads_are_ignored() {
+    fn test_invalid_payloads() {
         for payload in [
             "garbage",
             "{}",
@@ -993,7 +993,7 @@ mod tests {
         assert!(complete.questions.is_empty());
     }
     #[test]
-    fn permission_mode_is_not_collaboration_mode_and_invalid_options_are_ignored() {
+    fn test_permission_mode() {
         let valid = serde_json::json!({"session_id":"s","turn_id":"t","hook_event_name":"PreToolUse",
             "tool_name":"request_user_input","permission_mode":"default","tool_input":{"questions":[
             {"id":"q","question":"Which?","options":[{"label":"A","description":"First"}]}]}});
@@ -1016,7 +1016,7 @@ mod tests {
         );
     }
     #[test]
-    fn binding_requires_exact_process_ancestry_not_workspace_or_inherited_pane_alone() {
+    fn test_process_binding() {
         let table = parse_processes(
             "101 1 Sat Oct 3 10:00:00 2026 zsh\n102 101 Sat Oct 3 10:00:01 2026 /bin/codex\n103 102 Sat Oct 3 10:00:02 2026 sh\n104 103 Sat Oct 3 10:00:03 2026 /bin/workbench\n105 1 Sat Oct 3 10:00:04 2026 /bin/codex",
         );
@@ -1026,7 +1026,7 @@ mod tests {
         assert!(root_process(&table, 101, 101).is_none());
     }
     #[test]
-    fn storage_is_bounded_private_and_recovers_across_engine_instances() {
+    fn test_signal_storage() {
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path().join("items.json");
         update(&state, |records| records.push(active())).unwrap();
@@ -1049,7 +1049,7 @@ mod tests {
         assert!(update(&state, |_| {}).is_err()); // Never silently erase corruption.
     }
     #[test]
-    fn expiry_and_record_limits_prevent_permanent_or_unbounded_state() {
+    fn test_signal_expiry() {
         let mut records = vec![active()];
         transition(
             &mut records,

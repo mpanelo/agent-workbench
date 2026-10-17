@@ -471,7 +471,7 @@ mod tests {
     use workbench_core::{AgentStatus, PaneAvailability, WorkItem, WorkItemKind};
 
     #[test]
-    fn successful_focus_clears_notices_but_failures_remain_visible() {
+    fn test_focus_result() {
         let mut interaction = Interaction {
             selected_id: Some("ABC-123".into()),
             message: Some("An old notice".into()),
@@ -499,7 +499,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_selection_survives_refresh_and_skips_linked_duplicates() {
+    fn test_pane_selection() {
         use workbench_core::{Pane, Session, Window};
         let mut snapshot = Snapshot {
             sessions: vec![Session {
@@ -575,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn response_bar_binds_approval_and_rejection_without_opening_a_composer() {
+    fn test_response_choices() {
         for (key, decision) in [
             ('y', ApprovalDecision::ApproveOnce),
             ('n', ApprovalDecision::RejectAndReply),
@@ -602,7 +602,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_or_missing_requests_disable_the_bar_until_it_is_reopened() {
+    fn test_changed_request() {
         let original = response_items();
         for field in 0..4 {
             let mut interaction = Interaction::default();
@@ -638,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_or_unsupported_prompts_keep_the_direct_reply_flow() {
+    fn test_plain_reply() {
         let mut states = response_items();
         for status in [
             AgentStatus::Complete,
@@ -657,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_opens_an_empty_reply_for_the_captured_item_without_sending_a_decision() {
+    fn test_captured_reply() {
         let states = response_items();
         let mut interaction = Interaction::default();
         interaction.sync(&states);
@@ -673,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_only_prompts_do_not_offer_an_unsupported_rejection() {
+    fn test_approval_only() {
         let mut states = response_items();
         states[0].attention_prompt = Some(states[0].attention_prompt.as_ref().unwrap().replace(
             "No, and tell Codex what to do differently",
@@ -694,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_feedback_has_immediate_acknowledgement_and_clock_driven_expiry() {
+    fn test_approval_feedback() {
         let request = approval_request(ApprovalDecision::ApproveOnce);
         let now = Instant::now();
         let mut interaction = Interaction {
@@ -735,7 +735,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_or_interrupted_approvals_never_celebrate_or_expire() {
+    fn test_approval_failure() {
         let request = approval_request(ApprovalDecision::ApproveOnce);
         let now = Instant::now();
         let mut interaction = Interaction::default();
@@ -776,7 +776,7 @@ mod tests {
     }
 
     #[test]
-    fn rejection_keeps_its_existing_reply_flow_without_approval_success_feedback() {
+    fn test_rejection_reply() {
         let mut interaction = Interaction::default();
         let approve = approval_request(ApprovalDecision::ApproveOnce);
         interaction.finish_approval(&approve, Ok(()));
@@ -791,7 +791,7 @@ mod tests {
     }
 
     #[test]
-    fn selection_is_by_id_and_survives_reordering_and_missing_items() {
+    fn test_item_selection() {
         let mut interaction = Interaction::default();
         interaction.sync(&items(&["A", "B", "C"]));
         interaction.move_selection(&items(&["A", "B", "C"]), 1);
@@ -806,7 +806,7 @@ mod tests {
     }
 
     #[test]
-    fn draft_target_is_not_changed_by_selection_or_refresh() {
+    fn test_draft_target() {
         let mut interaction = Interaction::default();
         interaction.sync(&items(&["A", "B"]));
         interaction.begin_reply(&items(&["A", "B"]));
@@ -816,7 +816,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_status_does_not_create_attention_items() {
+    fn test_unknown_status() {
         let mut interaction = Interaction::default();
         interaction.sync(&items(&["A", "B"]));
         interaction.next_attention(&items(&["A", "B"]));
@@ -826,7 +826,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_cycles_waiting_and_completed_items_only() {
+    fn test_next_attention() {
         let mut states = items(&["A", "B", "C", "D", "E"]);
         states[0].status = AgentStatus::Running;
         states[1].status = AgentStatus::WaitingForInput;
@@ -841,7 +841,7 @@ mod tests {
     }
 
     #[test]
-    fn unicode_editing_and_paste_preserve_text_and_reject_multiline_atomically() {
+    fn test_edit_input() {
         let mut draft = Draft {
             item_id: "A".into(),
             text: String::new(),
@@ -870,7 +870,7 @@ mod tests {
     }
 
     #[test]
-    fn arrows_insert_paste_and_backspace_at_utf8_boundaries() {
+    fn test_unicode_cursor() {
         let mut draft = Draft {
             item_id: "A".into(),
             text: "aλ🙂z".into(),
@@ -906,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    fn rejected_input_and_modified_arrows_preserve_cursor_and_clear_resets_it() {
+    fn test_invalid_input() {
         let mut draft = Draft {
             item_id: "A".into(),
             text: "λ🙂".into(),

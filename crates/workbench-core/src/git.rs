@@ -609,7 +609,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn parses_nul_names_with_rename_unicode_controls_and_literal_pathspecs() {
+    fn test_name_parsing() {
         let files = parse_names(b"M\0:(glob)*\0R100\0old\tname\0new\nname\0A\0\xce\xbb\0").unwrap();
         assert_eq!(files[0].path, Path::new(":(glob)*"));
         assert_eq!(files[1].path, Path::new("new\nname"));
@@ -629,7 +629,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn counts_only_hunk_lines_including_header_like_content_and_binary_exclusions() {
+    fn test_hunk_counts() {
         assert_eq!(
             patch_counts(
                 "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1,2 @@\n---old text\n+++new text\n+second\n\\ No newline at end of file\n"
@@ -647,7 +647,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn captures_staged_unstaged_untracked_deleted_renamed_and_binary_without_writes() {
+    async fn test_diff_changes() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         fs::write(root.join("source.txt"), "one\nnew\n").unwrap();
@@ -710,7 +710,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn explicit_base_includes_committed_changes_and_default_head_does_not() {
+    async fn test_explicit_base() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         let base = git(&root, &["rev-parse", "HEAD"]).trim().to_owned();
@@ -732,7 +732,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn deleted_from_index_and_recreated_untracked_content_are_both_visible() {
+    async fn test_recreated_file() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         git(&root, &["rm", "--cached", "--", "source.txt"]);
@@ -745,7 +745,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn registered_workspace_not_repository_is_used_and_linked_worktrees_work() {
+    async fn test_worktree_diff() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         let linked = dir.path().join("linked");
@@ -764,8 +764,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn errors_are_actionable_for_unknown_missing_non_git_nested_unborn_and_conflicted_workspaces()
-     {
+    async fn test_workspace_errors() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         assert!(matches!(
@@ -811,7 +810,7 @@ pub(crate) mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn symlinks_show_targets_without_reading_external_content_and_helpers_are_disabled() {
+    async fn test_symlink_diff() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         fs::write(dir.path().join("outside"), "PRIVATE-OUTSIDE-CONTENT").unwrap();
@@ -836,7 +835,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn bounded_capture_never_silently_returns_a_partial_diff() {
+    async fn test_output_limit() {
         assert!(matches!(
             read_bounded(b"123456".as_slice(), 5).await,
             Err(GitError::TooLarge)
@@ -855,7 +854,7 @@ pub(crate) mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn missing_executable_and_slow_commands_return_errors() {
+    async fn test_command_errors() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let missing = GitClient {

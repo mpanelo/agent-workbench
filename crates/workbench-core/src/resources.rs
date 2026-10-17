@@ -21,7 +21,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn failed_access_is_not_evidence_of_deletion() {
+    fn test_access_errors() {
         assert_eq!(classify(Ok(true)), WorkspaceAvailability::Present);
         assert_eq!(classify(Ok(false)), WorkspaceAvailability::Unavailable);
         assert_eq!(
@@ -42,7 +42,7 @@ mod tests {
     }
 
     #[test]
-    fn directory_removal_and_restoration_are_observed_without_recreating_it() {
+    fn test_directory_lifecycle() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("workspace");
         assert_eq!(
@@ -79,7 +79,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn symlinks_follow_the_workspace_target() {
+    fn test_symlink_target() {
         let root = tempfile::tempdir().unwrap();
         let target = root.path().join("target");
         let link = root.path().join("workspace");

@@ -287,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn choices_capture_the_original_target_without_retrying() {
+    fn test_captured_target() {
         for code in ['u', 'c'] {
             let original = state();
             let mut menu = menu();
@@ -316,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_and_unapproved_keys_never_choose_an_action() {
+    fn test_inactive_keys() {
         let mut menu = menu();
         for code in [
             KeyCode::Enter,
@@ -359,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn activity_prompt_and_resource_changes_do_not_retarget_or_disable_actions() {
+    fn test_status_changes() {
         for status in [
             AgentStatus::Running,
             AgentStatus::WaitingForInput,
@@ -384,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_or_removed_registrations_latch_until_cancel_and_reopen() {
+    fn test_changed_target() {
         for change in 0..5 {
             let mut menu = menu();
             let mut observed = state();
@@ -419,7 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_load_pauses_actions_without_inventing_removal() {
+    fn test_load_failure() {
         let mut menu = menu();
         menu.observe(None);
         assert!(screen(&menu, 100, 24).contains("Registration check unavailable."));
@@ -438,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn popup_shows_scope_context_and_menu_only_hints_at_normal_and_small_sizes() {
+    fn test_popup() {
         let menu = menu();
         let text = screen(&menu, 100, 24);
         for expected in [
@@ -478,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn unregister_explanation_wraps_in_its_own_column_without_hiding_other_controls() {
+    fn test_wrapped_description() {
         let menu = menu();
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         terminal.draw(|frame| menu.render(frame)).unwrap();
@@ -502,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn blocked_popup_keeps_specific_warnings_and_hides_action_shortcuts() {
+    fn test_blocked_popup() {
         for unavailable in [false, true] {
             let mut menu = menu();
             menu.observe(if unavailable { None } else { Some(&[]) });
@@ -526,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_unregister_locks_the_popup_until_completion_and_shows_failures_in_place() {
+    fn test_unregister() {
         let mut menu = menu();
         let Intent::Unregister(target) = menu.key(key(KeyCode::Char('u'))) else {
             panic!("u must unregister without Enter")

@@ -338,6 +338,15 @@ External command invocation should be structured so parsing and business logic c
 
 ## Code Quality
 
+Use Rust's `std` and `core` code and tests as style references: clear APIs,
+straightforward control flow, small focused helpers, and direct assertions.
+
+Keep function and test names short, descriptive, and in `snake_case`. Let the
+module or type provide context instead of repeating it in every name. Name tests
+for the operation and relevant case, not a sentence listing every assertion.
+Put detailed explanations in the test body or comments. Do not replace long
+names with cryptic abbreviations or add compatibility aliases when renaming.
+
 Before completing a task, run:
 
 ```bash

@@ -663,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn sessions_defaults_to_agents_and_all_mode_recovers_hidden_panes() {
+    fn test_agent_filter() {
         let mut snapshot = snapshot();
         let mut shell = snapshot.sessions[0].windows[0].panes[0].clone();
         shell.id = "%15".into();
@@ -725,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn sessions_remove_repeated_ancestor_context_but_keep_meaningful_titles() {
+    fn test_pane_titles() {
         let window = " nvim-v0-12";
         for (title, expected) in [
             (
@@ -778,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_sessions_omit_repeated_titles_and_keep_duplicate_panes_selectable() {
+    fn test_duplicate_panes() {
         let mut snapshot = snapshot();
         let pane = &mut snapshot.sessions[0].windows[0].panes[0];
         pane.title = "codex".into();
@@ -818,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn sessions_show_registration_and_keep_selected_panes_visible() {
+    fn test_pane_selection() {
         let mut snapshot = snapshot();
         let mut later = snapshot.sessions[0].windows[0].panes[0].clone();
         later.id = "%15".into();
@@ -920,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn home_paths_are_abbreviated_only_at_directory_boundaries() {
+    fn test_home_paths() {
         let home = Some(Path::new("/Users/person"));
         for (path, expected) in [
             ("/Users/person", "~"),
@@ -954,7 +954,7 @@ mod tests {
     }
 
     #[test]
-    fn shortcut_footers_use_one_row_with_overflow_and_help_at_80_columns() {
+    fn test_footer() {
         let state = AppState::default();
         let text = work_screen(&state, 80, 10, &mut 0);
         assert_eq!(
@@ -970,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn unified_work_shows_every_item_attention_flags_and_selected_details() {
+    fn test_work_details() {
         let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         waiting.status = AgentStatus::WaitingForInput;
         waiting.attention_prompt = Some("Would you like to run the following command?\n$ cargo test -- λ🙂\n\nOptions:\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n  3. No, and tell Codex what to do differently (esc)".into());
@@ -1038,7 +1038,7 @@ mod tests {
     }
 
     #[test]
-    fn full_reason_and_command_render_when_the_viewport_has_room_but_do_not_scroll() {
+    fn test_static_prompt() {
         let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         waiting.status = AgentStatus::WaitingForInput;
         waiting.attention_prompt = Some(format!(
@@ -1090,7 +1090,7 @@ mod tests {
     }
 
     #[test]
-    fn work_shows_options_only_for_the_selected_waiting_item_and_keeps_reply_editor() {
+    fn test_selected_prompt() {
         let states = ["A", "B"].into_iter().map(|id| {
             let mut state = registered(PaneAvailability::Present, WorkItemKind::Implementation);
             state.item.id = id.into();
@@ -1138,7 +1138,7 @@ mod tests {
     }
 
     #[test]
-    fn work_metadata_uses_distinct_label_value_and_type_colors_without_changing_text() {
+    fn test_metadata_colors() {
         for (kind, label, color) in [
             (WorkItemKind::Implementation, "Build", theme::BLUE),
             (WorkItemKind::ExternalReview, "Review", theme::PINK),
@@ -1199,7 +1199,7 @@ mod tests {
     }
 
     #[test]
-    fn response_bar_replaces_only_the_footer_and_leaves_the_request_viewport_intact() {
+    fn test_response_bar() {
         let (state, _) = approval_fixture();
         for (width, height) in [(120, 30), (80, 24), (40, 14), (1, 1), (0, 1)] {
             let mut interaction = Interaction::default();
@@ -1244,7 +1244,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_response_bar_shows_recovery_in_the_footer_without_overlaying_the_prompt() {
+    fn test_changed_response() {
         let (mut state, _) = approval_fixture();
         let mut interaction = Interaction::default();
         interaction.sync(state.items());
@@ -1273,7 +1273,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_feedback_is_inline_green_and_does_not_move_rows_or_fake_running() {
+    fn test_approval_feedback() {
         let (state, request) = approval_fixture();
         let mut interaction = Interaction::default();
         interaction.sync(state.items());
@@ -1328,7 +1328,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_feedback_stays_with_its_item_and_fits_narrow_terminals() {
+    fn test_narrow_feedback() {
         let (mut state, request) = approval_fixture();
         let mut interaction = Interaction::default();
         interaction.sync(state.items());
@@ -1385,7 +1385,7 @@ mod tests {
     }
 
     #[test]
-    fn item_views_keep_status_colors_under_selection_and_style_prompt_options() {
+    fn test_status_colors() {
         let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         waiting.status = AgentStatus::WaitingForInput;
         waiting.attention_prompt = Some("Question\nReason: permission needed\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, cancel (esc)".into());
@@ -1424,7 +1424,7 @@ mod tests {
     }
 
     #[test]
-    fn sessions_selection_metadata_and_errors_use_shared_theme() {
+    fn test_session_colors() {
         let state = AppState::from_refresh(Ok(snapshot()), Ok(vec![]));
         let mut interaction = Interaction::default();
         interaction.sync_panes(&snapshot());
@@ -1452,7 +1452,7 @@ mod tests {
     }
 
     #[test]
-    fn work_loading_empty_unknown_and_errors_do_not_claim_every_agent_is_idle() {
+    fn test_work_states() {
         assert!(work_screen(&AppState::default(), 120, 12, &mut 0).contains("Loading work items"));
         let empty = AppState::from_refresh(Ok(Snapshot::default()), Ok(vec![]));
         assert!(work_screen(&empty, 120, 12, &mut 0).contains("No work items registered"));
@@ -1483,7 +1483,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_wrapping_preserves_unicode_and_escapes_controls_without_breaking_scroll_rows() {
+    fn test_prompt_wrapping() {
         let prompt = "λ🙂1234567890界text";
         let mut lines = Vec::new();
         push_prompt(&mut lines, prompt, 12);
@@ -1508,7 +1508,7 @@ mod tests {
     }
 
     #[test]
-    fn work_selection_and_reply_editor_work_in_small_viewports() {
+    fn test_small_work_view() {
         let states = ["A", "B", "C"]
             .into_iter()
             .map(|id| {
@@ -1559,7 +1559,7 @@ mod tests {
     }
 
     #[test]
-    fn work_view_renders_each_observed_status_and_explanation() {
+    fn test_status_details() {
         for status in [
             AgentStatus::Running,
             AgentStatus::WaitingForInput,
@@ -1586,7 +1586,7 @@ mod tests {
     }
 
     #[test]
-    fn finished_work_items_fit_one_row_and_keep_details_and_storage_unchanged() {
+    fn test_finished_row() {
         for (kind, label, full_name) in [
             (WorkItemKind::Implementation, "Build", "Implementation"),
             (WorkItemKind::ExternalReview, "Review", "External Review"),
@@ -1620,7 +1620,7 @@ mod tests {
     }
 
     #[test]
-    fn work_view_shows_saved_metadata_and_resource_labels_for_both_types() {
+    fn test_work_metadata() {
         for kind in [WorkItemKind::Implementation, WorkItemKind::ExternalReview] {
             for pane in [
                 PaneAvailability::Present,
@@ -1665,7 +1665,7 @@ mod tests {
     }
 
     #[test]
-    fn resource_warnings_show_live_activity_and_do_not_hide_pending_questions() {
+    fn test_resource_warnings() {
         use workbench_core::WorkspaceAvailability;
         for (pane, workspace, label) in [
             (
@@ -1759,7 +1759,7 @@ mod tests {
     }
 
     #[test]
-    fn discovery_failure_keeps_work_items_visible_and_state_errors_are_actionable() {
+    fn test_discovery_error() {
         let state = AppState {
             discovery: Some(Err("tmux was not found".into())),
             work_items: Some(Ok(vec![registered(
@@ -1783,7 +1783,7 @@ mod tests {
     }
 
     #[test]
-    fn work_view_handles_loading_empty_and_small_screens() {
+    fn test_small_states() {
         assert!(work_screen(&AppState::default(), 80, 10, &mut 0).contains("Loading work items"));
         let state = AppState {
             work_items: Some(Ok(Vec::new())),
@@ -1798,7 +1798,7 @@ mod tests {
     }
 
     #[test]
-    fn selecting_a_later_item_keeps_its_highlight_visible_in_a_small_viewport() {
+    fn test_selected_row() {
         let mut items = Vec::new();
         for id in ["A", "B", "C"] {
             let mut state = registered(PaneAvailability::Present, WorkItemKind::Implementation);
@@ -1829,7 +1829,7 @@ mod tests {
     }
 
     #[test]
-    fn status_prompt_and_resource_changes_never_move_list_rows_or_change_selection() {
+    fn test_stable_rows() {
         let items = ["A", "B", "C", "D", "E", "F"]
             .into_iter()
             .map(|id| {
@@ -1931,7 +1931,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_work_columns_align_mixed_id_widths_statuses_and_attention() {
+    fn test_work_columns() {
         let items = [
             ("nvim", AgentStatus::Complete),
             ("workbench", AgentStatus::WaitingForInput),
@@ -1980,7 +1980,7 @@ mod tests {
     }
 
     #[test]
-    fn work_cells_pad_and_truncate_by_display_width_not_bytes_or_characters() {
+    fn test_cell_width() {
         for (text, width, expected) in [
             ("nvim", 9, "nvim     "),
             ("界🙂", 6, "界🙂  "),
@@ -2013,7 +2013,7 @@ mod tests {
     }
 
     #[test]
-    fn long_ids_fit_without_hiding_status_and_columns_stay_fixed_while_scrolling() {
+    fn test_long_ids() {
         let long_id = "long-task-".repeat(10);
         let items = ["nvim", "workbench", "third", long_id.as_str()]
             .into_iter()
@@ -2062,7 +2062,7 @@ mod tests {
     }
 
     #[test]
-    fn details_stay_at_the_top_without_moving_the_selected_list_row() {
+    fn test_static_details() {
         let items = ["A", "B"]
             .into_iter()
             .map(|id| {
@@ -2121,7 +2121,7 @@ mod tests {
     }
 
     #[test]
-    fn acknowledgement_only_removes_attention_marker_not_the_selected_row() {
+    fn test_acknowledged_row() {
         let mut item = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         item.status = AgentStatus::Complete;
         item.completion_fingerprint = Some(42);
@@ -2164,7 +2164,7 @@ mod tests {
     }
 
     #[test]
-    fn reply_editor_renders_captured_target_and_unicode_on_small_screens() {
+    fn test_reply_editor() {
         let state = AppState {
             work_items: Some(Ok(vec![registered(
                 PaneAvailability::Present,
@@ -2203,7 +2203,7 @@ mod tests {
     }
 
     #[test]
-    fn reply_cursor_tracks_unicode_and_scrolls_back_to_the_start_of_long_input() {
+    fn test_reply_cursor() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let state = AppState::from_refresh(
             Ok(snapshot()),
@@ -2264,7 +2264,7 @@ mod tests {
     }
 
     #[test]
-    fn displays_human_context_without_tmux_ids_indices_or_metadata_labels() {
+    fn test_session_context() {
         let text = screen(Some(Ok(snapshot())), 100, 12, &mut 0);
         for expected in [
             "SESSIONS",
@@ -2283,7 +2283,7 @@ mod tests {
     }
 
     #[test]
-    fn displays_loading_empty_and_error_states() {
+    fn test_session_states() {
         assert!(screen(None, 80, 10, &mut 0).contains("Discovering sessions"));
         assert!(
             screen(Some(Ok(Snapshot::default())), 80, 10, &mut 0)
@@ -2302,7 +2302,7 @@ mod tests {
     }
 
     #[test]
-    fn displays_optional_metadata_as_unavailable_and_escapes_controls() {
+    fn test_escaped_metadata() {
         let mut snapshot = snapshot();
         let pane = &mut snapshot.sessions[0].windows[0].panes[0];
         pane.current_command = None;
@@ -2315,7 +2315,7 @@ mod tests {
     }
 
     #[test]
-    fn clamps_scroll_when_snapshot_shrinks_and_handles_small_terminals() {
+    fn test_session_resize() {
         let mut scroll = u16::MAX;
         let text = screen(Some(Ok(snapshot())), 100, 5, &mut scroll);
         assert_eq!(scroll, 2);

@@ -364,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn id_rename_captures_target_validates_and_preserves_draft_on_errors() {
+    fn test_rename() {
         let mut form = MaintenanceUi::default();
         let original = item("A");
         form.open(Request::Edit(original.clone()));
@@ -417,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn combined_form_edits_both_fields_and_keeps_drafts_after_duplicate_id_failure() {
+    fn test_edit_details() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::new(directory.path().join("items.json"));
         let original = item("A");
@@ -474,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn description_edit_captures_target_and_blocks_repeat_or_cancel_during_save() {
+    fn test_save_lock() {
         let mut form = MaintenanceUi::default();
         let original = item("A");
         form.open(Request::Edit(original.clone()));
@@ -512,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn descriptions_enforce_limits_atomic_paste_and_allow_shortening_legacy_text() {
+    fn test_description_limit() {
         let mut form = MaintenanceUi::default();
         form.open(Request::Edit(item("A")));
         form.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
@@ -565,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn cancelling_an_edit_never_emits_a_mutation() {
+    fn test_cancel_edit() {
         let mut form = MaintenanceUi::default();
         form.open(Request::Edit(item("A")));
         form.paste("unsaved edit");
@@ -580,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_shortcuts_truncate_on_one_row_at_80_columns() {
+    fn test_footer() {
         let mut form = MaintenanceUi::default();
         form.open(Request::Edit(item("A")));
         let text = screen(&form, 80, 20);
@@ -592,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn details_edit_keeps_independent_cursors_and_rejects_growth_without_moving_them() {
+    fn test_field_cursors() {
         let mut form = MaintenanceUi::default();
         form.open(Request::Edit(item("A")));
         form.text = "aλ🙂z".into();
@@ -633,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn dialogs_show_target_scope_counter_and_safe_controls_at_small_sizes() {
+    fn test_render() {
         let mut form = MaintenanceUi::default();
         form.open(Request::Edit(item("A")));
         let text = screen(&form, 100, 20);
@@ -653,7 +653,7 @@ mod tests {
     }
 
     #[test]
-    fn unregister_success_is_silent_while_detail_edits_keep_their_feedback() {
+    fn test_success_feedback() {
         assert!(Mutation::Unregister(item("A")).success_message().is_none());
         let mut edit = Mutation::Details {
             expected: item("A"),
@@ -675,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn mutations_use_core_validation_and_do_not_redirect_after_external_changes() {
+    fn test_stale_mutation() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::new(directory.path().join("items.json"));
         let original = item("A");

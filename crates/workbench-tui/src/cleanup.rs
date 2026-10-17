@@ -257,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn default_enter_cancels_loading_and_failed_previews_without_confirmation() {
+    fn test_cancel_default() {
         for failed in [false, true] {
             let mut ui = CleanupUi::default();
             let ticket = ui.open(item("A"));
@@ -277,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_results_do_not_change_new_target_and_execution_blocks_all_keys() {
+    fn test_stale_results() {
         let mut ui = CleanupUi::default();
         let old = ui.open(item("A"));
         ui.open(item("B"));
@@ -305,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_discloses_all_panes_ignored_files_hooks_and_kept_history() {
+    fn test_preview() {
         let details = CleanupDetails {
             work_id: "A".into(),
             handle: "task".into(),
@@ -352,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn long_errors_do_not_scroll_and_cancel_remains_visible_in_narrow_windows() {
+    fn test_inactive_scroll_keys() {
         let mut ui = CleanupUi::default();
         let ticket = ui.open(item("A"));
         ui.finish_preview(ticket, Err("long error description ".repeat(30)));

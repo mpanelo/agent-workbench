@@ -568,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn details_save_both_fields_together_and_never_leave_a_partial_edit() {
+    fn test_edit_details() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("items.json");
         let engine = Engine::new(&path);
@@ -626,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn renaming_preserves_order_metadata_and_rejects_invalid_duplicate_stale_and_missing_targets() {
+    fn test_rename() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("items.json");
         let engine = Engine::new(&path);
@@ -669,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn rename_review_errors_leave_the_registration_unchanged() {
+    fn test_rename_failure() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("items.json");
         let engine = Engine::new(&path);
@@ -690,7 +690,7 @@ mod tests {
     }
 
     #[test]
-    fn registration_survives_new_engine_and_preserves_all_fields() {
+    fn test_persistence() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("nested/work-items.json");
         let first = Engine::new(&path);
@@ -712,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn editing_and_unregistering_preserve_workspace_and_review_data() {
+    fn test_retained_data() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("items.json");
         let engine = Engine::new(&path);
@@ -756,7 +756,7 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_rejects_invalid_missing_and_stale_targets_without_writes() {
+    fn test_stale_targets() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("items.json");
         let first = Engine::new(&path);
@@ -807,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_reloads_other_items_and_rejects_replaced_bindings() {
+    fn test_binding_changes() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("items.json");
         let first = Engine::new(&path);
@@ -836,7 +836,7 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_preserves_busy_corrupt_and_unwritable_state() {
+    fn test_state_errors() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("items.json");
         let engine = Engine::new(&path);
@@ -882,7 +882,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_registration_leaves_original_file_intact_and_releases_lock() {
+    fn test_duplicate_id() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("items.json");
         let engine = Engine::new(&path);
@@ -901,7 +901,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_registration_creates_no_state() {
+    fn test_invalid_item() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("items.json");
         let engine = Engine::new(&path);
@@ -919,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    fn short_description_limit_counts_characters_and_rejects_without_writes() {
+    fn test_description_limit() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("nested/items.json");
         let engine = Engine::new(&path);
@@ -944,7 +944,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_descriptions_round_trip_and_can_be_edited_or_cleared() {
+    fn test_empty_description() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("items.json");
         let engine = Engine::new(&path);
@@ -964,7 +964,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_long_descriptions_remain_readable_and_preserved() {
+    fn test_long_description() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("items.json");
         let mut legacy = item("legacy", WorkItemKind::Implementation);
@@ -992,7 +992,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_or_future_state_is_never_overwritten() {
+    fn test_invalid_state() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("items.json");
         let engine = Engine::new(&path);
@@ -1014,7 +1014,7 @@ mod tests {
     }
 
     #[test]
-    fn unreadable_state_is_not_treated_as_empty() {
+    fn test_unreadable_state() {
         let directory = tempfile::tempdir().unwrap();
         assert!(matches!(
             Engine::new(directory.path()).work_items(),
@@ -1023,7 +1023,7 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_writer_is_reported_then_registration_can_retry() {
+    fn test_write_lock() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("items.json");
         let lock = OpenOptions::new()
@@ -1048,7 +1048,7 @@ mod tests {
     }
 
     #[test]
-    fn disappearance_and_discovery_failure_do_not_delete_registration() {
+    fn test_missing_resources() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::new(directory.path().join("items.json"));
         let mut registered = item("ABC-123", WorkItemKind::Implementation);
@@ -1118,7 +1118,7 @@ mod tests {
     }
 
     #[test]
-    fn state_path_precedence_does_not_require_changing_process_environment() {
+    fn test_state_path() {
         assert_eq!(
             state_file_from(
                 Some("custom.json".into()),

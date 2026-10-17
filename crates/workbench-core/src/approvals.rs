@@ -230,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn decisions_use_explicit_shortcuts_not_numbers_or_highlighted_choice() {
+    fn test_decision_keys() {
         let prompt = state().attention_prompt.unwrap();
         for prompt in [
             prompt.clone(),
@@ -255,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_clipped_custom_or_persistent_choices_are_not_approved() {
+    fn test_unsafe_choices() {
         let prompt = state().attention_prompt.unwrap();
         for prompt in [
             prompt.replace("Yes, proceed (y)", "Yes, and don't ask again (y)"),
@@ -286,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn permission_grants_are_limited_to_the_current_turn_not_the_session() {
+    fn test_turn_permissions() {
         let prompt = state().attention_prompt.unwrap();
         let turn = prompt.replace("Yes, proceed", "Yes, grant these permissions for this turn");
         assert_eq!(choice_key(&turn, ApprovalDecision::ApproveOnce), Some("y"));
@@ -300,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn capture_requires_live_waiting_approval_and_binds_the_original_target() {
+    fn test_capture_target() {
         let mut state = state();
         let request = ApprovalRequest::capture(&state, ApprovalDecision::RejectAndReply).unwrap();
         state.item.id = "other".into();
@@ -323,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn refreshed_request_requires_the_same_registration_prompt_and_live_waiting_state() {
+    fn test_request_recheck() {
         let original = state();
         let request = ApprovalRequest::capture(&original, ApprovalDecision::ApproveOnce).unwrap();
         assert!(request.is_current(&original));
@@ -404,7 +404,7 @@ esac
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn decisions_send_one_fixed_key_without_enter_focus_or_registry_changes() {
+    async fn test_decision_delivery() {
         for (decision, key) in [
             (ApprovalDecision::ApproveOnce, "y"),
             (ApprovalDecision::RejectAndReply, "Escape"),
@@ -422,7 +422,7 @@ esac
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn stale_unavailable_or_unsupported_targets_never_receive_a_decision() {
+    async fn test_stale_targets() {
         use std::fs;
         for change in [
             "command",
@@ -477,7 +477,7 @@ esac
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_failed_key_delivery_is_never_retried() {
+    async fn test_delivery_failure() {
         let fixture = Fixture::new();
         std::fs::write(fixture.path("send-failure"), "").unwrap();
         let request = ApprovalRequest::capture(&state(), ApprovalDecision::RejectAndReply).unwrap();

@@ -268,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn every_view_shows_its_own_complete_bindings_including_hidden_footer_hints() {
+    fn test_view_bindings() {
         for (context, required, excluded) in [
             (Context::Work, "Clean Up: c", "Unregister: u"),
             (
@@ -350,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn removal_options_never_open_help_but_other_views_still_can() {
+    fn test_removal_menu() {
         for blocked in [false, true] {
             let mut help = HelpUi::default();
             let context = Context::Removal { blocked };
@@ -370,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn help_consumes_actions_paste_and_dismissal_without_forwarding_them() {
+    fn test_modal_input() {
         let context = Context::Work;
         for close in [
             key(KeyCode::Esc),
@@ -412,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn question_mark_is_literal_in_text_fields_and_f1_is_unbound() {
+    fn test_literal_question() {
         for context in [Context::Reply, Context::Registration, Context::Edit] {
             let mut help = HelpUi::default();
             let mut draft = crate::interaction::Draft {
@@ -449,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn help_stays_at_the_top_even_when_opened_from_review() {
+    fn test_static_help() {
         for context in [Context::Work, Context::Review] {
             let mut help = HelpUi::default();
             help.event(&key(KeyCode::Char('?')), context);
@@ -480,7 +480,7 @@ mod tests {
     }
 
     #[test]
-    fn scrolling_hints_only_apply_to_code_review_not_other_views_or_modals() {
+    fn test_scroll_bindings() {
         for context in [
             Context::Work,
             Context::Sessions { all: false },
@@ -512,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn wrapping_preserves_every_character_and_span_color() {
+    fn test_styled_wrapping() {
         let text = "Clear λ🙂 field: <c-u>";
         let lines = wrapped_lines(vec![theme::shortcut_line(text)], 10);
         assert!(lines.iter().all(|line| line.width() <= 10));

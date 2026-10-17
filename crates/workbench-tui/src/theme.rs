@@ -246,7 +246,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn balanced_roles_keep_dark_chrome_and_restrain_supporting_text() {
+    fn test_palette() {
         assert_eq!(header().fg, Some(LAVENDER));
         assert_eq!(header().bg, Some(MANTLE));
         assert_eq!(accent().fg, Some(TEAL));
@@ -281,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn statuses_keep_distinct_semantic_colors_including_unknown() {
+    fn test_status_colors() {
         for (state, color) in [
             (AgentStatus::Running, BLUE),
             (AgentStatus::WaitingForInput, YELLOW),
@@ -299,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn diff_styling_distinguishes_metadata_from_header_like_hunk_content() {
+    fn test_diff_colors() {
         assert_eq!(diff_line("+++ b/file", false).fg, Some(PINK));
         assert_eq!(diff_line("--- a/file", false).fg, Some(PINK));
         assert_eq!(diff_line("+++ actual content", true).fg, Some(GREEN));
@@ -313,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn footer_preserves_shortcut_text_and_uses_surface_and_key_colors() {
+    fn test_footer_colors() {
         use ratatui::{Terminal, backend::TestBackend};
         let mut terminal = Terminal::new(TestBackend::new(120, 1)).unwrap();
         let text = "Open: <enter> | Scroll: <c-d>/<c-u> | Toggle mark: Space | Quit: q | Saving… | q types text";
@@ -351,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn footer_truncates_whole_hints_preserves_help_and_measures_display_width() {
+    fn test_footer_overflow() {
         let text = "Edit: e | Unregister: u | Quit: q | Help: ?";
         assert_eq!(compact_footer(text, 80), text);
         assert_eq!(compact_footer(text, Line::from(text).width()), text);
@@ -374,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_footer_renders_on_one_row_with_styled_help_and_no_wrapping() {
+    fn test_footer_layout() {
         use ratatui::{Terminal, backend::TestBackend};
         let mut terminal = Terminal::new(TestBackend::new(30, 2)).unwrap();
         terminal
@@ -398,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn view_footers_restore_all_hints_when_resized_wider() {
+    fn test_footer_resize() {
         use crate::help::Context;
         for context in [
             Context::Work,

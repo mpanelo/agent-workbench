@@ -581,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn file_navigation_and_explicit_saves_restore_progress_on_reopen_and_reload() {
+    fn test_saved_marks() {
         let mut review = ready();
         key(&mut review, KeyCode::Char(' '));
         assert_eq!(review.sessions["A"].progress(), (1, 2));
@@ -608,7 +608,7 @@ mod tests {
     }
 
     #[test]
-    fn asynchronous_results_cannot_redirect_review_after_back_or_reopening() {
+    fn test_stale_results() {
         let mut review = ReviewUi::default();
         let old = review.open("A".into()).unwrap();
         key(&mut review, KeyCode::Esc);
@@ -634,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn review_renders_progress_unified_patch_and_sanitized_metadata_at_all_sizes() {
+    fn test_render() {
         let mut review = ready();
         key(&mut review, KeyCode::Char(' '));
         let text = screen(&mut review, 120, 24);
@@ -668,7 +668,7 @@ mod tests {
     }
 
     #[test]
-    fn review_shortcuts_truncate_on_one_row_at_80_columns() {
+    fn test_footer() {
         let mut review = ready();
         let text = screen(&mut review, 80, 24);
         let rows: Vec<_> = text.lines().map(str::trim_end).collect();
@@ -679,7 +679,7 @@ mod tests {
     }
 
     #[test]
-    fn review_colors_marks_hunks_and_content_without_losing_selected_mark_color() {
+    fn test_review_colors() {
         let mut review = ready();
         key(&mut review, KeyCode::Char(' '));
         let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
@@ -704,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn diff_scrolling_and_horizontal_pan_do_not_move_file_selection() {
+    fn test_diff_scroll() {
         let mut review = ready();
         let file = &mut review.sessions.get_mut("A").unwrap().diff.files[0];
         file.patch = format!("{}\n", "very long code line ".repeat(50)).repeat(50);
@@ -736,7 +736,7 @@ mod tests {
     }
 
     #[test]
-    fn loading_empty_and_binary_states_remain_navigable() {
+    fn test_empty_diff() {
         let mut review = ReviewUi::default();
         let ticket = review.open("A".into()).unwrap();
         assert!(screen(&mut review, 80, 12).contains("Loading local Git diff"));
@@ -757,7 +757,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_failed_and_stale_saves_never_claim_an_unsaved_mark() {
+    fn test_save_failure() {
         let mut review = ready();
         let intent = review.key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), 24);
         let ReviewIntent::Save {
@@ -801,7 +801,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_after_review_is_visible_and_space_requests_reviewing_the_new_capture() {
+    fn test_changed_snapshot() {
         let mut review = ready();
         key(&mut review, KeyCode::Char(' '));
         review.sessions.get_mut("A").unwrap().diff.files[0]
@@ -897,7 +897,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn correction_view_filters_counts_toggles_and_saves_real_snapshots() {
+    async fn test_correction_view() {
         let (directory, engine) = reviewed_fixture().await;
         let workspace = directory.path().join("workspace");
         std::fs::write(
@@ -941,7 +941,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn removed_files_remain_navigable_when_full_diff_is_empty() {
+    async fn test_removed_files() {
         let (directory, engine) = reviewed_fixture().await;
         let workspace = directory.path().join("workspace");
         std::fs::write(workspace.join("source.txt"), "base\n").unwrap();

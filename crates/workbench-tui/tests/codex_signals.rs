@@ -4,7 +4,7 @@ use std::{
 };
 
 #[test]
-fn callbacks_return_neutral_json_for_bad_payloads_or_unbound_sessions() {
+fn test_invalid_callback() {
     let directory = tempfile::tempdir().unwrap();
     let state = directory.path().join("items.json");
     for payload in [
@@ -47,7 +47,7 @@ fn callbacks_return_neutral_json_for_bad_payloads_or_unbound_sessions() {
 }
 
 #[test]
-fn callback_path_failures_are_observational_not_agent_blocking_errors() {
+fn test_callback_io_error() {
     let output = Command::new(env!("CARGO_BIN_EXE_workbench"))
         .args(["codex-notify", "{}", "--state-file", "~/unexpanded"])
         .output()

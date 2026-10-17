@@ -243,7 +243,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn descriptions_start_empty_without_changing_id_or_branch_suggestions() {
+    async fn test_empty_description() {
         let (dir, _) = fixture();
         let root = dir.path().join("workspace");
         let branch = "a".repeat(crate::MAX_SHORT_DESCRIPTION_CHARS + 10);
@@ -270,7 +270,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepares_checkout_and_nested_directory_without_writing_state() {
+    async fn test_checkout_metadata() {
         let (dir, _) = fixture();
         let root = dir.path().join("workspace");
         let nested = root.join("nested directory");
@@ -297,7 +297,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn linked_worktree_detached_and_unborn_metadata_are_supported() {
+    async fn test_worktree_metadata() {
         let (dir, _) = fixture();
         let root = dir.path().join("workspace");
         let linked = dir.path().join("linked checkout λ");
@@ -344,7 +344,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detached_missing_panes_changed_binding_and_collisions_are_safe() {
+    async fn test_target_errors() {
         let (dir, _) = fixture();
         let root = dir.path().join("workspace");
         git(&root, &["checkout", "--detach"]);
@@ -390,7 +390,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unavailable_git_metadata_blocks_session_registration_without_writes() {
+    async fn test_git_errors() {
         let dir = tempfile::tempdir().unwrap();
         let state_file = dir.path().join("items.json");
         let engine = Engine::new(&state_file);
@@ -411,7 +411,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn live_registration_rechecks_binding_and_preserves_state_on_errors() {
+    async fn test_binding_recheck() {
         use std::{fs, os::unix::fs::PermissionsExt};
         let (dir, _) = fixture();
         let state_file = dir.path().join("registered.json");

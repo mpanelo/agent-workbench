@@ -232,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn resource_health_matrix_is_independent_of_agent_activity() {
+    fn test_resource_health() {
         use crate::ResourceIssue;
         for (pane, workspace, issue) in [
             (
@@ -301,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn resource_issues_cannot_be_acknowledged_or_hidden_by_an_old_completion() {
+    fn test_resource_actions() {
         let mut finished = state("A", AgentStatus::Complete, PaneAvailability::Present);
         finished.completion_fingerprint = Some(14);
         for availability in [
@@ -334,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn id_rename_preserves_acknowledgements_but_rejects_old_tokens_and_changed_targets() {
+    fn test_renamed_item() {
         let mut finished = state("A", AgentStatus::Complete, PaneAvailability::Present);
         finished.completion_fingerprint = Some(14);
         let mut tracker = AttentionTracker::default();
@@ -355,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn acknowledgements_hide_only_one_observed_turn_and_never_change_work() {
+    fn test_acknowledgement() {
         let mut finished = state("A", AgentStatus::Complete, PaneAvailability::Present);
         finished.completion_fingerprint = Some(14);
         let waiting = state("B", AgentStatus::WaitingForInput, PaneAvailability::Present);
@@ -386,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_idle_and_unavailable_do_not_repeat_a_dismissed_turn() {
+    fn test_dismissed_turn() {
         let mut finished = state("A", AgentStatus::Complete, PaneAvailability::Present);
         finished.completion_fingerprint = Some(14);
         let mut tracker = AttentionTracker::default();
@@ -413,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn new_activity_permissions_evidence_and_bindings_invalidate_old_actions() {
+    fn test_invalidated_actions() {
         let mut finished = state("A", AgentStatus::Complete, PaneAvailability::Present);
         finished.completion_fingerprint = Some(14);
         for transition in [AgentStatus::Running, AgentStatus::WaitingForInput] {
@@ -469,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn queue_contains_agent_attention_and_resource_issues_in_registration_order() {
+    fn test_queue_order() {
         let states = vec![
             state("running", AgentStatus::Running, PaneAvailability::Present),
             state("complete", AgentStatus::Complete, PaneAvailability::Present),
@@ -500,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_removes_resolved_and_uncertain_items_without_mutating_registrations() {
+    fn test_resolved_items() {
         let mut states = vec![
             state("A", AgentStatus::WaitingForInput, PaneAvailability::Present),
             state("B", AgentStatus::Complete, PaneAvailability::Present),

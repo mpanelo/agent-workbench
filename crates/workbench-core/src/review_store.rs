@@ -293,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn identity_copy_preserves_all_contexts_is_retryable_and_rejects_conflicts() {
+    fn test_copy_identity() {
         let dir = tempfile::tempdir().unwrap();
         let store = ReviewStore::new(dir.path().join("reviews.json"));
         let capture = diff();
@@ -348,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_duplicate_and_unsafe_snapshots_are_never_overwritten() {
+    fn test_invalid_state() {
         let dir = tempfile::tempdir().unwrap();
         let store = ReviewStore::new(dir.path().join("reviews.json"));
         let capture = diff();
@@ -395,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn oversized_state_is_rejected_before_json_parsing_or_writing() {
+    fn test_state_limit() {
         let dir = tempfile::tempdir().unwrap();
         let store = ReviewStore::new(dir.path().join("reviews.json"));
         let file = fs::File::create(&store.path).unwrap();
@@ -422,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_and_base_contexts_never_share_marks() {
+    fn test_review_contexts() {
         let dir = tempfile::tempdir().unwrap();
         let store = ReviewStore::new(dir.path().join("reviews.json"));
         let capture = diff();

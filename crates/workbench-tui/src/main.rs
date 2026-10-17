@@ -872,7 +872,7 @@ mod tests {
     };
 
     #[test]
-    fn tmux_switch_keeps_the_event_loop_and_selection_state() {
+    fn test_switch_state() {
         let mut interaction = interaction::Interaction {
             selected_id: Some("task".into()),
             detail_item_id: Some("task".into()),
@@ -888,7 +888,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_switch_stays_in_the_tui_without_falling_back_to_attachment() {
+    fn test_switch_failure() {
         let mut interaction = interaction::Interaction {
             selected_id: Some("task".into()),
             ..Default::default()
@@ -916,7 +916,7 @@ mod tests {
     }
 
     #[test]
-    fn external_attachment_exits_the_loop_for_terminal_restoration() {
+    fn test_attach_exit() {
         let mut interaction = interaction::Interaction::default();
         assert!(matches!(finish_switch("task", &mut interaction, Ok(false)),
             Some(RunExit::Focus(id)) if id == "task"));
@@ -936,7 +936,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_keys_require_the_response_bar_and_are_plain_press_actions() {
+    fn test_approval_keys() {
         let state = approval_state();
         for code in ['y', 'n'] {
             for mut view in [ui::View::Work, ui::View::Sessions] {
@@ -1058,7 +1058,7 @@ mod tests {
     }
 
     #[test]
-    fn rejection_opens_reply_for_captured_item_even_after_queue_selection_changes() {
+    fn test_captured_rejection() {
         let state = approval_state();
         let mut interaction = interaction::Interaction::default();
         interaction.sync(&state.attention);
@@ -1093,7 +1093,7 @@ mod tests {
     }
 
     #[test]
-    fn response_mode_keeps_selection_and_ignores_removed_scrolling_keys() {
+    fn test_response_keys() {
         let state = approval_state();
         let mut interaction = interaction::Interaction::default();
         interaction.sync(state.items());
@@ -1144,7 +1144,7 @@ mod tests {
     }
 
     #[test]
-    fn acknowledgement_targets_visible_finished_turns_and_keeps_work_and_reply_safety() {
+    fn test_acknowledge_turn() {
         let mut state = state(&[
             ("hidden", AgentStatus::Running),
             ("finished", AgentStatus::Complete),
@@ -1259,7 +1259,7 @@ mod tests {
     }
 
     #[test]
-    fn acknowledgement_survives_registry_reconciliation_load_errors_and_focus_refreshes() {
+    fn test_acknowledge_refresh() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("items.json");
         let engine = Engine::new(&path);
@@ -1318,7 +1318,7 @@ mod tests {
     }
 
     #[test]
-    fn local_rename_keeps_selection_observed_status_and_acknowledgement() {
+    fn test_rename_selection() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::new(directory.path().join("items.json"));
         let mut state = state(&[("A", AgentStatus::Complete)]);
@@ -1385,7 +1385,7 @@ mod tests {
     }
 
     #[test]
-    fn work_maintenance_actions_capture_selection_and_never_target_hidden_items() {
+    fn test_edit_selection() {
         let state = state(&[
             ("hidden", AgentStatus::Running),
             ("A", AgentStatus::Complete),
@@ -1446,7 +1446,7 @@ mod tests {
     }
 
     #[test]
-    fn removal_key_captures_work_selection_only_and_ignores_drafts_and_modifiers() {
+    fn test_removal_key() {
         let state = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
         for mut view in [ui::View::Work, ui::View::Sessions] {
             let mut interaction = interaction::Interaction {
@@ -1521,7 +1521,7 @@ mod tests {
     }
 
     #[test]
-    fn removal_menu_unregisters_directly_but_cleanup_still_requires_its_safety_flow() {
+    fn test_removal_actions() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::new(directory.path().join("items.json"));
         let state = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
@@ -1589,7 +1589,7 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_options_preserve_work_rows_selection_and_hide_the_bottom_help_bar() {
+    fn test_removal_layout() {
         use ratatui::{Terminal, backend::TestBackend};
         let state = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
         let mut interaction = interaction::Interaction {
@@ -1648,7 +1648,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_unregister_revalidates_the_captured_registration_and_keeps_failures_in_the_menu() {
+    fn test_unregister_recheck() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::new(directory.path().join("items.json"));
         let mut original = state(&[("A", AgentStatus::Running)]).items()[0]
@@ -1701,7 +1701,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_reconciliation_removes_stale_refresh_items_and_keeps_live_observations() {
+    fn test_registry_refresh() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("items.json");
         let engine = Engine::new(&path);
@@ -1773,7 +1773,7 @@ mod tests {
     }
 
     #[test]
-    fn sessions_filter_toggle_selection_and_registration_never_target_hidden_panes() {
+    fn test_pane_filter() {
         use workbench_core::{Pane, Session, Window};
         let mut state = state(&[("registered-shell", AgentStatus::Unknown)]);
         state.discovery = Some(Ok(Snapshot {
@@ -1904,7 +1904,7 @@ mod tests {
     }
 
     #[test]
-    fn sessions_navigation_requests_registration_only_for_a_live_selected_pane() {
+    fn test_register_pane() {
         use workbench_core::{Pane, Session, Window};
         let mut state = state(&[]);
         state.discovery = Some(Ok(Snapshot {
@@ -2007,7 +2007,7 @@ mod tests {
     }
 
     #[test]
-    fn removed_scrolling_bindings_are_inactive_in_work_and_sessions() {
+    fn test_scroll_keys() {
         let state = state(&[("A", AgentStatus::WaitingForInput)]);
         for mut view in [ui::View::Work, ui::View::Sessions] {
             let original_view = view;
@@ -2060,7 +2060,7 @@ mod tests {
     }
 
     #[test]
-    fn removed_scrolling_keys_do_nothing_even_without_items() {
+    fn test_empty_scroll_keys() {
         let state = state(&[]);
         let mut view = ui::View::Work;
         let mut interaction = interaction::Interaction::default();
@@ -2083,7 +2083,7 @@ mod tests {
     }
 
     #[test]
-    fn modified_keys_and_reply_drafts_do_not_trigger_list_actions() {
+    fn test_modified_keys() {
         let state = state(&[("A", AgentStatus::WaitingForInput)]);
         let mut view = ui::View::Work;
         let mut interaction = interaction::Interaction::default();
@@ -2118,7 +2118,7 @@ mod tests {
     }
 
     #[test]
-    fn removed_work_alias_is_inactive_and_current_view_bindings_still_work() {
+    fn test_removed_alias() {
         let state = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
         for mut view in [ui::View::Work, ui::View::Sessions] {
             let previous_view = view;
@@ -2166,7 +2166,7 @@ mod tests {
     }
 
     #[test]
-    fn work_is_default_and_all_actions_target_the_selected_item() {
+    fn test_work_actions() {
         let state = state(&[
             ("hidden", AgentStatus::Running),
             ("B", AgentStatus::Complete),
@@ -2274,7 +2274,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_changes_attention_without_redirecting_selection_or_an_existing_draft() {
+    fn test_refresh_selection() {
         let initial = state(&[
             ("A", AgentStatus::WaitingForInput),
             ("B", AgentStatus::Complete),
@@ -2306,7 +2306,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_or_failed_work_never_opens_or_replies_to_stale_selection() {
+    fn test_missing_selection() {
         let empty = state(&[]);
         let failed = AppState::from_refresh(
             Err("tmux unavailable".into()),

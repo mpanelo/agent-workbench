@@ -439,7 +439,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn only_corrections_are_shown_after_restart_and_remarking_uses_seen_capture() {
+    async fn test_restore_corrections() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         let produced = "agent implementation\nkeep this implementation\nfix this\n";
@@ -489,7 +489,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reverted_and_removed_paths_remain_visible_and_can_be_acknowledged() {
+    async fn test_removed_paths() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         fs::write(root.join("source.txt"), "reviewed modification\n").unwrap();
@@ -538,7 +538,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn renames_deletions_recreation_and_staging_identical_text_are_compared_as_content() {
+    async fn test_content_changes() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         git(&root, &["mv", "--", "rename source.txt", "renamed λ.txt"]);
@@ -588,7 +588,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn binary_changes_have_no_fictional_line_count_and_staging_alone_keeps_review() {
+    async fn test_binary_changes() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         fs::write(root.join("new.bin"), b"reviewed\0binary").unwrap();
@@ -614,7 +614,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn symlink_targets_and_mode_only_changes_never_read_external_content() {
+    async fn test_symlink_changes() {
         use std::os::unix::fs::{PermissionsExt, symlink};
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
@@ -644,7 +644,7 @@ mod tests {
     }
 
     #[test]
-    fn hunks_support_multiple_ranges_crlf_no_final_newline_and_patch_like_text() {
+    fn test_hunk_ranges() {
         let base = Entry {
             mode: "100644".into(),
             content: b"one\r\n-- old\r\nthree\r\nfour\r\ntail".to_vec(),
@@ -672,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_hunks_are_rejected_instead_of_inventing_reviewed_content() {
+    fn test_invalid_hunks() {
         for patch in [
             "not a patch",
             "diff --git a/x b/x\n@@ -9 +9 @@\n-old\n+new\n",
@@ -695,7 +695,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_git_hunks_reconstruct_exact_bytes_and_preserve_header_like_content() {
+    async fn test_hunk_bytes() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         let base = (0..30).map(|i| format!("line {i}\r\n")).collect::<String>();
@@ -736,7 +736,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_snapshot_text_is_explicitly_unavailable_and_read_only() {
+    async fn test_invalid_snapshot() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         fs::write(root.join("source.txt"), "reviewed\n").unwrap();
@@ -768,7 +768,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn externally_changed_snapshots_do_not_become_reviewed_in_a_stale_session() {
+    async fn test_stale_snapshot() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         fs::write(root.join("source.txt"), "first capture\n").unwrap();
@@ -801,7 +801,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submodule_pointer_corrections_compare_to_reviewed_pointer_not_original_base() {
+    async fn test_submodule_changes() {
         let (dir, engine) = fixture();
         let root = dir.path().join("workspace");
         let module = root.join("module");

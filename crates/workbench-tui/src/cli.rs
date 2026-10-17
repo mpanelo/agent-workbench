@@ -240,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn callback_commands_accept_notify_json_before_or_after_state_path() {
+    fn test_callback_args() {
         assert_eq!(
             parse(args(&["codex-hook"])).unwrap().command,
             Command::CodexHook
@@ -264,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn short_description_uses_only_the_current_flag_and_rejects_the_removed_alias() {
+    fn test_description_flag() {
         let base = args(&[
             "register",
             "--id",
@@ -311,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_both_kinds_and_resolves_paths_without_requiring_them_to_exist() {
+    fn test_register_args() {
         for (kind, expected) in [
             ("implementation", WorkItemKind::Implementation),
             ("external-review", WorkItemKind::ExternalReview),
@@ -346,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn diff_base_is_optional_and_only_applies_to_the_tui() {
+    fn test_diff_base() {
         assert_eq!(parse(args(&[])).unwrap().diff_base, None);
         let options = parse(args(&[
             "--diff-base",
@@ -368,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_duplicate_missing_and_inapplicable_flags() {
+    fn test_invalid_args() {
         for argv in [
             args(&["register"]),
             args(&["--state-file"]),
