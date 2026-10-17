@@ -150,6 +150,7 @@ impl ResponseBar {
 
 #[derive(Default, Debug)]
 pub(crate) struct Interaction {
+    pub preview: crate::preview::PreviewUi,
     pub selected_id: Option<String>,
     pub work_list_offset: usize,
     pub detail_item_id: Option<String>,

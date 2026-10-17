@@ -10,6 +10,7 @@ mod cleanup;
 mod codex_signals;
 mod git;
 mod model;
+mod preview;
 mod registration;
 mod rereview;
 mod resources;
@@ -24,6 +25,7 @@ pub use attention::{AttentionError, AttentionTracker, CompletionAcknowledgement,
 pub use cleanup::{CleanupDetails, CleanupError, CleanupPreview};
 pub use git::{ChangeKind, ChangedFile, GitError, WorkItemDiff};
 pub use model::{Pane, Session, Snapshot, Window};
+pub use preview::{PanePreview, PreviewError};
 pub use registration::{RegistrationDraft, RegistrationError};
 pub use review::{ReviewError, ReviewSession, ReviewStatus};
 pub use tmux::DiscoveryError;

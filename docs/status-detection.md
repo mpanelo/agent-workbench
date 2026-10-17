@@ -126,6 +126,14 @@ answers, assistant responses, tool output, or transcripts. Pending content clear
 on resolution; records are bounded and expire. No service or model API is called,
 and no agent configuration is changed automatically.
 
+The separate WORK pane preview captures only the selected registration's recent
+terminal output, independently of status detection. It reads up to 200 history
+rows plus the viewport, with a 256 KiB output cap and a three-second command
+timeout. Identity and dimensions must match before and after capture; changed
+registrations discard results. Captures are decoded to presentation styles,
+kept only in memory, and cleared on selection/view changes. Preview text never
+establishes status or authorizes input, and is not a complete agent response.
+
 ## Testing
 
 Keep parser and transition tests independent of live agents. Cover layout

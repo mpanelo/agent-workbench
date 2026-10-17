@@ -231,6 +231,11 @@ terminal control characters so they cannot execute terminal commands or distort
 the layout. Render ordinary whitespace naturally in code diffs. Keep stored
 patch bytes unchanged; display formatting must not alter review tracking.
 
+ANSI styling in pane previews may be decoded into presentation styles, never
+forwarded as raw terminal escapes. Keep captures bounded, read-only, in memory,
+and tied to the selected registration. Do not treat previews as complete agent
+responses or reuse them as authorization to send input.
+
 ## Cleanup Safety
 
 Require user confirmation before closing agent panes or windows or removing

@@ -172,8 +172,9 @@ pub(crate) fn render_work(
                     theme::border(true)
                 })
                 .title_style(theme::accent());
-            let inner = block.inner(details);
-            frame.render_widget(block, details);
+            let (mut detail_area, mut preview_area) = crate::preview::areas(details, None);
+            let inner = block.inner(detail_area);
+            let mut prompt_start = None;
             if let Some(Err(error)) = &state.discovery {
                 lines.push(Line::styled(
                     format!("Discovery unavailable: {}", visible(error)),
@@ -254,6 +255,7 @@ pub(crate) fn render_work(
                     lines.push(Line::from(""));
                     lines.push(Line::styled("  Agent requests input:", theme::notice()));
                     if let Some(prompt) = &state.attention_prompt {
+                        prompt_start = Some(lines.len());
                         push_prompt(&mut lines, prompt, inner.width);
                     } else {
                         lines.push(Line::from(format!("  {}", visible(&state.status_detail))));
@@ -262,7 +264,39 @@ pub(crate) fn render_work(
             } else {
                 lines.push(Line::from("Select a work item to inspect its details."));
             }
+            if let Some(start) = prompt_start
+                && preview_area.is_some()
+                && lines.len() > usize::from(inner.height)
+                && let Some(prompt) = selected.and_then(|state| state.attention_prompt.as_deref())
+            {
+                // A preview must not hide a request that fits at full width.
+                lines.truncate(start);
+                push_prompt(&mut lines, prompt, block.inner(details).width);
+                (detail_area, preview_area) = crate::preview::stacked(details, lines.len());
+            } else {
+                (detail_area, preview_area) = crate::preview::areas(details, Some(lines.len()));
+            }
+            let inner = block.inner(detail_area);
+            frame.render_widget(block, detail_area);
             frame.render_widget(Paragraph::new(std::mem::take(&mut lines)), inner);
+            if let Some(area) = preview_area
+                && let Some(state) = selected
+            {
+                if state.pane == workbench_core::PaneAvailability::Present {
+                    interaction.preview.render(frame, area, &state.item);
+                } else {
+                    frame.render_widget(
+                        Paragraph::new("Pane preview unavailable.")
+                            .style(theme::muted())
+                            .block(
+                                Block::bordered()
+                                    .title("Pane preview")
+                                    .border_style(theme::border(false)),
+                            ),
+                        area,
+                    );
+                }
+            }
         }
     }
     if !lines.is_empty() {
@@ -1061,6 +1095,17 @@ mod tests {
         assert!(!text.lines().take(44).any(|line| line.contains('…')));
         assert!(text.lines().last().unwrap().contains("… | Help: ?"));
 
+        let wide = work_screen(&state, 120, 35, &mut 0);
+        let compact: String = wide
+            .chars()
+            .filter(|ch| !ch.is_whitespace() && *ch != '│')
+            .collect();
+        assert!(compact.contains("END-OF-REASON"), "{wide}");
+        assert!(
+            compact.contains("No,andtellCodexwhattododifferently"),
+            "{wide}"
+        );
+
         let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
         let mut interaction = Interaction::default();
         interaction.sync(&state.attention);
@@ -1138,6 +1183,104 @@ mod tests {
     }
 
     #[test]
+    fn test_work_preview() {
+        let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
+        waiting.status = AgentStatus::WaitingForInput;
+        waiting.attention_prompt =
+            Some("Choose a test strategy?\n\nOptions:\n1. Unit tests\n2. Integration tests".into());
+        let mut state = AppState::from_refresh(Ok(snapshot()), Ok(vec![waiting]));
+        let mut interaction = Interaction::default();
+        interaction.sync(state.items());
+        let item = state.items()[0].item.clone();
+        interaction.preview.select(Some(&item));
+        let (ticket, _) = interaction
+            .preview
+            .request(std::time::Instant::now())
+            .unwrap();
+        interaction.preview.finish(
+            ticket,
+            Ok(workbench_core::PanePreview {
+                text: "\x1b[38;2;1;2;3mLatest agent output\x1b[0m\n".into(),
+                width: 100,
+                height: 30,
+            }),
+        );
+        for (width, height) in [(160, 35), (80, 35)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            theme::assert_text_style(
+                buffer,
+                "Latest agent output",
+                ratatui::style::Color::Rgb(1, 2, 3),
+                theme::MANTLE,
+            );
+            let rows: Vec<String> = buffer
+                .content()
+                .chunks(usize::from(width))
+                .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+                .collect();
+            let details = rows.iter().position(|row| row.contains("Details")).unwrap();
+            let preview = rows
+                .iter()
+                .position(|row| row.contains("Pane preview: ABC-123"))
+                .unwrap();
+            if width >= 120 {
+                assert_eq!(details, preview);
+            } else {
+                assert!(preview > details);
+            }
+            for expected in [
+                "Choose a test strategy?",
+                "Unit tests",
+                "Integration tests",
+                "Read-only",
+            ] {
+                assert!(rows.iter().any(|row| row.contains(expected)), "{rows:?}");
+            }
+            assert_eq!(interaction.selected_id.as_deref(), Some("ABC-123"));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        let row = terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(80)
+            .position(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+                    .starts_with("> ABC-123")
+            })
+            .unwrap();
+        state.work_items.as_mut().unwrap().as_mut().unwrap()[0].status = AgentStatus::Complete;
+        terminal
+            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+            .unwrap();
+        let updated = terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(80)
+            .position(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+                    .starts_with("> ABC-123")
+            })
+            .unwrap();
+        assert_eq!(row, updated);
+        assert_eq!(interaction.selected_id.as_deref(), Some("ABC-123"));
+        assert_eq!(interaction.work_list_offset, 0);
+        assert_eq!(state.items()[0].status, AgentStatus::Complete);
+    }
+
+    #[test]
     fn test_metadata_colors() {
         for (kind, label, color) in [
             (WorkItemKind::Implementation, "Build", theme::BLUE),
@@ -1170,7 +1313,8 @@ mod tests {
             }
             assert_eq!(buffer[(119, 0)].bg, theme::MANTLE);
             assert_eq!(buffer[(119, 1)].bg, theme::SURFACE);
-            assert_eq!(buffer[(119, 2)].bg, theme::BASE);
+            assert_eq!(buffer[(45, 2)].bg, theme::BASE);
+            assert_eq!(buffer[(119, 2)].bg, theme::MANTLE);
             let line = metadata("Branch", "feature/λ\x1b", Style::default().fg(theme::PINK));
             let rendered: String = line
                 .spans

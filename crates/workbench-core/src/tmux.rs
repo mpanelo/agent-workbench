@@ -11,7 +11,7 @@ use tokio::{process::Command, time::timeout};
 
 use crate::{Pane, Session, Snapshot, Window};
 
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
+pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 const FIELD_SEPARATOR: char = '\u{1f}';
 const RECORD_SEPARATOR: char = '\u{1e}';
 // Real control-character separators, not backslash escapes interpreted by a shell.
@@ -222,7 +222,7 @@ fn invalid_output(record: usize, reason: impl Into<String>) -> DiscoveryError {
     }
 }
 
-fn validate_id(id: &str, prefix: char, record: usize) -> Result<(), DiscoveryError> {
+pub(crate) fn validate_id(id: &str, prefix: char, record: usize) -> Result<(), DiscoveryError> {
     if !id.starts_with(prefix) || id[1..].parse::<u64>().is_err() {
         return Err(invalid_output(record, format!("invalid ID {id:?}")));
     }

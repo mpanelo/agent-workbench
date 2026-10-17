@@ -41,6 +41,12 @@ Workmux is optional unless you use workspace cleanup.
 WORK keeps registered items in a stable order. `Tab` selects the next item needing
 attention. In SESSIONS, `f` switches between recognized agents and all panes.
 
+The selected work item includes a read-only pane preview with live colors and
+recent output. It sits beside details on wide screens and below them when space
+allows. This is a bounded terminal capture, not a complete agent response;
+`<enter>` still opens the agent pane for interaction. Preview text is not saved.
+Long input requests take priority when space is limited.
+
 | Action in WORK | Key |
 | --- | --- |
 | Open agent pane | `<enter>` |

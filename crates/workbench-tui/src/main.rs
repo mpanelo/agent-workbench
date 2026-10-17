@@ -15,6 +15,7 @@ mod cli;
 mod help;
 mod interaction;
 mod maintenance;
+mod preview;
 mod registration;
 mod removal;
 mod review;
@@ -348,6 +349,7 @@ async fn event_loop(
     let mut cleanup_preparations = JoinSet::new();
     let mut cleanups = JoinSet::<(u64, String, Result<(), String>)>::new();
     let mut mutations = JoinSet::<(Box<maintenance::Mutation>, Result<(), String>)>::new();
+    let mut previews = JoinSet::new();
     let mut input_tick = time::interval(Duration::from_millis(100));
     input_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
@@ -357,6 +359,37 @@ async fn event_loop(
                 .as_ref()
                 .and_then(|result| result.as_deref().ok()),
         );
+        let preview_item = if *view == ui::View::Work
+            && !help.is_open()
+            && !cleanup.is_open()
+            && !maintenance.is_open()
+            && registration.pane.is_none()
+            && !reviews.is_open()
+            && !removal.is_open()
+        {
+            interaction
+                .selected(state.items())
+                .filter(|state| state.pane == workbench_core::PaneAvailability::Present)
+                .map(|state| &state.item)
+        } else {
+            None
+        };
+        if interaction.preview.select(preview_item) {
+            previews.abort_all();
+            redraw = true;
+        }
+        if let Some((ticket, item)) = interaction.preview.request(std::time::Instant::now()) {
+            let engine = Arc::clone(&engine);
+            previews.spawn(async move {
+                (
+                    ticket,
+                    engine
+                        .preview_work_item(&item)
+                        .await
+                        .map_err(|error| error.to_string()),
+                )
+            });
+        }
         if redraw {
             terminal.draw(|frame| {
                 if help.is_open() {
@@ -382,6 +415,14 @@ async fn event_loop(
             redraw = false;
         }
         tokio::select! {
+            completed = previews.join_next(), if !previews.is_empty() => {
+                match completed {
+                    Some(Ok((ticket, result))) => interaction.preview.finish(ticket, result),
+                    Some(Err(error)) if !error.is_cancelled() && previews.is_empty() => interaction.preview.fail(),
+                    _ => {},
+                }
+                redraw = true;
+            }
             completed = approvals.join_next(), if !approvals.is_empty() => {
                 match completed {
                     Some(Ok((request, result))) => interaction.finish_approval(&request, result),

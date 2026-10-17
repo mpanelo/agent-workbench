@@ -62,6 +62,9 @@ permission controls apply. This proposal does not authorize agent configuration 
 
 ### Complete agent-response viewing in WORK
 
+The current read-only pane preview shows bounded recent terminal output. This
+proposal is for complete structured responses, not an extension of that capture.
+
 Show the selected item's complete latest response in a read-only, scrollable
 detail area, especially after a turn finishes. Keep opening the existing agent
 pane for interaction. Preserve the stable work list, selection, reading position,
@@ -73,7 +76,7 @@ sources. Never claim a truncated preview is a complete response.
 
 Decide source support, response boundaries, size limits, privacy, retention, and
 missing-source behavior first. Workbench does not currently discover transcripts
-or retain assistant responses. Any such access or persistence needs explicit
+or persist assistant responses. Any such access or persistence needs explicit
 scope; no model calls or terminal emulator are proposed.
 
 Tmux popups are an optional alternative, not a requirement. Any popup experiment
