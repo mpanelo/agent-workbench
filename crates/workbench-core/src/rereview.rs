@@ -9,7 +9,7 @@ use crate::git::{
     GitClient, MAX_FILES, MAX_LINE_BYTES, MAX_OUTPUT, MAX_PATCH_LINES, MAX_TOTAL_PATCH,
     REVIEW_TIMEOUT, diff_args, patch_counts, text,
 };
-use crate::{ChangeKind, ChangedFile, GitError, ReviewSession};
+use crate::{ChangeKind, ChangedFile, GitError, ReviewSession, ReviewText};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Entry {
@@ -18,6 +18,62 @@ struct Entry {
 }
 
 impl GitClient {
+    pub(crate) async fn review_text(
+        &self,
+        session: &ReviewSession,
+        path: &Path,
+        since_review: bool,
+    ) -> Result<ReviewText, GitError> {
+        let files = if since_review {
+            session.changes_since_review()
+        } else {
+            &session.diff.files
+        };
+        let file = files
+            .iter()
+            .find(|file| file.path == path && file.additions.is_some())
+            .ok_or_else(invalid_patch)?;
+        let before = if since_review {
+            let snapshot = session.reviewed.get(path).ok_or_else(invalid_patch)?;
+            self.captured_entry(session, snapshot).await?
+        } else if matches!(file.kind, ChangeKind::Added | ChangeKind::Untracked) {
+            None
+        } else {
+            self.base_entry(session, file.old_path.as_deref().unwrap_or(path))
+                .await?
+        };
+        let current = session.diff.files.iter().find(|file| file.path == path);
+        let after = if !since_review {
+            reconstruct(before.clone(), &file.patch)?
+        } else {
+            match current {
+                Some(file) => self.captured_entry(session, file).await?,
+                None if session
+                    .diff
+                    .files
+                    .iter()
+                    .any(|file| file.old_path.as_deref() == Some(path)) =>
+                {
+                    None
+                }
+                None => self.base_entry(session, path).await?,
+            }
+        };
+        let contents = |entry: Option<Entry>| -> Result<String, GitError> {
+            match entry {
+                None => Ok(String::new()),
+                Some(entry) if matches!(entry.mode.as_str(), "100644" | "100755") => {
+                    Ok(text(&entry.content)?.to_owned())
+                }
+                Some(_) => Err(invalid_patch()),
+            }
+        };
+        Ok(ReviewText {
+            before: contents(before)?,
+            after: contents(after)?,
+        })
+    }
+
     pub(crate) async fn changes_since_review(
         &self,
         session: &ReviewSession,
@@ -425,6 +481,160 @@ mod tests {
         git::tests::{fixture, git},
     };
     use std::fs;
+
+    #[tokio::test]
+    async fn test_review_text() {
+        let (dir, engine) = fixture();
+        let root = dir.path().join("workspace");
+        let path = Path::new("source.txt");
+        let original = fs::read_to_string(root.join(path)).unwrap();
+        let produced = "captured agent code\n";
+        fs::write(root.join(path), produced).unwrap();
+        let mut session = engine.open_review("A", None).await.unwrap();
+        engine.set_file_reviewed(&mut session, path, true).unwrap();
+        let saved = fs::read(engine.store.review_path()).unwrap();
+        let index = fs::read(root.join(".git/index")).unwrap();
+        fs::write(root.join(path), "later unseen edit\n").unwrap();
+        let text = engine.review_text(&session, path, false).await.unwrap();
+        assert_eq!(text.before, original);
+        assert_eq!(text.after, produced);
+
+        let fresh = engine.open_review("A", None).await.unwrap();
+        fs::remove_file(root.join(path)).unwrap();
+        let text = engine.review_text(&fresh, path, true).await.unwrap();
+        assert_eq!(text.before, produced);
+        assert_eq!(text.after, "later unseen edit\n");
+        assert_eq!(fs::read(engine.store.review_path()).unwrap(), saved);
+        assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+        assert!(
+            engine
+                .review_text(&fresh, Path::new("missing"), false)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_text_corrections() {
+        let (dir, engine) = fixture();
+        let root = dir.path().join("workspace");
+        let path = Path::new("source.txt");
+        let original = fs::read_to_string(root.join(path)).unwrap();
+        fs::write(root.join(path), "reviewed modification\n").unwrap();
+        fs::write(root.join("new.go"), "package added\n").unwrap();
+        let mut session = engine.open_review("A", None).await.unwrap();
+        mark_all(&engine, &mut session);
+        fs::write(root.join(path), &original).unwrap();
+        fs::remove_file(root.join("new.go")).unwrap();
+        let fresh = engine.open_review("A", None).await.unwrap();
+        assert!(fresh.diff.files.is_empty());
+        let text = engine.review_text(&fresh, path, true).await.unwrap();
+        assert_eq!(text.before, "reviewed modification\n");
+        assert_eq!(text.after, original);
+        let text = engine
+            .review_text(&fresh, Path::new("new.go"), true)
+            .await
+            .unwrap();
+        assert_eq!(text.before, "package added\n");
+        assert!(text.after.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_text_targets() {
+        let (dir, engine) = fixture();
+        let root = dir.path().join("workspace");
+        let original = fs::read_to_string(root.join("source.txt")).unwrap();
+        git(&root, &["mv", "source.txt", "renamed.go"]);
+        fs::write(root.join("new.go"), "package added").unwrap();
+        fs::remove_file(root.join("-delete.txt")).unwrap();
+        let session = engine.open_review("A", None).await.unwrap();
+        let text = engine
+            .review_text(&session, Path::new("renamed.go"), false)
+            .await
+            .unwrap();
+        assert_eq!(text.before, original);
+        assert_eq!(text.after, original);
+        let text = engine
+            .review_text(&session, Path::new("new.go"), false)
+            .await
+            .unwrap();
+        assert!(text.before.is_empty());
+        assert_eq!(text.after, "package added");
+        let text = engine
+            .review_text(&session, Path::new("-delete.txt"), false)
+            .await
+            .unwrap();
+        assert_eq!(text.before, "deleted\n");
+        assert!(text.after.is_empty());
+
+        git(&root, &["rm", "--cached", "renamed.go"]);
+        fs::write(root.join("renamed.go"), "recreated\n").unwrap();
+        let session = engine.open_review("A", None).await.unwrap();
+        let text = engine
+            .review_text(&session, Path::new("source.txt"), false)
+            .await
+            .unwrap();
+        assert_eq!(text.before, original);
+        assert!(text.after.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_text_recreated() {
+        let (dir, engine) = fixture();
+        let root = dir.path().join("workspace");
+        let path = Path::new("source.txt");
+        let original = fs::read_to_string(root.join(path)).unwrap();
+        git(&root, &["rm", "--cached", "source.txt"]);
+        fs::write(root.join(path), "recreated content\n").unwrap();
+        let session = engine.open_review("A", None).await.unwrap();
+        assert_eq!(
+            session
+                .diff
+                .files
+                .iter()
+                .find(|file| file.path == path)
+                .unwrap()
+                .kind,
+            ChangeKind::Recreated
+        );
+        let text = engine.review_text(&session, path, false).await.unwrap();
+        assert_eq!(text.before, original);
+        assert_eq!(text.after, "recreated content\n");
+    }
+
+    #[tokio::test]
+    async fn test_text_fallback() {
+        let (dir, engine) = fixture();
+        let root = dir.path().join("workspace");
+        fs::write(root.join("binary"), b"changed\0binary").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/unreadable/target", root.join("link.go")).unwrap();
+        let mut session = engine.open_review("A", None).await.unwrap();
+        for path in ["binary", "link.go"] {
+            assert!(
+                engine
+                    .review_text(&session, Path::new(path), false)
+                    .await
+                    .is_err()
+            );
+        }
+        fs::write(root.join("source.txt"), "changed\n").unwrap();
+        session = engine.open_review("A", None).await.unwrap();
+        session
+            .diff
+            .files
+            .iter_mut()
+            .find(|file| file.path == Path::new("source.txt"))
+            .unwrap()
+            .patch =
+            "diff --git a/source.txt b/source.txt\n@@ -1 +1 @@\n-wrong base\n+new\n".into();
+        assert!(
+            engine
+                .review_text(&session, Path::new("source.txt"), false)
+                .await
+                .is_err()
+        );
+    }
 
     fn mark_all(engine: &Engine, session: &mut ReviewSession) {
         let paths: Vec<_> = session

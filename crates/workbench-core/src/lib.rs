@@ -27,7 +27,7 @@ pub use git::{ChangeKind, ChangedFile, GitError, WorkItemDiff};
 pub use model::{Pane, Session, Snapshot, Window};
 pub use preview::{PanePreview, PreviewError};
 pub use registration::{RegistrationDraft, RegistrationError};
-pub use review::{ReviewError, ReviewSession, ReviewStatus};
+pub use review::{ReviewError, ReviewSession, ReviewStatus, ReviewText};
 pub use tmux::DiscoveryError;
 use work_items::WorkItemStore;
 pub use work_items::{

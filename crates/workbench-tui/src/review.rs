@@ -15,6 +15,7 @@ use crate::ui::{display_path, visible};
 
 #[derive(Default)]
 pub(crate) struct ReviewUi {
+    syntax: crate::syntax::SyntaxUi,
     sessions: HashMap<String, ReviewSession>,
     current: Option<String>,
     generation: u64,
@@ -63,6 +64,7 @@ impl ReviewUi {
     }
 
     pub fn open(&mut self, id: String) -> Option<u64> {
+        self.syntax.clear();
         self.generation += 1;
         self.sessions.remove(&id);
         self.loading = true;
@@ -78,6 +80,7 @@ impl ReviewUi {
 
     pub fn reload(&mut self) -> Option<(u64, String)> {
         let id = self.current.clone()?;
+        self.syntax.clear();
         self.sessions.remove(&id);
         self.generation += 1;
         self.loading = true;
@@ -113,6 +116,7 @@ impl ReviewUi {
             return;
         }
         self.saving = false;
+        self.syntax.clear();
         match result {
             Ok(session) if self.current.as_deref() == Some(session.diff.work_item_id.as_str()) => {
                 self.selected = self
@@ -147,6 +151,7 @@ impl ReviewUi {
             return ReviewIntent::None;
         }
         if key.code == KeyCode::Esc {
+            self.syntax.clear();
             self.current = None;
             self.loading = false;
             self.generation += 1;
@@ -229,6 +234,24 @@ impl ReviewUi {
             self.horizontal = 0;
         }
         ReviewIntent::None
+    }
+
+    pub fn request_syntax(&mut self) -> Option<crate::syntax::Request> {
+        if self.loading || self.saving {
+            return None;
+        }
+        let session = self.current.as_ref().and_then(|id| self.sessions.get(id))?;
+        let files = files(session, self.since_review);
+        let Some(file) = files.get(self.selected.min(files.len().saturating_sub(1))) else {
+            self.syntax.clear();
+            return None;
+        };
+        self.syntax
+            .request(self.generation, session, file, self.since_review)
+    }
+
+    pub fn finish_syntax(&mut self, ticket: u64, lines: Option<Vec<Line<'static>>>) {
+        self.syntax.finish(ticket, lines);
     }
 
     pub fn render(&mut self, frame: &mut Frame<'_>) {
@@ -452,20 +475,29 @@ impl ReviewUi {
             .title_style(theme::accent());
         let inner = block.inner(patch);
         let mut in_hunk = false;
-        let lines: Vec<_> = file
-            .patch
-            .lines()
-            .map(|line| {
-                if line.starts_with("diff ") {
-                    in_hunk = false;
-                }
-                let style = theme::diff_line(line, in_hunk);
-                if line.starts_with("@@") {
-                    in_hunk = true;
-                }
-                Line::styled(patch_text(line, in_hunk), style)
-            })
-            .collect();
+        let plain: Vec<Line<'static>>;
+        let lines = if let Some(lines) =
+            self.syntax
+                .lines(self.generation, &file.path, self.since_review)
+        {
+            lines
+        } else {
+            plain = file
+                .patch
+                .lines()
+                .map(|line| {
+                    if line.starts_with("diff ") {
+                        in_hunk = false;
+                    }
+                    let style = theme::diff_line(line, in_hunk);
+                    if line.starts_with("@@") {
+                        in_hunk = true;
+                    }
+                    Line::styled(patch_text(line, in_hunk), style)
+                })
+                .collect();
+            &plain
+        };
         let max_scroll = lines
             .len()
             .saturating_sub(inner.height as usize)
@@ -481,15 +513,21 @@ impl ReviewUi {
         self.horizontal = self.horizontal.min(max_horizontal);
         frame.render_widget(block, patch);
         frame.render_widget(
-            Paragraph::new(lines)
-                .style(theme::panel())
-                .scroll((self.scroll, self.horizontal)),
+            Paragraph::new(
+                lines[usize::from(self.scroll)..]
+                    .iter()
+                    .take(usize::from(inner.height))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+            .style(theme::panel())
+            .scroll((0, self.horizontal)),
             inner,
         );
     }
 }
 
-fn patch_text(line: &str, in_hunk: bool) -> String {
+pub(crate) fn patch_text(line: &str, in_hunk: bool) -> String {
     // Indentation starts after the diff marker, not at its display column.
     let (prefix, text) = if in_hunk && line.starts_with([' ', '+', '-']) {
         line.split_at(1)
@@ -948,6 +986,80 @@ mod tests {
                 .unwrap();
         }
         (directory, engine)
+    }
+
+    #[tokio::test]
+    async fn test_go_review() {
+        let (directory, engine) = reviewed_fixture().await;
+        let workspace = directory.path().join("workspace");
+        let path = std::path::Path::new("demo.go");
+        let code =
+            "package demo\n\nfunc Greet(name string) string {\n\treturn \"hello, \" + name\n}\n";
+        std::fs::write(workspace.join(path), code).unwrap();
+        let mut ui = ReviewUi::default();
+        let ticket = ui.open("A".into()).unwrap();
+        ui.finish(ticket, Ok(engine.open_review("A", None).await.unwrap()));
+        assert_eq!(ui.sessions["A"].diff.files[0].path, path);
+        let patch = ui.sessions["A"].diff.files[0].patch.clone();
+        let request = ui.request_syntax().unwrap();
+        let ticket = request.ticket;
+        let lines = request.run(&engine).await.unwrap();
+        ui.finish_syntax(ticket, Some(lines));
+        assert!(ui.request_syntax().is_none());
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal.draw(|frame| ui.render(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let background = theme::diff_line("+code", true).bg.unwrap();
+        theme::assert_text_style(buffer, "Greet", theme::BLUE, background);
+        theme::assert_text_style(buffer, "func", theme::MAUVE, background);
+        theme::assert_text_style(buffer, "hello,", theme::GREEN, background);
+        for (width, height) in [(120, 24), (45, 12), (1, 1), (0, 1)] {
+            screen(&mut ui, width, height);
+        }
+        assert_eq!(ui.sessions["A"].diff.files[0].patch, patch);
+        ui.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL), 10);
+        assert!(ui.request_syntax().is_none());
+        save_with_engine(&mut ui, &engine);
+
+        std::fs::write(workspace.join(path), code.replace("hello,", "goodbye,")).unwrap();
+        let ticket = ui.open("A".into()).unwrap();
+        ui.finish(ticket, Ok(engine.open_review("A", None).await.unwrap()));
+        assert!(ui.since_review);
+        let request = ui.request_syntax().unwrap();
+        let ticket = request.ticket;
+        ui.finish_syntax(ticket, Some(request.run(&engine).await.unwrap()));
+        let text = screen(&mut ui, 120, 24);
+        assert!(text.contains("hello,"));
+        assert!(text.contains("goodbye,"));
+        assert!(ui.request_syntax().is_none());
+        ui.key(KeyCode::Char('c').into(), 24);
+        let request = ui.request_syntax().unwrap();
+        let stale = request.ticket;
+        ui.key(KeyCode::Esc.into(), 24);
+        ui.finish_syntax(stale, Some(request.run(&engine).await.unwrap_or_default()));
+        assert!(ui.syntax.lines(ui.generation, path, false).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_go_fallback() {
+        let (directory, engine) = reviewed_fixture().await;
+        let workspace = directory.path().join("workspace");
+        std::fs::write(workspace.join("demo.go"), "package demo\n").unwrap();
+        let mut session = engine.open_review("A", None).await.unwrap();
+        session.diff.workspace = workspace.join("missing");
+        // A tracked file needs its Git base; untracked text is reconstructible
+        // entirely from the capture even when the checkout is gone.
+        session.diff.files[0].kind = ChangeKind::Modified;
+        let mut ui = ReviewUi::default();
+        let ticket = ui.open("A".into()).unwrap();
+        ui.finish(ticket, Ok(session));
+        let request = ui.request_syntax().unwrap();
+        let ticket = request.ticket;
+        let result = request.run(&engine).await;
+        assert!(result.is_none());
+        ui.finish_syntax(ticket, result);
+        assert!(screen(&mut ui, 120, 24).contains("+package demo"));
+        assert!(ui.request_syntax().is_none());
     }
 
     fn save_with_engine(ui: &mut ReviewUi, engine: &Engine) {

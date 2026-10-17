@@ -74,6 +74,12 @@ Review marks persist across restarts. Review is file-level, and diffs update onl
 when reloaded. Review operations never stage, commit, or modify source files.
 Binary content requires an external viewer.
 
+Go files have syntax highlighting in both diff modes, using Catppuccin colors
+over addition/deletion backgrounds. Highlighting uses captured source, not live
+edits, and is cached while scrolling. Other languages, unavailable source, or
+files exceeding the highlighting limits (512 KiB per source side or patch) keep
+the standard diff colors. No language server or editor setup is required.
+
 The default base is `HEAD`, including staged, unstaged, and non-ignored untracked
 changes. To include committed branch changes, choose a local revision:
 

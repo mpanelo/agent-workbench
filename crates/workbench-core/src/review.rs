@@ -15,6 +15,14 @@ pub enum ReviewStatus {
     ChangedAfterReview,
 }
 
+/// Complete sides of a captured text diff, reconstructed without live files.
+/// Transient display data, never part of persisted review state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReviewText {
+    pub before: String,
+    pub after: String,
+}
+
 /// Marks refer to the exact captured diff, not edits made after capture.
 /// Use Engine::open_review and Engine::set_file_reviewed for durable state.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,6 +143,22 @@ impl Error for ReviewError {
 }
 
 impl Engine {
+    /// Reconstruct a file's old/new contents for either captured review view.
+    /// Failure must not prevent displaying or reviewing the original patch.
+    pub async fn review_text(
+        &self,
+        session: &ReviewSession,
+        path: &Path,
+        since_review: bool,
+    ) -> Result<ReviewText, GitError> {
+        tokio::time::timeout(
+            crate::git::REVIEW_TIMEOUT,
+            self.git.review_text(session, path, since_review),
+        )
+        .await
+        .map_err(|_| GitError::TimedOut)?
+    }
+
     /// Capture Git changes and restore marks for the same item, canonical
     /// workspace and resolved base commit. Opening is read-only.
     pub async fn open_review(

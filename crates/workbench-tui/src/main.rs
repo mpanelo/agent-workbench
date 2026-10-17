@@ -19,6 +19,7 @@ mod preview;
 mod registration;
 mod removal;
 mod review;
+mod syntax;
 mod theme;
 mod ui;
 
@@ -349,9 +350,18 @@ async fn event_loop(
     let mut cleanups = JoinSet::<(u64, String, Result<(), String>)>::new();
     let mut mutations = JoinSet::<(Box<maintenance::Mutation>, Result<(), String>)>::new();
     let mut previews = JoinSet::new();
+    let mut highlights = JoinSet::new();
     let mut input_tick = time::interval(Duration::from_millis(100));
     input_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
+        if let Some(request) = reviews.request_syntax() {
+            highlights.abort_all();
+            let engine = Arc::clone(&engine);
+            highlights.spawn(async move {
+                let ticket = request.ticket;
+                (ticket, request.run(&engine).await)
+            });
+        }
         removal.observe(
             state
                 .work_items
@@ -513,6 +523,12 @@ async fn event_loop(
                     Some(Ok((ticket, result))) => reviews.finish(ticket, result),
                     Some(Err(error)) if !error.is_cancelled() => reviews.fail_loading("Git capture task stopped unexpectedly; reload the diff.".into()),
                     _ => {},
+                }
+                redraw = true;
+            }
+            completed = highlights.join_next(), if !highlights.is_empty() => {
+                if let Some(Ok((ticket, lines))) = completed {
+                    reviews.finish_syntax(ticket, lines);
                 }
                 redraw = true;
             }
