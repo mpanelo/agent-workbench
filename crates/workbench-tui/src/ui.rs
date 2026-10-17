@@ -965,7 +965,7 @@ mod tests {
         let text = screen(None, 80, 10, &mut 0);
         assert_eq!(
             text.lines().last().unwrap().trim_end(),
-            "Agents only: f | Views: w/s | Quit: q | Select: j/k | … | Help: ?"
+            "Agents only: f | Views: w/s | Quit: q | Register: <enter>/r | Help: ?"
         );
     }
 
@@ -2194,8 +2194,9 @@ mod tests {
             .collect();
         assert!(text.contains("Reply to ABC-123"));
         assert!(text.contains("yes λ🙂"));
-        assert!(text.contains("Send: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace"));
-        assert!(text.contains("Clear: <c-u> | …"));
+        assert!(
+            text.contains("Send: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear: <c-u>")
+        );
         let mut terminal = Terminal::new(TestBackend::new(1, 1)).unwrap();
         terminal
             .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))

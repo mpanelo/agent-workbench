@@ -674,7 +674,7 @@ mod tests {
         let rows: Vec<_> = text.lines().map(str::trim_end).collect();
         assert_eq!(
             rows[23],
-            "Select: j/k | Toggle mark: Space | Scroll: <c-d>/<c-u> | Pan: h/l | … | Help: ?"
+            "Toggle mark: Space | Scroll: <c-d>/<c-u> | Pan: h/l | Reload: r | … | Help: ?"
         );
     }
 

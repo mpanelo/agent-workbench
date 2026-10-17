@@ -587,7 +587,7 @@ mod tests {
         let rows: Vec<_> = text.lines().map(str::trim_end).collect();
         assert_eq!(
             rows[19],
-            "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | …"
+            "Field: Tab/Shift-Tab | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | …"
         );
     }
 

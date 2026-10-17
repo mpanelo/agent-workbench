@@ -48,25 +48,23 @@ impl Context {
         }
     }
 
-    // The footer and full help share the same hints, so hidden shortcuts remain
-    // accessible without maintaining a second, divergent list.
+    // The footer and full help share action hints. Familiar navigation keys
+    // remain supported without appearing in either list.
     pub fn hints(self) -> &'static str {
         match self {
             Self::Work => {
-                "Respond: r | Edit: e | Clean Up: c | Acknowledge finished turn: x | Views: w/s | Quit: q | Select: j/k | Open: <enter> | Review: d | Help: ?"
+                "Respond: r | Edit: e | Clean Up: c | Acknowledge finished turn: x | Views: w/s | Quit: q | Open: <enter> | Review: d | Help: ?"
             }
             Self::Sessions { all: false } => {
-                "All panes: f | Views: w/s | Quit: q | Select: j/k | Register: <enter>/r | Help: ?"
+                "All panes: f | Views: w/s | Quit: q | Register: <enter>/r | Help: ?"
             }
             Self::Sessions { all: true } => {
-                "Agents only: f | Views: w/s | Quit: q | Select: j/k | Register: <enter>/r | Help: ?"
+                "Agents only: f | Views: w/s | Quit: q | Register: <enter>/r | Help: ?"
             }
             Self::Review => {
-                "Select: j/k | Toggle mark: Space | Scroll: <c-d>/<c-u> | Pan: h/l | Reload: r | Full/since: c | Pending: Tab | Back: Esc | Quit: q | Help: ?"
+                "Toggle mark: Space | Scroll: <c-d>/<c-u> | Pan: h/l | Reload: r | Full/since: c | Pending: Tab | Back: Esc | Quit: q | Help: ?"
             }
-            Self::Reply => {
-                "Send: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear: <c-u> | Move cursor: ←/→"
-            }
+            Self::Reply => "Send: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear: <c-u>",
             Self::Response {
                 changed: false,
                 can_reject: true,
@@ -79,14 +77,14 @@ impl Context {
                 "Request changed; cancel and reopen. | Cancel: Esc | Help: ?"
             }
             Self::Registration => {
-                "Field: Tab/Shift-Tab/↑/↓ | Toggle type: Space | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→"
+                "Field: Tab/Shift-Tab | Toggle type: Space | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u>"
             }
             Self::Edit => {
-                "Field: Tab/Shift-Tab/↑/↓ | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u> | Move cursor: ←/→"
+                "Field: Tab/Shift-Tab | Save: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear field: <c-u>"
             }
             Self::Removal { blocked: false } => "Unregister: u | Clean: c | Cancel: Esc",
             Self::Removal { blocked: true } => "Cancel: Esc",
-            Self::Cleanup => "Choose: Tab/←/→ | Confirm: <enter> | Cancel: Esc/q/<c-c> | Help: ?",
+            Self::Cleanup => "Choose: Tab | Confirm: <enter> | Cancel: Esc/q/<c-c> | Help: ?",
         }
     }
 
@@ -98,21 +96,12 @@ impl Context {
             .collect();
         let extras: &[&str] = match self {
             Self::Work => &[
-                "Select (arrows): ↑/↓",
                 "Next attention item: Tab",
                 "Sessions: s",
                 "Quit (alternatives): Esc/<c-c>",
             ],
-            Self::Sessions { .. } => &[
-                "Select (arrows): ↑/↓",
-                "Sessions: s",
-                "Quit (alternatives): Esc/<c-c>",
-            ],
-            Self::Review => &[
-                "Select (arrows): ↑/↓",
-                "Pan (arrows): ←/→",
-                "Quit (alternative): <c-c>",
-            ],
+            Self::Sessions { .. } => &["Sessions: s", "Quit (alternatives): Esc/<c-c>"],
+            Self::Review => &["Quit (alternative): <c-c>"],
             _ => &[],
         };
         lines.extend(extras.iter().map(|hint| theme::shortcut_line(hint)));
@@ -271,11 +260,7 @@ mod tests {
     fn test_view_bindings() {
         for (context, required, excluded) in [
             (Context::Work, "Clean Up: c", "Unregister: u"),
-            (
-                Context::Cleanup,
-                "Choose: Tab/←/→",
-                "Unregister entry: <enter>",
-            ),
+            (Context::Cleanup, "Choose: Tab", "Unregister entry: <enter>"),
             (
                 Context::Sessions { all: false },
                 "All panes: f",
@@ -326,6 +311,10 @@ mod tests {
             assert!(!text.contains("F1"));
             assert!(!text.contains("legacy alias"));
             assert!(!text.contains("Work: a"));
+            for hidden in ["j/k", "↑", "↓", "←", "→", "(arrows)"] {
+                assert!(!text.contains(hidden), "unexpected {hidden}: {text}");
+                assert!(!context.hints().contains(hidden));
+            }
             for hint in context.hints().split(" | ") {
                 assert!(text.contains(hint), "missing {hint}: {text}");
             }
