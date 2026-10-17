@@ -92,6 +92,7 @@ impl Context {
         let mut lines: Vec<_> = self
             .hints()
             .split(" | ")
+            .filter(|hint| *hint != "Help: ?")
             .map(theme::shortcut_line)
             .collect();
         let extras: &[&str] = match self {
@@ -316,7 +317,11 @@ mod tests {
                 assert!(!context.hints().contains(hidden));
             }
             for hint in context.hints().split(" | ") {
-                assert!(text.contains(hint), "missing {hint}: {text}");
+                if hint == "Help: ?" {
+                    assert!(!text.contains(hint), "unexpected {hint}: {text}");
+                } else {
+                    assert!(text.contains(hint), "missing {hint}: {text}");
+                }
             }
             assert_eq!(
                 text.contains("Approve once: y"),
