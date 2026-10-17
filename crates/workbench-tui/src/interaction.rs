@@ -134,6 +134,45 @@ pub(crate) struct ResponseBar {
     pub changed: bool,
 }
 
+/// Only explicit confirmations expire. Progress, guidance and errors do not.
+#[derive(Debug)]
+pub(crate) struct Message {
+    text: String,
+    expires_at: Option<Instant>,
+}
+
+impl Message {
+    pub fn confirmation(text: impl Into<String>, now: Instant) -> Self {
+        Self {
+            text: text.into(),
+            expires_at: Some(now + Duration::from_secs(3)),
+        }
+    }
+}
+
+impl From<String> for Message {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            expires_at: None,
+        }
+    }
+}
+
+impl From<&str> for Message {
+    fn from(text: &str) -> Self {
+        text.to_owned().into()
+    }
+}
+
+impl std::ops::Deref for Message {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
+
 impl ResponseBar {
     pub fn item_id(&self) -> &str {
         self.approve.item_id()
@@ -155,7 +194,7 @@ pub(crate) struct Interaction {
     pub work_list_offset: usize,
     pub detail_item_id: Option<String>,
     pub draft: Option<Draft>,
-    pub message: Option<String>,
+    pub message: Option<Message>,
     pub sending: bool,
     pub reveal_selection: bool,
     pub review_requested: Option<String>,
@@ -173,6 +212,19 @@ pub(crate) struct Interaction {
 }
 
 impl Interaction {
+    pub fn tick_message(&mut self, now: Instant) -> bool {
+        if self
+            .message
+            .as_ref()
+            .and_then(|message| message.expires_at)
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.message = None;
+            return true;
+        }
+        false
+    }
+
     pub fn begin_response(&mut self, items: &[WorkItemState]) {
         if self.sending || self.draft.is_some() || self.response_bar.is_some() {
             return;
@@ -241,7 +293,7 @@ impl Interaction {
             self.message = None;
             self.set_approval_feedback(request.item_id(), ApprovalPhase::Checking, Instant::now());
         } else {
-            self.message = Some(format!("Checking approval for {}…", request.item_id()));
+            self.message = Some(format!("Checking approval for {}…", request.item_id()).into());
         }
     }
 
@@ -315,7 +367,7 @@ impl Interaction {
         } else {
             self.approval_feedback = None;
         }
-        self.message = Some(match result {
+        let message = match result {
             Ok(()) => {
                 // The queue may have refreshed or moved while the key was sent.
                 // Reply to the captured item, never the newly selected row.
@@ -333,14 +385,15 @@ impl Interaction {
                 "Decision for {} failed: {error} Not retried; inspect the pane before retrying.",
                 request.item_id()
             ),
-        });
+        };
+        self.message = Some(message.into());
     }
 
     pub fn finish_focus(&mut self, id: &str, result: Result<(), ActionError>) {
         // Successful navigation needs no persistent notice; clear stale messages.
         self.message = result
             .err()
-            .map(|error| format!("Could not open {id}: {error}"));
+            .map(|error| format!("Could not open {id}: {error}").into());
         self.reveal_selection = true;
     }
 
@@ -470,6 +523,56 @@ fn pane_ids(snapshot: &Snapshot) -> Vec<&str> {
 mod tests {
     use super::*;
     use workbench_core::{AgentStatus, PaneAvailability, WorkItem, WorkItemKind};
+
+    #[test]
+    fn test_message_expiry() {
+        let now = Instant::now();
+        for text in ["Reply submitted to A.", "Cleaned up A."] {
+            let mut interaction = Interaction {
+                selected_id: Some("A".into()),
+                detail_item_id: Some("A".into()),
+                work_list_offset: 4,
+                message: Some(Message::confirmation(text, now)),
+                ..Default::default()
+            };
+            assert!(!interaction.tick_message(now + Duration::from_millis(2999)));
+            assert_eq!(interaction.message.as_deref(), Some(text));
+            assert!(interaction.tick_message(now + Duration::from_secs(3)));
+            assert!(interaction.message.is_none());
+            assert!(!interaction.tick_message(now + Duration::from_secs(4)));
+            assert_eq!(interaction.selected_id.as_deref(), Some("A"));
+            assert_eq!(interaction.detail_item_id.as_deref(), Some("A"));
+            assert_eq!(interaction.work_list_offset, 4);
+        }
+    }
+
+    #[test]
+    fn test_message_replacement() {
+        let now = Instant::now();
+        let mut interaction = Interaction::default();
+        for text in [
+            "Reply failed. Check the pane before resending.",
+            "Sending reply to A…",
+            "Select an item in WORK first.",
+        ] {
+            interaction.message = Some(Message::confirmation("Old confirmation", now));
+            interaction.message = Some(text.into());
+            assert!(!interaction.tick_message(now + Duration::from_secs(120)));
+            assert_eq!(interaction.message.as_deref(), Some(text));
+        }
+        interaction.message = Some(Message::confirmation("First", now));
+        interaction.message = Some(Message::confirmation(
+            "Second",
+            now + Duration::from_secs(2),
+        ));
+        assert!(!interaction.tick_message(now + Duration::from_secs(3)));
+        assert_eq!(interaction.message.as_deref(), Some("Second"));
+        assert!(interaction.tick_message(now + Duration::from_secs(5)));
+
+        interaction.message = Some(Message::confirmation("Cleared", now));
+        interaction.message = None;
+        assert!(!interaction.tick_message(now + Duration::from_secs(3)));
+    }
 
     #[test]
     fn test_focus_result() {

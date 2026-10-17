@@ -53,17 +53,6 @@ impl Mutation {
         }
         .map_err(|error| error.to_string())
     }
-
-    pub fn success_message(&self) -> Option<String> {
-        match self {
-            Self::Details { expected, id, .. } if expected.id != *id => Some(format!(
-                "Updated {} as {id}. Pane, workspace and review marks kept.",
-                expected.id
-            )),
-            Self::Details { id, .. } => Some(format!("Updated details for {id}.")),
-            Self::Unregister(_) => None,
-        }
-    }
 }
 
 pub(crate) enum Intent {
@@ -653,28 +642,6 @@ mod tests {
     }
 
     #[test]
-    fn test_success_feedback() {
-        assert!(Mutation::Unregister(item("A")).success_message().is_none());
-        let mut edit = Mutation::Details {
-            expected: item("A"),
-            id: "A".into(),
-            description: "Updated".into(),
-        };
-        assert_eq!(
-            edit.success_message().as_deref(),
-            Some("Updated details for A.")
-        );
-        let Mutation::Details { id, .. } = &mut edit else {
-            unreachable!()
-        };
-        *id = "B".into();
-        assert_eq!(
-            edit.success_message().as_deref(),
-            Some("Updated A as B. Pane, workspace and review marks kept.")
-        );
-    }
-
-    #[test]
     fn test_stale_mutation() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::new(directory.path().join("items.json"));
@@ -686,10 +653,6 @@ mod tests {
             description: "Updated".into(),
         };
         edited.execute(&engine).unwrap();
-        assert_eq!(
-            edited.success_message().as_deref(),
-            Some("Updated details for A.")
-        );
         let stale = Mutation::Unregister(original);
         assert!(
             stale

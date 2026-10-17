@@ -66,10 +66,9 @@ impl AppState {
             match interaction.attention_tracker.acknowledge(&target) {
                 Ok(()) => {
                     self.attention = interaction.attention_tracker.items(self.items());
-                    interaction.message =
-                        Some("Turn acknowledged; work item and review state unchanged.".into());
+                    interaction.message = None;
                 }
-                Err(error) => interaction.message = Some(error.to_string()),
+                Err(error) => interaction.message = Some(error.to_string().into()),
             }
         }
     }
@@ -448,7 +447,10 @@ async fn event_loop(
                             state.refresh_attention(&mut interaction.attention_tracker);
                             state.sync_selection(interaction);
                             interaction.reveal_selection = true;
-                            interaction.message = Some(format!("Cleaned up {id}: workmux window and worktree removed; branch and review history kept."));
+                            interaction.message = Some(interaction::Message::confirmation(
+                                format!("Cleaned up {id}: workmux window and worktree removed; branch and review history kept."),
+                                std::time::Instant::now(),
+                            ));
                         }
                     }
                     _ => cleanup.fail("Cleanup task stopped. Resources may be partly removed; inspect them before retrying. Registration was kept.".into()),
@@ -470,7 +472,7 @@ async fn event_loop(
                             state.refresh_attention(&mut interaction.attention_tracker);
                             state.sync_selection(interaction);
                             interaction.reveal_selection = true;
-                            interaction.message = mutation.success_message();
+                            interaction.message = None;
                         }
                     }
                     _ if removal.is_saving() => removal.finish_unregister(Err("Unregister task stopped unexpectedly; inspect WORK before retrying.".into())),
@@ -499,7 +501,7 @@ async fn event_loop(
                         scroll = 0;
                         interaction.selected_id = Some(item.id.clone());
                         interaction.reveal_selection = true;
-                        interaction.message = Some(format!("Registered {} from pane {}.", item.id, item.pane_id));
+                        interaction.message = None;
                     }
                     Some(Ok(Err(error))) => registration.error = Some(error),
                     _ => registration.error = Some("Registration task stopped unexpectedly; inspect WORK before retrying.".into()),
@@ -538,14 +540,20 @@ async fn event_loop(
                 interaction.sending = false;
                 match completed {
                     Some(Ok((id, result))) => match result {
-                        Ok(()) => { interaction.message = Some(format!("Reply submitted to {id}.")); interaction.draft = None; }
-                        Err(error) => interaction.message = Some(format!("Reply to {id} failed: {error}. Not retried; check the pane before resending.")),
+                        Ok(()) => {
+                            interaction.message = Some(interaction::Message::confirmation(
+                                format!("Reply submitted to {id}."), std::time::Instant::now(),
+                            ));
+                            interaction.draft = None;
+                        }
+                        Err(error) => interaction.message = Some(format!("Reply to {id} failed: {error}. Not retried; check the pane before resending.").into()),
                     },
                     _ => interaction.message = Some("Input task stopped unexpectedly. Check the pane before resending.".into()),
                 }
                 redraw = true;
             }
             _ = input_tick.tick() => {
+                redraw |= interaction.tick_message(std::time::Instant::now());
                 redraw |= interaction.tick_approval_feedback(std::time::Instant::now());
                 while event::poll(Duration::ZERO)? {
                     redraw = true;
@@ -628,7 +636,7 @@ async fn event_loop(
                         && let Some(draft) = &mut interaction.draft
                         && let Err(error) = draft.insert(text)
                     {
-                        interaction.message = Some(error);
+                        interaction.message = Some(error.into());
                     }
                     if let Event::Key(key) = event {
                         if key.kind == KeyEventKind::Release {
@@ -665,18 +673,18 @@ async fn event_loop(
                                 }
                                 KeyCode::Enter if !interaction.sending => {
                                     match validate_agent_input(&draft.text) {
-                                        Err(error) => interaction.message = Some(error.to_string()),
+                                        Err(error) => interaction.message = Some(error.to_string().into()),
                                         Ok(()) => {
                                             let id = draft.item_id.clone();
                                             let text = draft.text.clone();
                                             let engine = Arc::clone(&engine);
                                             interaction.sending = true;
-                                            interaction.message = Some(format!("Sending reply to {id}…"));
+                                            interaction.message = Some(format!("Sending reply to {id}…").into());
                                             sends.spawn(async move { let result = engine.send_agent_input(&id, &text).await; (id, result) });
                                         }
                                     }
                                 }
-                                _ if !interaction.sending => if let Err(error) = draft.edit(key) { interaction.message = Some(error); },
+                                _ if !interaction.sending => if let Err(error) = draft.edit(key) { interaction.message = Some(error.into()); },
                                 _ => {}
                             }
                             continue;
@@ -800,7 +808,7 @@ fn navigate(
                 .map(|item| interaction.attention_tracker.capture(item))
             {
                 Some(Ok(target)) => interaction.acknowledgement_requested = Some(target),
-                Some(Err(error)) => interaction.message = Some(error.to_string()),
+                Some(Err(error)) => interaction.message = Some(error.to_string().into()),
                 None => {
                     interaction.message = Some("Select a TURN FINISHED item in WORK first.".into())
                 }
@@ -1209,6 +1217,7 @@ mod tests {
         );
         assert!(interaction.acknowledgement_requested.is_some());
         state.apply_acknowledgement(&mut interaction);
+        assert!(interaction.message.is_none());
         assert_eq!(state.attention.len(), 1);
         assert_eq!(state.attention[0].item.id, "waiting");
         assert_eq!(interaction.selected_id.as_deref(), Some("finished"));
@@ -1606,7 +1615,6 @@ mod tests {
                     matches!(mutation.as_ref(), maintenance::Mutation::Unregister(item) if item.id == "B")
                 );
                 menu.finish_unregister(mutation.execute(&engine));
-                interaction.message = mutation.success_message();
                 assert!(interaction.message.is_none());
                 assert!(!menu.is_open());
                 assert_eq!(engine.work_items().unwrap(), [saved[0].clone()]);

@@ -2265,6 +2265,57 @@ mod tests {
     }
 
     #[test]
+    fn test_notice_expiry() {
+        let state = AppState::from_refresh(
+            Ok(snapshot()),
+            Ok(vec![registered(
+                PaneAvailability::Present,
+                WorkItemKind::Implementation,
+            )]),
+        );
+        let now = std::time::Instant::now();
+        for view in [View::Work, View::Sessions] {
+            for (width, height) in [(140, 30), (40, 12), (1, 1)] {
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut interaction = Interaction::default();
+                state.sync_selection(&mut interaction);
+                let mut draw = |interaction: &mut Interaction| {
+                    terminal
+                        .draw(|frame| match view {
+                            View::Work => render_work(frame, &state, &mut 0, interaction),
+                            View::Sessions => render_sessions(frame, &state, &mut 0, interaction),
+                        })
+                        .unwrap();
+                    terminal.backend().buffer().clone()
+                };
+                let baseline = draw(&mut interaction);
+                interaction.message = Some(crate::interaction::Message::confirmation(
+                    "Reply submitted to café.\x1b[2J",
+                    now,
+                ));
+                let notice = draw(&mut interaction);
+                assert!(
+                    notice
+                        .content()
+                        .iter()
+                        .all(|cell| { !cell.symbol().chars().any(char::is_control) })
+                );
+                if width >= 40 {
+                    let text: String = notice.content().iter().map(|cell| cell.symbol()).collect();
+                    assert!(
+                        text.contains("Reply submitted to café.\\u{1b}[2J"),
+                        "{text}"
+                    );
+                    assert_ne!(notice, baseline);
+                }
+                assert!(interaction.tick_message(now + std::time::Duration::from_secs(3)));
+                assert_eq!(draw(&mut interaction), baseline);
+                assert_eq!(interaction.selected_id.as_deref(), Some("ABC-123"));
+            }
+        }
+    }
+
+    #[test]
     fn test_acknowledged_row() {
         let mut item = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         item.status = AgentStatus::Complete;
