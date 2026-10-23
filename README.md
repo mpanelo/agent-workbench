@@ -45,6 +45,7 @@ The selected work item includes a read-only pane preview with live colors and
 recent output. It sits beside details on wide screens and below them when space
 allows. This is a bounded terminal capture, not a complete agent response;
 `<enter>` still opens the agent pane for interaction. Preview text is not saved.
+Long preview lines wrap to fit; the preview follows the latest wrapped rows.
 Long input requests take priority when space is limited.
 
 | Action in WORK | Key |
@@ -68,7 +69,8 @@ failed send, since some input may already have arrived.
 
 Press `d` on a work item. `Space` toggles a file's review mark, `r` reloads changes,
 and `c` switches between the full diff and changes since review. Use
-`<c-d>` / `<c-u>` to scroll, `h` / `l` to pan, and `Esc` to return.
+`<c-d>` / `<c-u>` to scroll and `Esc` to return. Long lines wrap to fit the diff
+viewport, preserving indentation and syntax colors.
 
 Review marks persist across restarts. Review is file-level, and diffs update only
 when reloaded. Review operations never stage, commit, or modify source files.

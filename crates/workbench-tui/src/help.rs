@@ -62,7 +62,7 @@ impl Context {
                 "Agents only: f | Work: w | Quit: q | Register: <enter>/r | Help: ?"
             }
             Self::Review => {
-                "Toggle mark: Space | Scroll: <c-d>/<c-u> | Pan: h/l | Reload: r | Full/since: c | Pending: Tab | Back: Esc | Quit: q | Help: ?"
+                "Toggle mark: Space | Scroll: <c-d>/<c-u> | Reload: r | Full/since: c | Pending: Tab | Back: Esc | Quit: q | Help: ?"
             }
             Self::Reply => "Send: <enter> | Cancel: Esc/Ctrl-C | Edit: Backspace | Clear: <c-u>",
             Self::Response {

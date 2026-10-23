@@ -24,8 +24,7 @@ pub(crate) struct ReviewUi {
     save_error: Option<String>,
     saving: bool,
     selected: usize,
-    scroll: u16,
-    horizontal: u16,
+    scroll: usize,
     since_review: bool,
     pub base: Option<String>,
 }
@@ -73,7 +72,6 @@ impl ReviewUi {
         self.save_error = None;
         self.selected = 0;
         self.scroll = 0;
-        self.horizontal = 0;
         self.since_review = false;
         self.loading.then_some(self.generation)
     }
@@ -88,7 +86,6 @@ impl ReviewUi {
         self.save_error = None;
         self.selected = 0;
         self.scroll = 0;
-        self.horizontal = 0;
         Some((self.generation, id))
     }
 
@@ -123,7 +120,6 @@ impl ReviewUi {
                     .selected
                     .min(files(&session, self.since_review).len().saturating_sub(1));
                 self.scroll = 0;
-                self.horizontal = 0;
                 self.sessions
                     .insert(session.diff.work_item_id.clone(), session);
                 self.save_error = None;
@@ -158,7 +154,7 @@ impl ReviewUi {
             return ReviewIntent::None;
         }
         if key.modifiers == KeyModifiers::CONTROL {
-            let amount = (height.saturating_sub(4) / 2).max(1);
+            let amount = usize::from((height.saturating_sub(4) / 2).max(1));
             match key.code {
                 KeyCode::Char('d') => self.scroll = self.scroll.saturating_add(amount),
                 KeyCode::Char('u') => self.scroll = self.scroll.saturating_sub(amount),
@@ -179,7 +175,6 @@ impl ReviewUi {
             self.since_review = !self.since_review;
             self.selected = 0;
             self.scroll = 0;
-            self.horizontal = 0;
             return ReviewIntent::None;
         }
         let Some(session) = self
@@ -221,17 +216,10 @@ impl ReviewUi {
                     };
                 }
             }
-            KeyCode::Char('h') | KeyCode::Left => {
-                self.horizontal = self.horizontal.saturating_sub(8)
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                self.horizontal = self.horizontal.saturating_add(8)
-            }
             _ => {}
         }
         if previous != self.selected {
             self.scroll = 0;
-            self.horizontal = 0;
         }
         ReviewIntent::None
     }
@@ -498,32 +486,10 @@ impl ReviewUi {
                 .collect();
             &plain
         };
-        let max_scroll = lines
-            .len()
-            .saturating_sub(inner.height as usize)
-            .min(u16::MAX as usize) as u16;
-        let max_horizontal = lines
-            .iter()
-            .map(Line::width)
-            .max()
-            .unwrap_or(0)
-            .saturating_sub(inner.width as usize)
-            .min(u16::MAX as usize) as u16;
-        self.scroll = self.scroll.min(max_scroll);
-        self.horizontal = self.horizontal.min(max_horizontal);
+        let (rows, offset) = crate::wrap::viewport(lines, inner.width, inner.height, self.scroll);
+        self.scroll = offset;
         frame.render_widget(block, patch);
-        frame.render_widget(
-            Paragraph::new(
-                lines[usize::from(self.scroll)..]
-                    .iter()
-                    .take(usize::from(inner.height))
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            )
-            .style(theme::panel())
-            .scroll((0, self.horizontal)),
-            inner,
-        );
+        frame.render_widget(Paragraph::new(rows).style(theme::panel()), inner);
     }
 }
 
@@ -782,7 +748,7 @@ mod tests {
         let rows: Vec<_> = text.lines().map(str::trim_end).collect();
         assert_eq!(
             rows[23],
-            "Toggle mark: Space | Scroll: <c-d>/<c-u> | Pan: h/l | Reload: r | … | Help: ?"
+            "Toggle mark: Space | Scroll: <c-d>/<c-u> | Reload: r | … | Help: ?"
         );
     }
 
@@ -825,22 +791,60 @@ mod tests {
         key(&mut review, KeyCode::PageUp);
         assert_eq!(review.scroll, 0);
         review.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL), 10);
-        key(&mut review, KeyCode::Char('l'));
-        assert!(review.scroll > 0 && review.horizontal > 0);
+        assert!(review.scroll > 0);
         assert_eq!(review.selected, 0);
-        let offsets = (review.scroll, review.horizontal);
-        for code in [KeyCode::Home, KeyCode::F(1)] {
+        let offset = review.scroll;
+        for code in [
+            KeyCode::Home,
+            KeyCode::F(1),
+            KeyCode::Char('h'),
+            KeyCode::Char('l'),
+            KeyCode::Left,
+            KeyCode::Right,
+        ] {
             key(&mut review, code);
-            assert_eq!((review.scroll, review.horizontal), offsets);
+            assert_eq!(review.scroll, offset);
             assert_eq!(review.selected, 0);
         }
         key(&mut review, KeyCode::Char('j'));
-        assert_eq!(
-            (review.selected, review.scroll, review.horizontal),
-            (1, 0, 0)
-        );
+        assert_eq!((review.selected, review.scroll), (1, 0));
         review.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL), 24);
         assert!(!review.loading);
+    }
+
+    #[test]
+    fn test_diff_wrap() {
+        let mut ui = ready();
+        let patch = format!("@@ -0,0 +1 @@\n+BEGIN{}TAIL\n", "x".repeat(110));
+        ui.sessions.get_mut("A").unwrap().diff.files[0].patch = patch.clone();
+        for width in [80, 45] {
+            let text = screen(&mut ui, width, 24);
+            assert!(text.contains("BEGIN"), "{text}");
+            assert!(text.contains("TAIL"), "{text}");
+        }
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| ui.render(frame)).unwrap();
+        theme::assert_text_style(
+            terminal.backend().buffer(),
+            "TAIL",
+            theme::GREEN,
+            theme::diff_line("+code", true).bg.unwrap(),
+        );
+        assert_eq!(ui.sessions["A"].diff.files[0].patch, patch);
+
+        ui.sessions.get_mut("A").unwrap().diff.files[0].patch =
+            format!("+{}TAIL\n", "x".repeat(800));
+        assert!(!screen(&mut ui, 80, 12).contains("TAIL"));
+        for _ in 0..30 {
+            ui.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL), 12);
+            screen(&mut ui, 80, 12);
+        }
+        assert!(screen(&mut ui, 80, 12).contains("TAIL"));
+        assert!(ui.scroll > 1);
+        assert_eq!(ui.selected, 0);
+        assert!(screen(&mut ui, 140, 12).contains("TAIL"));
+        ui.scroll = 0;
+        assert!(screen(&mut ui, 80, 12).contains("+xxx"));
     }
 
     #[test]
@@ -993,9 +997,11 @@ mod tests {
         let (directory, engine) = reviewed_fixture().await;
         let workspace = directory.path().join("workspace");
         let path = std::path::Path::new("demo.go");
-        let code =
-            "package demo\n\nfunc Greet(name string) string {\n\treturn \"hello, \" + name\n}\n";
-        std::fs::write(workspace.join(path), code).unwrap();
+        let code = format!(
+            "package demo\n\nfunc Greet(name string) string {{\n\treturn \"hello, \" + name + \"{}TAILGO\"\n}}\n",
+            "x".repeat(150)
+        );
+        std::fs::write(workspace.join(path), &code).unwrap();
         let mut ui = ReviewUi::default();
         let ticket = ui.open("A".into()).unwrap();
         ui.finish(ticket, Ok(engine.open_review("A", None).await.unwrap()));
@@ -1013,6 +1019,7 @@ mod tests {
         theme::assert_text_style(buffer, "Greet", theme::BLUE, background);
         theme::assert_text_style(buffer, "func", theme::MAUVE, background);
         theme::assert_text_style(buffer, "hello,", theme::GREEN, background);
+        theme::assert_text_style(buffer, "TAILGO", theme::GREEN, background);
         for (width, height) in [(120, 24), (45, 12), (1, 1), (0, 1)] {
             screen(&mut ui, width, height);
         }
@@ -1112,7 +1119,7 @@ mod tests {
         assert!(!ui.since_review);
         assert!(screen(&mut ui, 120, 24).contains("○ never-reviewed.txt"));
         key(&mut ui, KeyCode::Char('c'));
-        assert_eq!((ui.selected, ui.scroll, ui.horizontal), (0, 0, 0));
+        assert_eq!((ui.selected, ui.scroll), (0, 0));
         save_with_engine(&mut ui, &engine);
         assert!(screen(&mut ui, 120, 24).contains("No changes since review"));
         key(&mut ui, KeyCode::Char('c'));

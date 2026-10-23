@@ -22,6 +22,7 @@ mod review;
 mod syntax;
 mod theme;
 mod ui;
+mod wrap;
 
 type DiscoveryState = Option<Result<Snapshot, String>>;
 

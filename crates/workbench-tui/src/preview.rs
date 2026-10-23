@@ -82,9 +82,9 @@ impl PreviewUi {
             .filter(|_| self.target.as_ref() == Some(item));
         match content {
             Some(Ok(lines)) if !lines.is_empty() => {
-                let start = lines.len().saturating_sub(usize::from(inner.height));
                 frame.render_widget(
-                    Paragraph::new(lines[start..].to_vec()).style(theme::panel()),
+                    Paragraph::new(crate::wrap::tail(lines, inner.width, inner.height))
+                        .style(theme::panel()),
                     inner,
                 );
             }
@@ -347,6 +347,39 @@ mod tests {
         assert!(screen(&ui, &item, 45, 8).contains("Pane has no output"));
         for (width, height) in [(1, 1), (0, 0), (5, 3)] {
             screen(&ui, &item, width, height);
+        }
+    }
+
+    #[test]
+    fn test_wrapping() {
+        let item = item("A");
+        let mut ui = PreviewUi::default();
+        ui.select(Some(&item));
+        let (ticket, _) = ui.request(Instant::now()).unwrap();
+        let text = format!("\x1b[38;2;1;2;3mBEGIN{}TAIL\x1b[0m", "x".repeat(80));
+        ui.finish(ticket, Ok(capture(&text)));
+        let rendered = screen(&ui, &item, 32, 8);
+        assert!(rendered.contains("BEGIN"));
+        assert!(rendered.contains("TAIL"));
+        let mut terminal = Terminal::new(TestBackend::new(32, 8)).unwrap();
+        terminal
+            .draw(|frame| ui.render(frame, frame.area(), &item))
+            .unwrap();
+        theme::assert_text_style(
+            terminal.backend().buffer(),
+            "TAIL",
+            Color::Rgb(1, 2, 3),
+            theme::MANTLE,
+        );
+        assert!(!rendered.contains('\x1b'));
+
+        let text = format!("BEGIN{}TAIL\nlast row", "x".repeat(1000));
+        ui.finish(ticket, Ok(capture(&text)));
+        for width in [32, 52] {
+            let rendered = screen(&ui, &item, width, 8);
+            assert!(rendered.contains("TAIL"), "{rendered}");
+            assert!(rendered.contains("last row"));
+            assert!(!rendered.contains("BEGIN"));
         }
     }
 
