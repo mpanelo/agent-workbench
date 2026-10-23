@@ -21,6 +21,7 @@ pub(crate) struct PreviewUi {
     target: Option<WorkItem>,
     generation: u64,
     busy: bool,
+    streaming: bool,
     requested: Option<Instant>,
     quiet_since: Option<Instant>,
     slow: bool,
@@ -38,6 +39,7 @@ impl PreviewUi {
         self.target = target.cloned();
         self.generation = self.generation.wrapping_add(1);
         self.busy = false;
+        self.streaming = false;
         self.requested = None;
         self.quiet_since = None;
         self.slow = false;
@@ -48,7 +50,8 @@ impl PreviewUi {
 
     pub fn request(&mut self, now: Instant) -> Option<(u64, WorkItem)> {
         let target = self.target.as_ref()?;
-        if self.busy
+        if self.streaming
+            || self.busy
             || self
                 .requested
                 .is_some_and(|last| now.saturating_duration_since(last) < self.refresh())
@@ -62,13 +65,31 @@ impl PreviewUi {
 
     /// Wake at the capture deadline instead of rounding it to the input tick.
     pub fn deadline(&self) -> Option<Instant> {
-        if self.target.is_none() || self.busy {
+        if self.target.is_none() || self.busy || self.streaming {
             return None;
         }
         Some(
             self.requested
                 .map_or_else(Instant::now, |last| last + self.refresh()),
         )
+    }
+
+    pub fn start_stream(&mut self) -> Option<(u64, WorkItem)> {
+        let target = self.target.clone()?;
+        self.streaming = true;
+        Some((self.generation, target))
+    }
+
+    pub fn stop_stream(&mut self, ticket: u64) {
+        if ticket == self.generation {
+            self.fail_stream();
+        }
+    }
+
+    pub fn fail_stream(&mut self) {
+        self.streaming = false;
+        self.requested = None;
+        self.busy = false;
     }
 
     fn refresh(&self) -> Duration {
@@ -324,6 +345,36 @@ mod tests {
         ui.finish(current, Ok(capture("removed")));
         assert!(ui.content.is_none());
         assert!(ui.target.is_none());
+    }
+
+    #[test]
+    fn test_stream_fallback() {
+        let mut ui = PreviewUi::default();
+        assert!(ui.start_stream().is_none());
+        ui.select(Some(&item("A")));
+        let (old, _) = ui.start_stream().unwrap();
+        let now = Instant::now();
+        assert!(ui.request(now).is_none());
+        assert!(ui.deadline().is_none());
+        assert!(ui.finish(old, Ok(capture("live"))));
+        assert!(ui.request(now + QUIET).is_none());
+        ui.stop_stream(old);
+        assert!(ui.request(now).is_some());
+        assert!(ui.finish(old, Ok(capture("fallback"))));
+        assert!(screen(&ui, &item("A"), 45, 8).contains("fallback"));
+
+        ui.select(Some(&item("B")));
+        let (current, _) = ui.start_stream().unwrap();
+        ui.stop_stream(old);
+        assert!(ui.streaming);
+        assert!(!ui.finish(old, Ok(capture("stale"))));
+        assert!(ui.finish(current, Ok(capture("new"))));
+        ui.fail_stream();
+        assert!(ui.request(now).is_some());
+        ui.select(None);
+        assert!(ui.capture.is_none());
+        assert!(!ui.streaming);
+        assert!(ui.start_stream().is_none());
     }
 
     #[test]

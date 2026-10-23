@@ -351,6 +351,8 @@ async fn event_loop(
     let mut cleanups = JoinSet::<(u64, String, Result<(), String>)>::new();
     let mut mutations = JoinSet::<(Box<maintenance::Mutation>, Result<(), String>)>::new();
     let mut previews = JoinSet::new();
+    let mut live_previews = JoinSet::new();
+    let (preview_updates, mut preview_receiver) = watch::channel(None);
     let mut highlights = JoinSet::new();
     let mut input_tick = time::interval(Duration::from_millis(100));
     input_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -386,6 +388,22 @@ async fn event_loop(
         };
         if interaction.preview.select(preview_item) {
             previews.abort_all();
+            live_previews.abort_all();
+            preview_updates.send_replace(None);
+            if cfg!(feature = "live-preview")
+                && let Some((ticket, item)) = interaction.preview.start_stream()
+            {
+                let engine = Arc::clone(&engine);
+                let updates = preview_updates.clone();
+                live_previews.spawn(async move {
+                    let result = engine
+                        .stream_preview(&item, |capture| {
+                            updates.send_replace(Some((ticket, capture)));
+                        })
+                        .await;
+                    (ticket, result)
+                });
+            }
             redraw = true;
         }
         if let Some((ticket, item)) = interaction.preview.request(std::time::Instant::now()) {
@@ -426,6 +444,21 @@ async fn event_loop(
         }
         let preview_deadline = interaction.preview.deadline();
         tokio::select! {
+            changed = preview_receiver.changed() => {
+                if changed.is_ok()
+                    && let Some((ticket, capture)) = preview_receiver.borrow_and_update().clone() {
+                    redraw |= interaction.preview.finish(ticket, Ok(capture));
+                }
+            },
+            completed = live_previews.join_next(), if !live_previews.is_empty() => {
+                if let Some(Ok((ticket, _))) = completed {
+                    interaction.preview.stop_stream(ticket);
+                } else if live_previews.is_empty() {
+                    // A cancelled old generation must not disable a new stream.
+                    // Unexpected worker failures use the existing polling path.
+                    interaction.preview.fail_stream();
+                }
+            },
             _ = time::sleep_until(time::Instant::from_std(preview_deadline.unwrap_or_else(std::time::Instant::now))), if preview_deadline.is_some() => {},
             completed = previews.join_next(), if !previews.is_empty() => {
                 redraw |= match completed {

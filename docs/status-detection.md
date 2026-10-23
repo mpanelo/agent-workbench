@@ -194,6 +194,76 @@ Rerun the synthetic decode/render timing explicitly, without timing assertions:
 cargo test --release -p workbench-tui preview::tests::test_timing -- --ignored --nocapture
 ```
 
+### Experimental live preview
+
+The opt-in `live-preview` build feature tests a persistent tmux control-mode
+connection. It is not a proven active-CPU optimization. Normal builds retain
+5 FPS active / 2 FPS idle polling. To try the prototype without replacing an
+installed binary:
+
+```sh
+cargo run --release -p workbench-tui --features live-preview
+```
+
+The core attaches one client to the selected pane's session, with read-only,
+ignore-size, independent-active-pane, and pause-after flags. It does not send
+keys, select panes/windows, set client dimensions, update the session environment,
+or create a session. Attaching is still a real tmux client attachment: tmux's
+attached-client counts change, and user-configured attachment hooks may run.
+
+Pane-output notifications are discarded after identifying their pane. They only
+mark the preview as needing a fresh snapshot, capped at 10 captures/sec. No
+periodic preview capture runs while quiet. Snapshots use the existing bounded
+capture and safe display decoder, never raw terminal output or a terminal
+emulator. The UI retains only the latest pending update and discards stale
+generations. Selection/view changes cancel the observer and clear its output.
+
+Capture identity and dimensions are rechecked, as is the pane's session. Command
+reads time out after three seconds. Protocol lines and combined snapshot replies
+are capped at 256 KiB; total connection traffic is capped at 4 MiB per second.
+A disconnect, timeout, failed command, changed session, paused selected pane, or
+exceeded limit stops the observer and falls back to normal polling for that
+selection. A later selection starts a new attempt. Other panes in the attached
+session also produce control notifications; their contents are ignored, but
+their traffic counts toward the limit. This is one reason the prototype is not
+the default.
+
+The [tmux control-mode documentation](https://github.com/tmux/tmux/wiki/Control-Mode)
+describes command framing, output notifications, and flow control. Parser tests
+cover malformed/failed replies, non-UTF-8 notifications, bounds, and changes
+between reply blocks. The opt-in disposable-server smoke test checks snapshots,
+pane size/focus, cancellation, and pane disappearance:
+
+```sh
+cargo test -p workbench-core preview::tests::test_tmux_preview -- --ignored --nocapture
+```
+
+A separate local macOS arm64 comparison used the synthetic workload described
+above with tmux 3.7c, two ten-second runs per case, and reversed binary order in
+the second pair. The harness switched out of WORK before exit to cancel and reap
+the observer while the runtime was still alive. CPU accounting includes that
+roughly 250 ms teardown in both versions and includes waited child commands.
+
+| Scenario | Polling: app/children + tmux CPU | Live: app/children + tmux CPU |
+| --- | --- | --- |
+| Idle | 3.7% to 4.6% | 0.6% to 0.8% |
+| Active | 9.1% to 12.2% | 9.8% to 11.0% |
+
+These are combined percentages of one core, not whole-machine utilization.
+Active app/child CPU was 6.6% to 8.8% polling versus 4.2% to 4.6% live, but tmux
+server CPU rose from 2.5% to 3.4% to 5.6% to 6.4%. Counting both, live active CPU
+was about 7% higher in one pair and 9% lower in the other. There is no consistent
+active CPU improvement. Idle combined CPU fell about 79% to 87% in the pairs.
+The synthetic producer and terminal-app/GPU costs are not included.
+
+The live UI redrew about ten times per second during active output. In a separate
+quiet-to-active burst, the first visible change arrived after 116 ms. This is one
+observation, not a latency guarantee. Safety tests and local results justify an
+opt-in experiment, not enabling it by default. Busy sibling panes, custom tmux
+hooks, and high-output real agents still need broader testing. Reducing snapshot
+work and unrelated notification traffic would be follow-up experiments, not
+reasons to raise the default polling rate.
+
 ## Testing
 
 Keep parser and transition tests independent of live agents. Cover layout

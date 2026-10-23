@@ -6,6 +6,8 @@ use tokio::{io::AsyncReadExt, time::timeout};
 use crate::tmux::{COMMAND_TIMEOUT, TmuxClient, ensure_success, validate_id};
 use crate::{DiscoveryError, Engine, WorkItem, WorkItemError};
 
+mod control;
+
 const MAX_CAPTURE: usize = 256 * 1024;
 const FORMAT: &str = concat!(
     "\x1e#{pid}:#{start_time}\x1f#{socket_path}\x1f#{pane_id}\x1f",
@@ -385,6 +387,12 @@ exec cat "$base/capture"
             Err(PreviewError::Changed)
         ));
         assert!(!directory.path().join("log").exists());
+        assert!(matches!(
+            engine
+                .stream_preview(&item, |_| panic!("stale preview published"))
+                .await,
+            Err(PreviewError::Changed)
+        ));
         let item = engine.work_items().unwrap().remove(0);
         engine.unregister_work_item(&item).unwrap();
         assert!(matches!(
@@ -518,6 +526,8 @@ exec cat "$base/capture"
             engine.tmux.query(&focus).await.unwrap(),
             engine.tmux.query(&sizes).await.unwrap(),
         );
+        let clients = ["list-clients", "-F", "#{client_name}"];
+        let clients_before = engine.tmux.query(&clients).await.unwrap();
         let state = fs::read(engine.store.state_path()).unwrap();
         let capture = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
@@ -535,11 +545,43 @@ exec cat "$base/capture"
         assert_eq!(engine.tmux.query(&focus).await.unwrap(), before.0);
         assert_eq!(engine.tmux.query(&sizes).await.unwrap(), before.1);
         assert_eq!(fs::read(engine.store.state_path()).unwrap(), state);
-        engine
-            .tmux
-            .execute(&["kill-pane".into(), "-t".into(), pane])
-            .await
-            .unwrap();
+        let mut streamed = None;
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            engine.stream_preview(&item, |capture| {
+                streamed = Some(capture);
+            }),
+        )
+        .await;
+        assert!(result.is_err(), "stream stopped: {result:?}");
+        let streamed = streamed.expect("stream did not deliver an initial snapshot");
+        assert!(streamed.text.contains("preview-marker"));
+        assert_eq!((streamed.width, streamed.height), (100, 30));
+        assert_eq!(engine.tmux.query(&focus).await.unwrap(), before.0);
+        assert_eq!(engine.tmux.query(&sizes).await.unwrap(), before.1);
+        assert_eq!(fs::read(engine.store.state_path()).unwrap(), state);
+        // Cancellation must detach/reap only the observer, leaving the session.
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while engine.tmux.query(&clients).await.unwrap() != clients_before {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(engine.stream_preview(&item, |_| {}), async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                engine
+                    .tmux
+                    .execute(&["kill-pane".into(), "-t".into(), pane])
+                    .await
+                    .unwrap();
+            })
+            .0
+        })
+        .await
+        .unwrap();
+        assert!(result.is_err());
         assert!(engine.preview_work_item(&item).await.is_err());
         assert_eq!(engine.work_items().unwrap(), [item]);
     }
