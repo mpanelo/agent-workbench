@@ -134,11 +134,15 @@ registrations discard results. Captures are decoded to presentation styles,
 kept only in memory, and cleared on selection/view changes. Preview text never
 establishes status or authorizes input, and is not a complete agent response.
 
-Preview capture targets a 100 ms interval (up to 10 updates per second) with
-at most one capture in flight. A dedicated deadline avoids rounding capture
+Preview capture targets a 100 ms interval (up to 10 updates per second), backing
+off to 500 ms after one second without a displayed change. The first detected
+change restores 100 ms polling. New activity may take up to roughly 500 ms plus
+capture/processing time to appear while backed off. A new selection starts fast.
+There is at most one capture in flight. A dedicated deadline avoids rounding
 starts to the input polling tick. Identical captures skip ANSI decoding, and
-unchanged decoded output or repeated errors do not request a redraw. Other
-application events can still redraw the screen.
+unchanged decoded output or repeated errors do not request a redraw or reset
+the quiet period. Repeated errors also back off; recovery starts fast again.
+Other application events can still redraw the screen.
 
 ### Preview performance
 
@@ -148,25 +152,39 @@ idle/active scenario ran for ten seconds; active output changed at 20 Hz. No
 real agents or user sessions were involved. These are local measurements, not
 performance guarantees or measurements of terminal-app/GPU rendering.
 
-| Scenario | Before: app + child CPU | 100 ms polling: app + child CPU |
+The adaptive comparison repeated idle/active scenarios in reverse binary order.
+The ranges below are from two clean ten-second runs per case, without the
+capture-counting shell wrapper. Idle averages include the initial fast period.
+
+| Scenario | Fixed 100 ms: app + child CPU | Adaptive: app + child CPU |
 | --- | --- | --- |
-| Idle | 2.4% | 9.8% |
-| Active | 3.5% | 11.3% |
+| Idle | 5.7% to 9.3% | 2.3% to 3.7% |
+| Active | 6.5% to 11.0% | 9.0% to 12.4% |
 
 CPU is relative to one core and includes Workbench's waited child commands.
-The separate tmux server used approximately 0.6%/1.9% before (idle/active) and
-3.6%/4.2% afterward, including processing synthetic pane output. A separate
-instrumented run observed 1.8 versus 9.8 captures/sec. Idle redraws fell from
-about 2.5/sec to 0.8/sec; remaining redraws came from other application events.
+Idle CPU fell about 60% in each matched pair. CPU varied appreciably between
+runs, and no active CPU reduction is claimed: changing output still uses the
+fast capture rate. The separate tmux server used 2.5% to 3.5% fixed / 0.8% to
+1.0% adaptive while idle, and 2.7% to 4.0% fixed / 3.4% to 4.4% adaptive while
+active, including processing synthetic pane output.
 
-For 100 samples, a roughly 38 KiB capture plus metadata CLI round trip took
-7.76 ms median / 8.56 ms p95. With roughly 43 KiB of colored output and a 96x36
+A separate instrumented run measured steady polling (seconds two through eight)
+at 2.00 captures/sec idle and 9.85/sec active. With three seconds of quiet followed
+by output changing at 20 Hz, the first visible change arrived after 218 ms and
+subsequent active redraws averaged about 10/sec. This is one observed wake delay,
+not a tighter guarantee than the 500 ms polling interval. Idle redraws remain
+around 0.8/sec because other application events can redraw the screen.
+
+In the initial fixed-rate experiment, for 100 samples, a roughly 38 KiB capture
+plus metadata CLI round trip took 7.76 ms median / 8.56 ms p95. With roughly
+43 KiB of colored output and a 96x36
 test viewport, changed-output decoding took 0.91 ms median / 1.84 ms p95,
 wrapping plus TestBackend rendering 0.40 ms / 0.72 ms, and identical-output
 comparison 1.7 microseconds / 3.5 microseconds. Capture subprocess overhead is
 therefore the main remaining cost in this experiment. Idle redraw suppression
-does not eliminate capture polling costs; adaptive backoff or an event-driven
-transport would need a separate design.
+does not eliminate capture polling costs, and adaptive polling reduces those
+costs only when output stops changing. An event-driven transport would need a
+separate design.
 
 Rerun the synthetic decode/render timing explicitly, without timing assertions:
 

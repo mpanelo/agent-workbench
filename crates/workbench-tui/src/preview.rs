@@ -13,6 +13,8 @@ use workbench_core::{PanePreview, WorkItem};
 use crate::{theme, ui::visible};
 
 const REFRESH: Duration = Duration::from_millis(100);
+const IDLE_REFRESH: Duration = Duration::from_millis(500);
+const QUIET: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Default)]
 pub(crate) struct PreviewUi {
@@ -20,6 +22,8 @@ pub(crate) struct PreviewUi {
     generation: u64,
     busy: bool,
     requested: Option<Instant>,
+    quiet_since: Option<Instant>,
+    slow: bool,
     capture: Option<PanePreview>,
     content: Option<Result<Vec<Line<'static>>, String>>,
 }
@@ -35,6 +39,8 @@ impl PreviewUi {
         self.generation = self.generation.wrapping_add(1);
         self.busy = false;
         self.requested = None;
+        self.quiet_since = None;
+        self.slow = false;
         self.capture = None;
         self.content = None;
         true
@@ -45,7 +51,7 @@ impl PreviewUi {
         if self.busy
             || self
                 .requested
-                .is_some_and(|last| now.saturating_duration_since(last) < REFRESH)
+                .is_some_and(|last| now.saturating_duration_since(last) < self.refresh())
         {
             return None;
         }
@@ -61,13 +67,38 @@ impl PreviewUi {
         }
         Some(
             self.requested
-                .map_or_else(Instant::now, |last| last + REFRESH),
+                .map_or_else(Instant::now, |last| last + self.refresh()),
         )
+    }
+
+    fn refresh(&self) -> Duration {
+        if self.slow { IDLE_REFRESH } else { REFRESH }
+    }
+
+    fn activity(&mut self, changed: bool, now: Instant) {
+        if changed || self.quiet_since.is_none() {
+            self.quiet_since = Some(now);
+            self.slow = false;
+        } else if self
+            .quiet_since
+            .is_some_and(|since| now.saturating_duration_since(since) >= QUIET)
+        {
+            self.slow = true;
+        }
     }
 
     /// Return whether displayed content changed. Identical captures bypass ANSI
     /// decoding as well as rendering; stale results never request a redraw.
     pub fn finish(&mut self, ticket: u64, result: Result<PanePreview, String>) -> bool {
+        self.finish_at(ticket, result, Instant::now())
+    }
+
+    fn finish_at(
+        &mut self,
+        ticket: u64,
+        result: Result<PanePreview, String>,
+        now: Instant,
+    ) -> bool {
         if ticket != self.generation || self.target.is_none() {
             return false;
         }
@@ -75,6 +106,7 @@ impl PreviewUi {
         let content = match result {
             Ok(capture) => {
                 if self.capture.as_ref() == Some(&capture) {
+                    self.activity(false, now);
                     return false;
                 }
                 let lines = decode(&capture.text);
@@ -88,6 +120,7 @@ impl PreviewUi {
         };
         let changed = self.content.as_ref() != Some(&content);
         self.content = Some(content);
+        self.activity(changed, now);
         changed
     }
 
@@ -339,6 +372,80 @@ mod tests {
         assert!(ui.capture.is_none());
         assert!(ui.deadline().is_none());
         assert!(!ui.finish(ticket, Ok(capture("stale"))));
+    }
+
+    #[test]
+    fn test_backoff() {
+        let mut ui = PreviewUi::default();
+        ui.select(Some(&item("A")));
+        let start = Instant::now();
+        let (ticket, _) = ui.request(start).unwrap();
+        assert!(ui.finish_at(ticket, Ok(capture("first")), start));
+        for tick in 1..10 {
+            let now = start + REFRESH * tick;
+            assert!(ui.request(now).is_some());
+            assert!(!ui.finish_at(ticket, Ok(capture("first")), now));
+            assert_eq!(ui.deadline(), Some(now + REFRESH));
+        }
+        let now = start + QUIET;
+        assert!(ui.request(now).is_some());
+        assert!(!ui.finish_at(ticket, Ok(capture("first")), now));
+        assert_eq!(ui.deadline(), Some(now + IDLE_REFRESH));
+        assert!(
+            ui.request(now + IDLE_REFRESH - Duration::from_millis(1))
+                .is_none()
+        );
+        let resumed = now + IDLE_REFRESH;
+        assert!(ui.request(resumed).is_some());
+        assert!(ui.request(resumed + IDLE_REFRESH).is_none());
+        assert!(ui.finish_at(ticket, Ok(capture("resumed")), resumed));
+        assert_eq!(ui.deadline(), Some(resumed + REFRESH));
+        for tick in 1..10 {
+            let now = resumed + REFRESH * tick;
+            assert!(ui.request(now).is_some());
+            assert!(!ui.finish_at(ticket, Ok(capture("resumed")), now));
+            assert!(!ui.slow);
+        }
+        assert!(!ui.finish_at(ticket, Ok(capture("resumed\n\n")), resumed + QUIET));
+        assert!(ui.slow);
+    }
+
+    #[test]
+    fn test_backoff_reset() {
+        let mut ui = PreviewUi::default();
+        ui.select(Some(&item("A")));
+        let start = Instant::now();
+        let (ticket, _) = ui.request(start).unwrap();
+        assert!(ui.finish_at(ticket, Err("missing".into()), start));
+        assert!(!ui.finish_at(ticket, Err("missing".into()), start + QUIET));
+        assert!(ui.slow);
+        assert!(ui.finish_at(ticket, Ok(capture("recovered")), start + QUIET));
+        assert!(!ui.slow);
+        assert!(!ui.finish_at(ticket, Ok(capture("recovered")), start + QUIET * 2));
+        assert!(ui.slow);
+        ui.select(Some(&item("B")));
+        assert!(!ui.slow);
+        assert!(ui.quiet_since.is_none());
+        assert!(!ui.finish_at(ticket, Ok(capture("stale")), start + QUIET * 3));
+        assert!(ui.request(start + QUIET * 3).is_some());
+        ui.select(None);
+        assert!(ui.deadline().is_none());
+        assert!(!ui.slow);
+        assert!(ui.quiet_since.is_none());
+    }
+
+    #[test]
+    fn test_active_polling() {
+        let mut ui = PreviewUi::default();
+        ui.select(Some(&item("A")));
+        let start = Instant::now();
+        for tick in 0..30 {
+            let now = start + REFRESH * tick;
+            let (ticket, _) = ui.request(now).unwrap();
+            assert!(ui.finish_at(ticket, Ok(capture(&format!("update {tick}"))), now));
+            assert_eq!(ui.deadline(), Some(now + REFRESH));
+            assert!(!ui.slow);
+        }
     }
 
     #[test]
