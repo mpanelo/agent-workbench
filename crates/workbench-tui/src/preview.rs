@@ -12,7 +12,7 @@ use workbench_core::{PanePreview, WorkItem};
 
 use crate::{theme, ui::visible};
 
-const REFRESH: Duration = Duration::from_millis(100);
+const REFRESH: Duration = Duration::from_millis(200);
 const IDLE_REFRESH: Duration = Duration::from_millis(500);
 const QUIET: Duration = Duration::from_secs(1);
 
@@ -331,12 +331,14 @@ mod tests {
         let mut ui = PreviewUi::default();
         ui.select(Some(&item("A")));
         let now = Instant::now();
-        assert_eq!(REFRESH, Duration::from_millis(100));
+        assert_eq!(REFRESH, Duration::from_millis(200));
+        assert_eq!(IDLE_REFRESH, Duration::from_millis(500));
         let (ticket, _) = ui.request(now).unwrap();
         assert!(ui.deadline().is_none());
         assert!(ui.request(now + REFRESH).is_none());
         ui.finish(ticket, Ok(capture("first")));
         assert_eq!(ui.deadline(), Some(now + REFRESH));
+        assert!(ui.request(now + Duration::from_millis(100)).is_none());
         assert!(
             ui.request(now + REFRESH - Duration::from_millis(1))
                 .is_none()
@@ -381,7 +383,7 @@ mod tests {
         let start = Instant::now();
         let (ticket, _) = ui.request(start).unwrap();
         assert!(ui.finish_at(ticket, Ok(capture("first")), start));
-        for tick in 1..10 {
+        for tick in 1..5 {
             let now = start + REFRESH * tick;
             assert!(ui.request(now).is_some());
             assert!(!ui.finish_at(ticket, Ok(capture("first")), now));
@@ -400,7 +402,7 @@ mod tests {
         assert!(ui.request(resumed + IDLE_REFRESH).is_none());
         assert!(ui.finish_at(ticket, Ok(capture("resumed")), resumed));
         assert_eq!(ui.deadline(), Some(resumed + REFRESH));
-        for tick in 1..10 {
+        for tick in 1..5 {
             let now = resumed + REFRESH * tick;
             assert!(ui.request(now).is_some());
             assert!(!ui.finish_at(ticket, Ok(capture("resumed")), now));

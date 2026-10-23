@@ -134,9 +134,9 @@ registrations discard results. Captures are decoded to presentation styles,
 kept only in memory, and cleared on selection/view changes. Preview text never
 establishes status or authorizes input, and is not a complete agent response.
 
-Preview capture targets a 100 ms interval (up to 10 updates per second), backing
+Preview capture targets a 200 ms interval (up to 5 updates per second), backing
 off to 500 ms after one second without a displayed change. The first detected
-change restores 100 ms polling. New activity may take up to roughly 500 ms plus
+change restores 200 ms polling. New activity may take up to roughly 500 ms plus
 capture/processing time to appear while backed off. A new selection starts fast.
 There is at most one capture in flight. A dedicated deadline avoids rounding
 starts to the input polling tick. Identical captures skip ANSI decoding, and
@@ -152,33 +152,35 @@ idle/active scenario ran for ten seconds; active output changed at 20 Hz. No
 real agents or user sessions were involved. These are local measurements, not
 performance guarantees or measurements of terminal-app/GPU rendering.
 
-The adaptive comparison repeated idle/active scenarios in reverse binary order.
+The 10 FPS versus 5 FPS comparison repeated idle/active scenarios in reverse
+binary order. Both versions backed off to 2 FPS after one second of quiet.
 The ranges below are from two clean ten-second runs per case, without the
 capture-counting shell wrapper. Idle averages include the initial fast period.
 
-| Scenario | Fixed 100 ms: app + child CPU | Adaptive: app + child CPU |
+| Scenario | 10 FPS active: app + child CPU | 5 FPS active: app + child CPU |
 | --- | --- | --- |
-| Idle | 5.7% to 9.3% | 2.3% to 3.7% |
-| Active | 6.5% to 11.0% | 9.0% to 12.4% |
+| Idle | 3.2% to 4.2% | 3.7% to 3.8% |
+| Active | 15.3% to 15.6% | 7.7% to 9.1% |
 
 CPU is relative to one core and includes Workbench's waited child commands.
-Idle CPU fell about 60% in each matched pair. CPU varied appreciably between
-runs, and no active CPU reduction is claimed: changing output still uses the
-fast capture rate. The separate tmux server used 2.5% to 3.5% fixed / 0.8% to
-1.0% adaptive while idle, and 2.7% to 4.0% fixed / 3.4% to 4.4% adaptive while
-active, including processing synthetic pane output.
+Active CPU fell about 41% to 51% in the matched pairs. Idle CPU was similar,
+as expected with the same idle polling rate. The separate tmux server used
+about 0.9% to 1.1% while idle in both versions, and 5.3% at 10 FPS / 2.9% to
+3.3% at 5 FPS while active, including processing synthetic pane output.
+CPU varies between runs; compare these paired results rather than combining
+them with earlier experiments run under different system load.
 
 A separate instrumented run measured steady polling (seconds two through eight)
-at 2.00 captures/sec idle and 9.85/sec active. With three seconds of quiet followed
-by output changing at 20 Hz, the first visible change arrived after 218 ms and
-subsequent active redraws averaged about 10/sec. This is one observed wake delay,
-not a tighter guarantee than the 500 ms polling interval. Idle redraws remain
-around 0.8/sec because other application events can redraw the screen.
+at 2.00 captures/sec idle and 4.99/sec active. With three seconds of quiet followed
+by output changing at 20 Hz, the first visible change arrived after 308 ms.
+This is one observed wake delay, not a tighter guarantee than the 500 ms polling
+interval. Active redraws averaged about 5.6/sec and idle redraws about 0.9/sec;
+other application events can also redraw the screen.
 
 In the initial fixed-rate experiment, for 100 samples, a roughly 38 KiB capture
 plus metadata CLI round trip took 7.76 ms median / 8.56 ms p95. With roughly
-43 KiB of colored output and a 96x36
-test viewport, changed-output decoding took 0.91 ms median / 1.84 ms p95,
+43 KiB of colored output and a 96x36 test viewport, changed-output decoding took
+0.91 ms median / 1.84 ms p95,
 wrapping plus TestBackend rendering 0.40 ms / 0.72 ms, and identical-output
 comparison 1.7 microseconds / 3.5 microseconds. Capture subprocess overhead is
 therefore the main remaining cost in this experiment. Idle redraw suppression

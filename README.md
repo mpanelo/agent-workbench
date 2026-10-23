@@ -46,7 +46,7 @@ recent output. It sits beside details on wide screens and below them when space
 allows. This is a bounded terminal capture, not a complete agent response;
 `<enter>` still opens the agent pane for interaction. Preview text is not saved.
 Long preview lines wrap to fit; the preview follows the latest wrapped rows.
-It refreshes up to 10 times per second and skips redraws for unchanged output.
+It refreshes up to 5 times per second and skips redraws for unchanged output.
 After one second without a displayed change, polling drops to twice per second;
 the first detected change restores the faster rate.
 Long input requests take priority when space is limited.
