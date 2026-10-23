@@ -12,7 +12,7 @@ use workbench_core::{PanePreview, WorkItem};
 
 use crate::{theme, ui::visible};
 
-const REFRESH: Duration = Duration::from_millis(500);
+const REFRESH: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Default)]
 pub(crate) struct PreviewUi {
@@ -20,6 +20,7 @@ pub(crate) struct PreviewUi {
     generation: u64,
     busy: bool,
     requested: Option<Instant>,
+    capture: Option<PanePreview>,
     content: Option<Result<Vec<Line<'static>>, String>>,
 }
 
@@ -34,6 +35,7 @@ impl PreviewUi {
         self.generation = self.generation.wrapping_add(1);
         self.busy = false;
         self.requested = None;
+        self.capture = None;
         self.content = None;
         true
     }
@@ -52,19 +54,48 @@ impl PreviewUi {
         Some((self.generation, target.clone()))
     }
 
-    pub fn finish(&mut self, ticket: u64, result: Result<PanePreview, String>) {
-        if ticket != self.generation || self.target.is_none() {
-            return;
+    /// Wake at the capture deadline instead of rounding it to the input tick.
+    pub fn deadline(&self) -> Option<Instant> {
+        if self.target.is_none() || self.busy {
+            return None;
         }
-        self.busy = false;
-        self.content = Some(result.map(|capture| decode(&capture.text)));
+        Some(
+            self.requested
+                .map_or_else(Instant::now, |last| last + REFRESH),
+        )
     }
 
-    pub fn fail(&mut self) {
+    /// Return whether displayed content changed. Identical captures bypass ANSI
+    /// decoding as well as rendering; stale results never request a redraw.
+    pub fn finish(&mut self, ticket: u64, result: Result<PanePreview, String>) -> bool {
+        if ticket != self.generation || self.target.is_none() {
+            return false;
+        }
+        self.busy = false;
+        let content = match result {
+            Ok(capture) => {
+                if self.capture.as_ref() == Some(&capture) {
+                    return false;
+                }
+                let lines = decode(&capture.text);
+                self.capture = Some(capture);
+                Ok(lines)
+            }
+            Err(error) => {
+                self.capture = None;
+                Err(error)
+            }
+        };
+        let changed = self.content.as_ref() != Some(&content);
+        self.content = Some(content);
+        changed
+    }
+
+    pub fn fail(&mut self) -> bool {
         self.finish(
             self.generation,
             Err("Preview capture stopped; retrying.".into()),
-        );
+        )
     }
 
     pub fn render(&self, frame: &mut Frame<'_>, area: Rect, item: &WorkItem) {
@@ -267,9 +298,12 @@ mod tests {
         let mut ui = PreviewUi::default();
         ui.select(Some(&item("A")));
         let now = Instant::now();
+        assert_eq!(REFRESH, Duration::from_millis(100));
         let (ticket, _) = ui.request(now).unwrap();
+        assert!(ui.deadline().is_none());
         assert!(ui.request(now + REFRESH).is_none());
         ui.finish(ticket, Ok(capture("first")));
+        assert_eq!(ui.deadline(), Some(now + REFRESH));
         assert!(
             ui.request(now + REFRESH - Duration::from_millis(1))
                 .is_none()
@@ -277,6 +311,89 @@ mod tests {
         assert!(ui.request(now + REFRESH).is_some());
         ui.fail();
         assert!(ui.request(now + REFRESH * 2).is_some());
+    }
+
+    #[test]
+    fn test_unchanged() {
+        let item = item("A");
+        let mut ui = PreviewUi::default();
+        ui.select(Some(&item));
+        let now = Instant::now();
+        let (ticket, _) = ui.request(now).unwrap();
+        assert!(ui.finish(ticket, Ok(capture("first"))));
+        let pointer = ui.content.as_ref().unwrap().as_ref().unwrap().as_ptr();
+        assert!(ui.request(now + REFRESH).is_some());
+        assert!(!ui.finish(ticket, Ok(capture("first"))));
+        assert!(!ui.busy);
+        assert_eq!(
+            ui.content.as_ref().unwrap().as_ref().unwrap().as_ptr(),
+            pointer
+        );
+        assert!(ui.finish(ticket, Ok(capture("changed"))));
+        // Different raw text with identical decoded output needs no redraw.
+        assert!(!ui.finish(ticket, Ok(capture("changed\n\n"))));
+        assert!(ui.finish(ticket, Err("unavailable".into())));
+        assert!(!ui.finish(ticket, Err("unavailable".into())));
+        assert!(ui.finish(ticket, Ok(capture("changed\n\n"))));
+        ui.select(None);
+        assert!(ui.capture.is_none());
+        assert!(ui.deadline().is_none());
+        assert!(!ui.finish(ticket, Ok(capture("stale"))));
+    }
+
+    #[test]
+    #[ignore = "release-mode synthetic decode/render timing; run explicitly with --nocapture"]
+    fn test_timing() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        fn report(name: &str, mut samples: Vec<Duration>) {
+            samples.sort();
+            eprintln!(
+                "{name}: median={:?}, p95={:?}",
+                samples[samples.len() / 2],
+                samples[samples.len() * 95 / 100]
+            );
+        }
+
+        let item = item("perf");
+        let mut ui = PreviewUi::default();
+        ui.select(Some(&item));
+        let (ticket, _) = ui.request(Instant::now()).unwrap();
+        let history = (0..240)
+            .map(|row| {
+                format!(
+                    "\x1b[38;2;137;180;250mrow {row:03} {}\x1b[0m\n",
+                    "text ".repeat(30)
+                )
+            })
+            .collect::<String>();
+        let mut terminal = Terminal::new(TestBackend::new(96, 36)).unwrap();
+        let mut decode_times = Vec::new();
+        let mut render_times = Vec::new();
+        let mut idle_times = Vec::new();
+        for tick in 0..100 {
+            let capture = capture(&format!("{history}update {tick}"));
+            let duplicate = capture.clone();
+            let start = Instant::now();
+            assert!(ui.finish(ticket, Ok(capture)));
+            decode_times.push(start.elapsed());
+            let start = Instant::now();
+            terminal
+                .draw(|frame| ui.render(frame, frame.area(), &item))
+                .unwrap();
+            render_times.push(start.elapsed());
+            let start = Instant::now();
+            assert!(!ui.finish(ticket, Ok(duplicate)));
+            idle_times.push(start.elapsed());
+        }
+        eprintln!(
+            "Synthetic capture: {} bytes plus update; preview: 96x36; 100 samples",
+            history.len()
+        );
+        report("Changed capture decode", decode_times);
+        report("Wrap + TestBackend render", render_times);
+        report("Identical capture check", idle_times);
     }
 
     #[test]

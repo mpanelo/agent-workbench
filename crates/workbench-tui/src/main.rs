@@ -424,14 +424,15 @@ async fn event_loop(
             })?;
             redraw = false;
         }
+        let preview_deadline = interaction.preview.deadline();
         tokio::select! {
+            _ = time::sleep_until(time::Instant::from_std(preview_deadline.unwrap_or_else(std::time::Instant::now))), if preview_deadline.is_some() => {},
             completed = previews.join_next(), if !previews.is_empty() => {
-                match completed {
+                redraw |= match completed {
                     Some(Ok((ticket, result))) => interaction.preview.finish(ticket, result),
                     Some(Err(error)) if !error.is_cancelled() && previews.is_empty() => interaction.preview.fail(),
-                    _ => {},
-                }
-                redraw = true;
+                    _ => false,
+                };
             }
             completed = approvals.join_next(), if !approvals.is_empty() => {
                 match completed {

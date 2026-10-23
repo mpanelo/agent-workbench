@@ -134,6 +134,46 @@ registrations discard results. Captures are decoded to presentation styles,
 kept only in memory, and cleared on selection/view changes. Preview text never
 establishes status or authorizes input, and is not a complete agent response.
 
+Preview capture targets a 100 ms interval (up to 10 updates per second) with
+at most one capture in flight. A dedicated deadline avoids rounding capture
+starts to the input polling tick. Identical captures skip ANSI decoding, and
+unchanged decoded output or repeated errors do not request a redraw. Other
+application events can still redraw the screen.
+
+### Preview performance
+
+A local macOS arm64 release-build comparison used isolated tmux servers, 200
+synthetic history rows, a 200x50 agent pane, and a 160x40 Workbench PTY. Each
+idle/active scenario ran for ten seconds; active output changed at 20 Hz. No
+real agents or user sessions were involved. These are local measurements, not
+performance guarantees or measurements of terminal-app/GPU rendering.
+
+| Scenario | Before: app + child CPU | 100 ms polling: app + child CPU |
+| --- | --- | --- |
+| Idle | 2.4% | 9.8% |
+| Active | 3.5% | 11.3% |
+
+CPU is relative to one core and includes Workbench's waited child commands.
+The separate tmux server used approximately 0.6%/1.9% before (idle/active) and
+3.6%/4.2% afterward, including processing synthetic pane output. A separate
+instrumented run observed 1.8 versus 9.8 captures/sec. Idle redraws fell from
+about 2.5/sec to 0.8/sec; remaining redraws came from other application events.
+
+For 100 samples, a roughly 38 KiB capture plus metadata CLI round trip took
+7.76 ms median / 8.56 ms p95. With roughly 43 KiB of colored output and a 96x36
+test viewport, changed-output decoding took 0.91 ms median / 1.84 ms p95,
+wrapping plus TestBackend rendering 0.40 ms / 0.72 ms, and identical-output
+comparison 1.7 microseconds / 3.5 microseconds. Capture subprocess overhead is
+therefore the main remaining cost in this experiment. Idle redraw suppression
+does not eliminate capture polling costs; adaptive backoff or an event-driven
+transport would need a separate design.
+
+Rerun the synthetic decode/render timing explicitly, without timing assertions:
+
+```sh
+cargo test --release -p workbench-tui preview::tests::test_timing -- --ignored --nocapture
+```
+
 ## Testing
 
 Keep parser and transition tests independent of live agents. Cover layout
