@@ -31,10 +31,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .find(|item| item.id == id)
         .ok_or("work item not found")?;
     let mut captures = 0_u64;
+    let mut errors = 0_u64;
+    let mut last_error = None;
     let result = tokio::time::timeout(
         Duration::from_secs(seconds),
-        engine.stream_preview(&item, |_| {
-            captures += 1;
+        engine.stream_preview(&item, |capture| match capture {
+            Ok(_) => captures += 1,
+            Err(error) => {
+                errors += 1;
+                last_error = Some(error.to_string().escape_debug().to_string());
+            }
         }),
     )
     .await;
@@ -45,7 +51,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     println!(
         "{}",
-        serde_json::json!({"captures": captures, "error": error})
+        serde_json::json!({"captures": captures, "errors": errors, "last_error": last_error, "error": error})
     );
     Ok(())
 }

@@ -126,149 +126,72 @@ answers, assistant responses, tool output, or transcripts. Pending content clear
 on resolution; records are bounded and expire. No service or model API is called,
 and no agent configuration is changed automatically.
 
-The separate WORK pane preview captures only the selected registration's recent
-terminal output, independently of status detection. It reads up to 200 history
-rows plus the viewport, with a 256 KiB output cap and a three-second command
-timeout. Identity and dimensions must match before and after capture; changed
-registrations discard results. Captures are decoded to presentation styles,
-kept only in memory, and cleared on selection/view changes. Preview text never
-establishes status or authorizes input, and is not a complete agent response.
+The separate WORK pane preview is independent of status detection. It reads up
+to 200 history rows plus the viewport, with a 256 KiB capture limit and a
+three-second command timeout. Pane identity and dimensions must match around a
+capture, and registration changes discard results. ANSI styling is decoded into
+presentation styles, never forwarded as raw terminal commands. Captures stay in
+memory and never establish status or authorize input.
 
-Preview capture targets a 200 ms interval (up to 5 updates per second), backing
-off to 500 ms after one second without a displayed change. The first detected
-change restores 200 ms polling. New activity may take up to roughly 500 ms plus
-capture/processing time to appear while backed off. A new selection starts fast.
-There is at most one capture in flight. A dedicated deadline avoids rounding
-starts to the input polling tick. Identical captures skip ANSI decoding, and
-unchanged decoded output or repeated errors do not request a redraw or reset
-the quiet period. Repeated errors also back off; recovery starts fast again.
-Other application events can still redraw the screen.
+### Live pane preview
 
-### Preview performance
+The core keeps one read-only tmux control client for the selected registration.
+It starts with output disabled and lists the panes in that session. One
+`refresh-client` command enables output and pauses nonselected panes for this
+client. Those operations must be atomic: toggling tmux's `no-output` flag resets
+its pane offsets, including paused state. Pause affects only the extra output
+copy sent to Workbench; panes keep running, and their normal clients are
+unaffected. The adapter never turns panes off, sends keys, changes client
+dimensions, selects panes/windows, or updates the session environment.
 
-A local macOS arm64 release-build comparison used isolated tmux servers, 200
-synthetic history rows, a 200x50 agent pane, and a 160x40 Workbench PTY. Each
-idle/active scenario ran for ten seconds; active output changed at 20 Hz. No
-real agents or user sessions were involved. These are local measurements, not
-performance guarantees or measurements of terminal-app/GPU rendering.
+Selected-pane output marks the preview dirty. Snapshots are coalesced to at
+most ten per second with one capture in flight; quiet panes have no periodic
+preview captures. Topology changes and output from a newly created pane cause
+a bounded rescan to pause new nonselected panes. Pane IDs are validated before
+being used in commands. The selected pane's session is rechecked after each
+capture so a move causes reconnection to its current session.
 
-The 10 FPS versus 5 FPS comparison repeated idle/active scenarios in reverse
-binary order. Both versions backed off to 2 FPS after one second of quiet.
-The ranges below are from two clean ten-second runs per case, without the
-capture-counting shell wrapper. Idle averages include the initial fast period.
+Transport errors clear stale preview text and show `Preview unavailable` while
+the core reconnects. Retry delays start at 200 ms, double to a three-second cap,
+and reset after a stream attempt has lasted five seconds. Registration errors end
+the stream. There is no polling preview implementation or fallback. Normal
+status discovery and input handling still run independently.
 
-| Scenario | 10 FPS active: app + child CPU | 5 FPS active: app + child CPU |
-| --- | --- | --- |
-| Idle | 3.2% to 4.2% | 3.7% to 3.8% |
-| Active | 15.3% to 15.6% | 7.7% to 9.1% |
+Protocol lines and combined snapshot replies are capped at 256 KiB. Total
+connection traffic, including snapshot replies, is capped at 4 MiB in each
+one-second window. Session scans are capped at 1024 panes. If the selected pane
+alone exceeds a limit or tmux pauses delivery, the preview reports an error and
+reconnects with backoff; opening the agent pane remains available.
 
-CPU is relative to one core and includes Workbench's waited child commands.
-Active CPU fell about 41% to 51% in the matched pairs. Idle CPU was similar,
-as expected with the same idle polling rate. The separate tmux server used
-about 0.9% to 1.1% while idle in both versions, and 5.3% at 10 FPS / 2.9% to
-3.3% at 5 FPS while active, including processing synthetic pane output.
-CPU varies between runs; compare these paired results rather than combining
-them with earlier experiments run under different system load.
+The TUI keeps only the latest pending update. Generation checks reject late
+results, and selection/view/modal changes cancel the old client and clear its
+output. Repeated errors and identical captures do not request redraws. Captures
+are recent screen context, not complete agent responses or transcripts.
 
-A separate instrumented run measured steady polling (seconds two through eight)
-at 2.00 captures/sec idle and 4.99/sec active. With three seconds of quiet followed
-by output changing at 20 Hz, the first visible change arrived after 308 ms.
-This is one observed wake delay, not a tighter guarantee than the 500 ms polling
-interval. Active redraws averaged about 5.6/sec and idle redraws about 0.9/sec;
-other application events can also redraw the screen.
+Control-mode attachment is still a real client attachment: tmux client counts
+change; normal tmux detach policies and user attachment/command hooks still apply.
+Workbench does not override those policies. The adapter uses read-only,
+ignore-size, independent-active-pane, and pause-after flags. Tested with tmux
+3.7c. The [tmux control-mode guide](https://github.com/tmux/tmux/wiki/Control-Mode)
+and [client flag implementation](https://github.com/tmux/tmux/blob/3.7c/server-client.c)
+describe the protocol and output-offset behavior.
 
-In the initial fixed-rate experiment, for 100 samples, a roughly 38 KiB capture
-plus metadata CLI round trip took 7.76 ms median / 8.56 ms p95. With roughly
-43 KiB of colored output and a 96x36 test viewport, changed-output decoding took
-0.91 ms median / 1.84 ms p95,
-wrapping plus TestBackend rendering 0.40 ms / 0.72 ms, and identical-output
-comparison 1.7 microseconds / 3.5 microseconds. Capture subprocess overhead is
-therefore the main remaining cost in this experiment. Idle redraw suppression
-does not eliminate capture polling costs, and adaptive polling reduces those
-costs only when output stops changing. An event-driven transport would need a
-separate design.
-
-Rerun the synthetic decode/render timing explicitly, without timing assertions:
-
-```sh
-cargo test --release -p workbench-tui preview::tests::test_timing -- --ignored --nocapture
-```
-
-### Experimental live preview
-
-The opt-in `live-preview` build feature tests a persistent tmux control-mode
-connection. It is not a proven active-CPU optimization. Normal builds retain
-5 FPS active / 2 FPS idle polling. To try the prototype without replacing an
-installed binary:
-
-```sh
-cargo run --release -p workbench-tui --features live-preview
-```
-
-The core attaches one client to the selected pane's session, with read-only,
-ignore-size, independent-active-pane, and pause-after flags. It does not send
-keys, select panes/windows, set client dimensions, update the session environment,
-or create a session. Attaching is still a real tmux client attachment: tmux's
-attached-client counts change, and user-configured attachment hooks may run.
-
-Pane-output notifications are discarded after identifying their pane. They only
-mark the preview as needing a fresh snapshot, capped at 10 captures/sec. No
-periodic preview capture runs while quiet. Snapshots use the existing bounded
-capture and safe display decoder, never raw terminal output or a terminal
-emulator. The UI retains only the latest pending update and discards stale
-generations. Selection/view changes cancel the observer and clear its output.
-
-Capture identity and dimensions are rechecked, as is the pane's session. Command
-reads time out after three seconds. Protocol lines and combined snapshot replies
-are capped at 256 KiB; total connection traffic is capped at 4 MiB per second.
-A disconnect, timeout, failed command, changed session, paused selected pane, or
-exceeded limit stops the observer and falls back to normal polling for that
-selection. A later selection starts a new attempt. Other panes in the attached
-session also produce control notifications; their contents are ignored, but
-their traffic counts toward the limit. This is one reason the prototype is not
-the default.
-
-The [tmux control-mode documentation](https://github.com/tmux/tmux/wiki/Control-Mode)
-describes command framing, output notifications, and flow control. Parser tests
-cover malformed/failed replies, non-UTF-8 notifications, bounds, and changes
-between reply blocks. The opt-in disposable-server smoke test checks snapshots,
-pane size/focus, cancellation, and pane disappearance:
+See the [six-pane stress test](preview-stress.md) for reproduction, resource
+measurements, recovery checks, and current results. Parser/state tests cover
+bounds, failed/malformed replies, stale registrations, retry delays, and pane
+list validation. The opt-in live test checks size/focus, quiet selection with a
+busy sibling, producer progress, copy-mode recovery, observer reconnection,
+cancellation, pane disappearance, and server disconnection:
 
 ```sh
 cargo test -p workbench-core preview::tests::test_tmux_preview -- --ignored --nocapture
 ```
 
-A separate local macOS arm64 comparison used the synthetic workload described
-above with tmux 3.7c, two ten-second runs per case, and reversed binary order in
-the second pair. The harness switched out of WORK before exit to cancel and reap
-the observer while the runtime was still alive. CPU accounting includes that
-roughly 250 ms teardown in both versions and includes waited child commands.
+Rerun synthetic decode/wrap/render timing without timing assertions:
 
-| Scenario | Polling: app/children + tmux CPU | Live: app/children + tmux CPU |
-| --- | --- | --- |
-| Idle | 3.7% to 4.6% | 0.6% to 0.8% |
-| Active | 9.1% to 12.2% | 9.8% to 11.0% |
-
-These are combined percentages of one core, not whole-machine utilization.
-Active app/child CPU was 6.6% to 8.8% polling versus 4.2% to 4.6% live, but tmux
-server CPU rose from 2.5% to 3.4% to 5.6% to 6.4%. Counting both, live active CPU
-was about 7% higher in one pair and 9% lower in the other. There is no consistent
-active CPU improvement. Idle combined CPU fell about 79% to 87% in the pairs.
-The synthetic producer and terminal-app/GPU costs are not included.
-
-The live UI redrew about ten times per second during active output. In a separate
-quiet-to-active burst, the first visible change arrived after 116 ms. This is one
-observation, not a latency guarantee. Safety tests and local results justify an
-opt-in experiment, not enabling it by default. Busy sibling panes, custom tmux
-hooks, and high-output real agents still need broader testing. Reducing snapshot
-work and unrelated notification traffic would be follow-up experiments, not
-reasons to raise the default polling rate.
-
-The repeatable [six-pane stress test](preview-stress.md) includes Workbench's
-own pane in the session. It found that long-line bursts can exceed the live
-connection's traffic limit and cause unexpected polling fallback. The promotion
-gate failed, so live preview remains opt-in and the polling implementation is
-retained. See the guide for reproduction steps, thresholds, and limitations.
+```sh
+cargo test --release -p workbench-tui preview::tests::test_timing -- --ignored --nocapture
+```
 
 ## Testing
 

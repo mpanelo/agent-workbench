@@ -1198,10 +1198,7 @@ mod tests {
         interaction.sync(state.items());
         let item = state.items()[0].item.clone();
         interaction.preview.select(Some(&item));
-        let (ticket, _) = interaction
-            .preview
-            .request(std::time::Instant::now())
-            .unwrap();
+        let (ticket, _) = interaction.preview.target().unwrap();
         interaction.preview.finish(
             ticket,
             Ok(workbench_core::PanePreview {

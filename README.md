@@ -46,12 +46,10 @@ recent output. It sits beside details on wide screens and below them when space
 allows. This is a bounded terminal capture, not a complete agent response;
 `<enter>` still opens the agent pane for interaction. Preview text is not saved.
 Long preview lines wrap to fit; the preview follows the latest wrapped rows.
-It refreshes up to 5 times per second and skips redraws for unchanged output.
-After one second without a displayed change, polling drops to twice per second;
-the first detected change restores the faster rate.
+Updates follow the selected pane's output, up to ten times per second, without
+polling quiet panes. Connection errors show “Preview unavailable” while Workbench
+reconnects automatically.
 Long input requests take priority when space is limited.
-An opt-in [live preview prototype](docs/status-detection.md#experimental-live-preview)
-tests event-driven updates; it is not enabled in normal builds.
 
 | Action in WORK | Key |
 | --- | --- |

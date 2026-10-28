@@ -74,6 +74,7 @@ def feed(root, index):
     tty.setcbreak(0)
     tick = 0
     last_frame = 0.0
+    last_progress = 0.0
     previous = None
     while True:
         if select.select([0], [], [], 0)[0]:
@@ -111,6 +112,11 @@ def feed(root, index):
             previous = state
             last_frame = now
             tick += 1
+            if now - last_progress >= 1:
+                progress = root / f"progress-{index}.next"
+                progress.write_text(str(time.monotonic()))
+                progress.replace(root / f"progress-{index}")
+                last_progress = now
         time.sleep(0.02)
 
 
@@ -159,6 +165,8 @@ class Fixture:
         self.last_log = 0
         self.polls = 0
         self.streams = 0
+        self.expected_starts = 1
+        self.unexpected_reconnects = 0
         self.faults = {}
         self.closed_pane = False
         self.config = {"mode": "active", "selected": 0, "sequence": 0, "pulse": 0}
@@ -309,11 +317,16 @@ class Fixture:
         os.write(self.master, text.encode())
 
     def choose(self, index):
-        self.keys(("j" if index > self.selected else "k") * abs(index - self.selected))
+        distance = abs(index - self.selected)
+        key = "j" if index > self.selected else "k"
+        self.expected_starts += distance
         self.selected = index
         self.config.update(selected=index, pulse=0)
         write_scene(self.root, self.config)
         self.pending.clear()
+        for _ in range(distance):
+            self.keys(key)
+            self.pump(0.15)
         self.changed_at = time.monotonic()
 
     def scene(self, mode):
@@ -415,8 +428,14 @@ class Fixture:
         polls = fresh.count("poll")
         self.polls += polls
         self.streams += fresh.count("stream")
-        if self.expected_live and polls and not expected_fault:
-            self.fail("live preview fell back to polling during normal load")
+        if self.expected_live and polls:
+            self.fail("live preview invoked polling")
+        if self.expected_live and not expected_fault:
+            self.unexpected_reconnects = max(
+                self.unexpected_reconnects, self.streams - self.expected_starts
+            )
+            if self.unexpected_reconnects:
+                self.fail("live preview reconnected unexpectedly during normal load")
         if (
             self.expected_live
             and self.in_work
@@ -427,6 +446,14 @@ class Fixture:
             self.fail("live preview observer missing during normal load")
         if (self.root / "unexpected-input").exists():
             self.fail("fixture agent received unexpected input")
+        if not expected_fault:
+            mode = self.config["mode"]
+            for index in range(6):
+                if mode == "idle" or mode == "siblings" and index == 0:
+                    continue
+                path = self.root / f"progress-{index}"
+                if not path.exists() or time.monotonic() - float(path.read_text()) > 3:
+                    self.fail("background producer stopped advancing")
 
     def detach(self):
         self.keys("s")
@@ -437,6 +464,7 @@ class Fixture:
             self.fail("observer leaked after leaving WORK")
 
     def resume(self):
+        self.expected_starts += 1
         self.keys("w")
         self.in_work = True
         self.changed_at = time.monotonic()
@@ -478,12 +506,22 @@ class Fixture:
         else:
             return
         self.faults[action] = self.faults.get(action, 0) + 1
-        self.choose(1)
-        self.pump(0.3)
-        self.choose(0)
-        self.pump(0.5)
-        if self.expected_live and len(self.observers()) != 1:
-            self.fail("observer did not recover after reselection")
+        if action == "missing_pane":
+            self.choose(0)
+        deadline = time.monotonic() + 5
+        while self.expected_live:
+            self.pump(0.1)
+            screen = self.tmux("capture-pane", "-p", "-t", self.workbench)
+            if (
+                len(self.observers()) == 1
+                and "Pane preview: fixture-0" in screen
+                and "Preview unavailable" not in screen
+                and "Loading pane preview" not in screen
+            ):
+                break
+            if time.monotonic() > deadline:
+                self.fail("live preview did not recover automatically")
+                break
 
     def run(self, duration, scene="soak"):
         started = time.monotonic()
@@ -607,6 +645,7 @@ class Fixture:
             "latency_p95_ms": latency,
             "latency_max_ms": max(self.latencies, default=None),
             "stream_starts": self.streams,
+            "unexpected_reconnects": self.unexpected_reconnects,
             "polling_captures": self.polls,
             "max_observers": self.max_observers,
             "fault_counts": self.faults,
@@ -653,7 +692,9 @@ class Fixture:
             return {
                 "scene": scene,
                 "diagnostic": result,
-                "passed": result["error"] is None,
+                "passed": result["error"] is None
+                and result["errors"] == 0
+                and result["captures"] > 0,
             }
         finally:
             if child.poll() is None:
@@ -661,16 +702,36 @@ class Fixture:
                 child.wait(timeout=3)
 
     def close(self):
-        if self.real_tmux:
-            self.tmux("kill-server", check=False)
-        if self.client:
+        forced = False
+        try:
+            if self.real_tmux:
+                self.tmux("kill-server", check=False)
+        finally:
             try:
-                self.client.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self.client.terminate()
-                self.client.wait(timeout=3)
-        if self.master is not None:
-            os.close(self.master)
+                if self.client:
+                    deadline = time.monotonic() + 3
+                    # tmux flushes its terminal before exiting. Waiting without
+                    # draining a full PTY can block even after the server exits.
+                    while self.client.poll() is None and time.monotonic() < deadline:
+                        if (
+                            self.master is not None
+                            and select.select([self.master], [], [], 0.02)[0]
+                        ):
+                            try:
+                                os.read(self.master, 65536)
+                            except OSError:
+                                time.sleep(0.01)
+                        else:
+                            time.sleep(0.01)
+                    if self.client.poll() is None:
+                        forced = True
+                        self.client.kill()
+                    self.client.wait(timeout=3)
+            finally:
+                if self.master is not None:
+                    os.close(self.master)
+                    self.master = None
+        return forced
 
 
 def interrupted(_signal, _frame):
@@ -719,6 +780,7 @@ def main():
     signal.signal(signal.SIGTERM, interrupted)
     with tempfile.TemporaryDirectory(prefix="awb-preview-") as directory:
         fixture = Fixture(Path(directory), args.binary, not args.expect_polling)
+        result = None
         try:
             fixture.setup()
             result = (
@@ -730,8 +792,17 @@ def main():
                 if args.probe
                 else fixture.run(args.duration, args.scene)
             )
+            emit("checks_complete", cleanup_complete=False, **result)
         finally:
-            fixture.close()
+            forced = fixture.close()
+            if result is not None:
+                result["display_client_forced_exit"] = forced
+                result["cleanup_complete"] = True
+                if forced:
+                    result["passed"] = False
+                    result.setdefault("failures", []).append(
+                        "fixture display client required forced shutdown"
+                    )
     emit("result", **result)
     if args.report:
         with args.report.open("x") as report:

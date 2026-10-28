@@ -1,11 +1,11 @@
 //! A selected-pane notification stream, not a terminal emulator. Raw output is
 //! discarded; only bounded capture-pane snapshots leave this adapter.
-use std::{process::Stdio, time::Duration};
+use std::{collections::HashSet, process::Stdio, time::Duration};
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, ChildStdout},
-    time::{Instant, sleep_until, timeout},
+    time::{Instant, sleep, sleep_until, timeout},
 };
 
 use super::{FORMAT, MAX_CAPTURE, PanePreview, PreviewError, invalid, parse_capture};
@@ -13,13 +13,54 @@ use crate::{DiscoveryError, Engine, WorkItem, tmux::COMMAND_TIMEOUT};
 
 const REFRESH: Duration = Duration::from_millis(100);
 const MAX_TRAFFIC: usize = 4 * 1024 * 1024;
+const MAX_PANES: usize = 1024;
+
+struct Retry(Duration);
+
+impl Default for Retry {
+    fn default() -> Self {
+        Self(Duration::from_millis(200))
+    }
+}
+
+impl Retry {
+    fn next(&mut self, uptime: Duration) -> Duration {
+        if uptime >= Duration::from_secs(5) {
+            *self = Self::default();
+        }
+        let delay = self.0;
+        self.0 = (delay * 2).min(Duration::from_secs(3));
+        delay
+    }
+}
 
 impl Engine {
     /// Stream recent snapshots when the selected pane changes. This operation
-    /// runs until cancelled or disconnected. Dropping it kills its own client,
-    /// never the pane/server. A caller may fall back to preview_work_item.
+    /// reconnects after transport errors with bounded backoff. Dropping it kills
+    /// its own client, never the pane/server. Registration errors end the stream.
     /// Notifications never establish agent status or authorize input.
     pub async fn stream_preview(
+        &self,
+        expected: &WorkItem,
+        mut update: impl FnMut(Result<PanePreview, PreviewError>),
+    ) -> Result<(), PreviewError> {
+        let mut retry = Retry::default();
+        loop {
+            let started = Instant::now();
+            let result = self
+                .preview_session(expected, |capture| update(Ok(capture)))
+                .await;
+            let error = match result {
+                Err(error @ (PreviewError::Changed | PreviewError::State(_))) => return Err(error),
+                Err(error) => error,
+                Ok(()) => PreviewError::Transport(invalid("Preview stream ended.")),
+            };
+            update(Err(error));
+            sleep(retry.next(started.elapsed())).await;
+        }
+    }
+
+    async fn preview_session(
         &self,
         expected: &WorkItem,
         mut update: impl FnMut(PanePreview),
@@ -54,7 +95,7 @@ impl Engine {
                 "attach-session",
                 "-E",
                 "-f",
-                "read-only,ignore-size,active-pane,pause-after=1",
+                "read-only,ignore-size,active-pane,no-output,pause-after=1",
                 "-t",
                 session,
             ])
@@ -66,29 +107,27 @@ impl Engine {
             .spawn()
             .map_err(|e| PreviewError::Transport(DiscoveryError::Unavailable(e)))?;
         let mut client = Control::new(child, session).map_err(PreviewError::Transport)?;
-        let run = async {
-            // Attach itself produces a reply. Never change client dimensions,
-            // active window/pane, session options, environment, or input.
-            timeout(COMMAND_TIMEOUT, client.reply(1, &expected.pane_id))
+        // Attach itself produces a reply. Never change client dimensions,
+        // active window/pane, session options, environment, or input.
+        timeout(COMMAND_TIMEOUT, client.reply(1, &expected.pane_id))
+            .await
+            .map_err(|_| PreviewError::Transport(DiscoveryError::TimedOut))??;
+        timeout(COMMAND_TIMEOUT, client.filter(&expected.pane_id, true))
+            .await
+            .map_err(|_| PreviewError::Transport(DiscoveryError::TimedOut))??;
+        loop {
+            check()?;
+            let started = Instant::now();
+            let capture = timeout(COMMAND_TIMEOUT, client.capture(&expected.pane_id))
                 .await
                 .map_err(|_| PreviewError::Transport(DiscoveryError::TimedOut))??;
-            loop {
-                check()?;
-                let started = Instant::now();
-                let capture = timeout(COMMAND_TIMEOUT, client.capture(&expected.pane_id))
-                    .await
-                    .map_err(|_| PreviewError::Transport(DiscoveryError::TimedOut))??;
-                check()?;
-                update(capture);
-                // Coalesce output while capped. Reading resumes before the
-                // next request and snapshots include all intervening output.
-                client.changed(&expected.pane_id).await?;
-                sleep_until(started + REFRESH).await;
-            }
-        };
-        // Startup and capture reads have deadlines; an idle notification wait
-        // intentionally has none. Caller cancellation still drops the client.
-        run.await
+            check()?;
+            update(capture);
+            // Coalesce output while capped. Reading resumes before the
+            // next request and snapshots include all intervening output.
+            client.changed(&expected.pane_id).await?;
+            sleep_until(started + REFRESH).await;
+        }
     }
 }
 
@@ -100,6 +139,8 @@ struct Control {
     since: Instant,
     dirty: bool,
     session: String,
+    paused: HashSet<String>,
+    rescan: bool,
 }
 
 impl Control {
@@ -120,6 +161,8 @@ impl Control {
             since: Instant::now(),
             dirty: false,
             session: session.into(),
+            paused: HashSet::new(),
+            rescan: false,
         })
     }
 
@@ -159,6 +202,7 @@ impl Control {
         let mut result = Vec::new();
         let mut block: Option<Vec<u8>> = None;
         let mut completed = 0;
+        let mut block_start = 0;
         loop {
             let line = self.line().await.map_err(PreviewError::Transport)?;
             if let Some(guard) = &block {
@@ -169,7 +213,14 @@ impl Control {
                         return Ok(result);
                     }
                 } else if line.strip_prefix(b"%error ") == Some(guard.as_slice()) {
-                    return Err(PreviewError::Transport(invalid("Preview command failed.")));
+                    let message: String = String::from_utf8_lossy(&result[block_start..])
+                        .chars()
+                        .take(300)
+                        .collect();
+                    return Err(PreviewError::Transport(invalid(format!(
+                        "Preview command failed: {}",
+                        message.trim()
+                    ))));
                 } else {
                     if result.len() + line.len() > MAX_CAPTURE {
                         return Err(PreviewError::Transport(invalid(
@@ -185,13 +236,17 @@ impl Control {
                     )));
                 }
                 block = Some(guard.into());
+                block_start = result.len();
             } else {
-                self.dirty |= notification(&line, pane).map_err(PreviewError::Transport)?;
+                self.dirty |= self.notice(&line, pane).map_err(PreviewError::Transport)?;
             }
         }
     }
 
     async fn capture(&mut self, pane: &str) -> Result<PanePreview, PreviewError> {
+        if self.rescan {
+            self.filter(pane, false).await?;
+        }
         // Both interpolations are validated pane IDs or a constant with no
         // quotes/newlines. No agent text or user-supplied shell text is executed.
         let command = format!(
@@ -218,11 +273,87 @@ impl Control {
         }
         loop {
             let line = self.line().await.map_err(PreviewError::Transport)?;
-            if notification(&line, pane).map_err(PreviewError::Transport)? {
+            if self.notice(&line, pane).map_err(PreviewError::Transport)? {
                 return Ok(());
             }
         }
     }
+
+    async fn command(&mut self, command: &str, pane: &str) -> Result<Vec<u8>, PreviewError> {
+        self.input
+            .write_all(command.as_bytes())
+            .await
+            .map_err(|e| PreviewError::Transport(DiscoveryError::Unavailable(e)))?;
+        self.reply(1, pane).await
+    }
+
+    async fn filter(&mut self, pane: &str, enable: bool) -> Result<(), PreviewError> {
+        // Pause, never turn off: off can stop producer reads when all control
+        // clients turn a pane off. Pause only discards delivery to this client.
+        self.rescan = false;
+        let command = format!("list-panes -s -t '{}' -F '#{{pane_id}}'\n", self.session);
+        let bytes = self.command(&command, pane).await?;
+        let panes = parse_panes(&bytes).map_err(PreviewError::Transport)?;
+        if !panes.iter().any(|id| id == pane) {
+            return Err(PreviewError::Transport(invalid(
+                "Selected pane left the preview session.",
+            )));
+        }
+        self.paused.retain(|id| panes.contains(id));
+        // Changing no-output resets tmux's pane offsets, including paused
+        // state. Enable and pause in the same command, in that order, before
+        // the server can dispatch more pane output.
+        let mut command = String::from("refresh-client");
+        if enable {
+            self.paused.clear();
+            command.push_str(" -f '!no-output'");
+        }
+        for id in &panes {
+            if id != pane && !self.paused.contains(id) {
+                command.push_str(&format!(" -A '{id}:pause'"));
+            }
+        }
+        if command != "refresh-client" {
+            command.push('\n');
+            self.command(&command, pane).await?;
+            self.paused
+                .extend(panes.into_iter().filter(|id| id != pane));
+        }
+        Ok(())
+    }
+
+    fn notice(&mut self, line: &[u8], pane: &str) -> Result<bool, DiscoveryError> {
+        let mut fields = line.split(|b| *b == b' ' || *b == b'\n');
+        let kind = fields.next().unwrap_or_default();
+        let target = fields.next().unwrap_or_default();
+        if matches!(kind, b"%output" | b"%extended-output") && target != pane.as_bytes()
+            || matches!(
+                kind,
+                b"%layout-change"
+                    | b"%window-add"
+                    | b"%window-close"
+                    | b"%unlinked-window-close"
+                    | b"%window-pane-changed"
+                    | b"%sessions-changed"
+            )
+        {
+            self.rescan = true;
+        }
+        Ok(notification(line, pane)? || self.rescan)
+    }
+}
+
+fn parse_panes(bytes: &[u8]) -> Result<Vec<String>, DiscoveryError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| invalid("Invalid preview pane list."))?;
+    let mut panes = Vec::new();
+    for id in text.lines() {
+        crate::tmux::validate_id(id, '%', 0)?;
+        if panes.len() == MAX_PANES {
+            return Err(invalid("Preview session has too many panes."));
+        }
+        panes.push(id.to_owned());
+    }
+    Ok(panes)
 }
 
 fn valid_guard(bytes: &[u8]) -> bool {
@@ -277,8 +408,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[tokio::test]
-    async fn test_stream_command() {
+    fn setup() -> (tempfile::TempDir, Engine, WorkItem, String) {
         use std::{fs, os::unix::fs::PermissionsExt};
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("tmux");
@@ -290,9 +420,14 @@ case "$*" in
   *display-message*) printf '$4\n'; exit 0 ;;
 esac
 printf '%%begin 1 1 0\n%%end 1 1 0\n'
-IFS= read -r command
-printf '%s\n' "$command" > "$0.commands"
-exec cat "$0.reply"
+while IFS= read -r command; do
+  printf '%s\n' "$command" >> "$0.commands"
+  case "$command" in
+    list-panes*) printf '%%begin 1 8 1\n%%14\n%%1\n%%end 1 8 1\n' ;;
+    refresh-client*) printf '%%begin 1 9 1\n%%end 1 9 1\n' ;;
+    *) while [ -e "$0.wait" ]; do sleep 0.01; done; exec cat "$0.reply" ;;
+  esac
+done
 "#,
         )
         .unwrap();
@@ -314,25 +449,37 @@ exec cat "$0.reply"
             pane_id: "%14".into(),
         };
         engine.register_work_item(item.clone()).unwrap();
+        (directory, engine, item, reply)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_command() {
+        use std::fs;
+        let (directory, engine, item, reply) = setup();
         let before = fs::read(engine.store.state_path()).unwrap();
         let mut snapshots = Vec::new();
         assert!(
             engine
-                .stream_preview(&item, |capture| snapshots.push(capture))
+                .preview_session(&item, |capture| snapshots.push(capture))
                 .await
                 .is_err()
         );
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].text, "snapshot\n");
         let args = fs::read_to_string(directory.path().join("tmux.args")).unwrap();
-        assert!(args.contains("-N\n-C\nattach-session\n-E\n-f\nread-only,ignore-size,active-pane,pause-after=1\n-t\n$4\n"));
+        assert!(args.contains("-N\n-C\nattach-session\n-E\n-f\nread-only,ignore-size,active-pane,no-output,pause-after=1\n-t\n$4\n"));
         let commands = fs::read_to_string(directory.path().join("tmux.commands")).unwrap();
-        assert_eq!(
-            commands,
-            format!(
+        assert!(commands.starts_with(
+            "list-panes -s -t '$4' -F '#{pane_id}'\nrefresh-client -f '!no-output' -A '%1:pause'\n"
+        ));
+        assert!(!commands.contains("%14:pause"));
+        for forbidden in ["send-keys", "select-pane", "select-window", ":off", " -C "] {
+            assert!(!commands.contains(forbidden), "{forbidden}");
+        }
+        assert!(commands.ends_with(&format!(
                 "display-message -p -t %14 '{FORMAT}' ; capture-pane -p -e -S -200 -t %14 ; display-message -p -t %14 '{FORMAT}' ; display-message -p -t %14 '#{{session_id}}'\n"
-            )
-        );
+        )));
         assert_eq!(fs::read(engine.store.state_path()).unwrap(), before);
         fs::write(
             directory.path().join("tmux.reply"),
@@ -341,12 +488,98 @@ exec cat "$0.reply"
         .unwrap();
         assert!(
             engine
-                .stream_preview(&item, |_| panic!("moved pane published"))
+                .preview_session(&item, |_| panic!("moved pane published"))
                 .await
                 .unwrap_err()
                 .to_string()
                 .contains("moved")
         );
+        let before = fs::read(directory.path().join("tmux.args")).unwrap();
+        let stale = WorkItem {
+            title: "Changed".into(),
+            ..item
+        };
+        assert!(matches!(
+            engine
+                .stream_preview(&stale, |_| panic!("stale snapshot"))
+                .await,
+            Err(PreviewError::Changed)
+        ));
+        assert_eq!(
+            fs::read(directory.path().join("tmux.args")).unwrap(),
+            before
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_recheck() {
+        use std::fs;
+        let (directory, engine, item, _reply) = setup();
+        let barrier = directory.path().join("tmux.wait");
+        fs::write(&barrier, "").unwrap();
+        let change = async {
+            timeout(Duration::from_secs(3), async {
+                loop {
+                    let commands = fs::read_to_string(directory.path().join("tmux.commands"))
+                        .unwrap_or_default();
+                    if commands.contains("capture-pane") {
+                        break;
+                    }
+                    sleep(Duration::from_millis(2)).await;
+                }
+            })
+            .await
+            .unwrap();
+            engine
+                .update_work_item_description(&item, "Changed")
+                .unwrap();
+            fs::remove_file(&barrier).unwrap();
+        };
+        let (result, ()) = tokio::join!(
+            engine.stream_preview(&item, |_| panic!("stale capture published")),
+            change
+        );
+        assert!(matches!(result, Err(PreviewError::Changed)));
+    }
+
+    #[test]
+    fn test_retry() {
+        let mut retry = Retry::default();
+        for millis in [200, 400, 800, 1600, 3000, 3000] {
+            assert_eq!(retry.next(Duration::ZERO), Duration::from_millis(millis));
+        }
+        assert_eq!(
+            retry.next(Duration::from_secs(5)),
+            Duration::from_millis(200)
+        );
+    }
+
+    #[test]
+    fn test_panes() {
+        assert_eq!(parse_panes(b"%14\n%1\n").unwrap(), ["%14", "%1"]);
+        for bytes in [
+            b"%1;kill-server\n".as_slice(),
+            b"\n",
+            b"%1\nbad\n",
+            b"%1\n\xff\n",
+        ] {
+            assert!(parse_panes(bytes).is_err());
+        }
+        assert!(parse_panes("%1\n".repeat(MAX_PANES + 1).as_bytes()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_rescan() {
+        let (_directory, mut client) = fixture(b"");
+        assert!(!client.notice(b"%pause %1\n", "%14").unwrap());
+        assert!(!client.rescan);
+        assert!(client.notice(b"%window-add @2\n", "%14").unwrap());
+        assert!(client.rescan);
+        client.rescan = false;
+        assert!(client.notice(b"%output %2 ignored\n", "%14").unwrap());
+        assert!(client.rescan);
     }
 
     #[cfg(unix)]

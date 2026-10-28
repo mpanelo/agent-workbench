@@ -2,7 +2,7 @@
 
 The stress harness runs the real Workbench TUI with six synthetic producers on
 its own tmux server. Workbench is inside the same session, so the live client
-also encounters notifications from sibling panes and Workbench's output.
+must suppress output delivery from sibling panes and Workbench's own pane.
 It does not access user sessions, change user configuration, use real agents,
 or make paid calls. Panes and fixture files are removed on normal completion
 and handled interruptions. Reports contain measurements, not pane transcripts.
@@ -13,7 +13,7 @@ Requires Unix, Python 3, tmux, `ps`, `pgrep`, and `/usr/bin/time`. Build before
 measuring; compilation or competing workloads can distort CPU measurements.
 
 ```sh
-cargo build --release --locked -p workbench-tui --features live-preview
+cargo build --release --locked -p workbench-tui
 python3 scripts/stress-preview.py --duration 600 --report target/preview-stress.json
 ```
 
@@ -21,6 +21,9 @@ The report path must be new and its parent directory must exist. Progress is
 printed every 30 seconds. A failed check exits nonzero but still writes the
 completed report. An infrastructure failure, such as a process crashing before
 measurement completes, exits nonzero with an error instead of a partial success.
+Only the final `result` event and report, after cleanup, establish success. The
+earlier `checks_complete` event has not yet verified teardown. The harness drains
+its dummy terminal during teardown; requiring forced shutdown fails the run.
 
 For a quick check, use `--duration 60`. The full run is needed to exercise every
 lifecycle action and make the post-warm-up memory check meaningful. Use
@@ -47,9 +50,11 @@ not a terminal emulator. Their delay includes fixture dispatch and rendering.
 
 The checks are fixed before a run:
 
-- No unexpected polling fallback or missing observer during normal live load.
+- No polling invocations, unexpected live reconnections, or missing observer
+  during normal load.
 - No stable duplicate observers, leaked observers after leaving WORK, unexpected
   agent input, or unintended focus or agent-pane dimension changes.
+- Busy background producers must keep advancing while delivery is paused.
 - Marker p95 at most 350 ms; an outstanding marker must appear within 1500 ms.
 - Workbench RSS median growth at most 16 MiB after warm-up. This coarse soak check
   is not proof of leak freedom; tmux's own history memory is separate.
@@ -61,10 +66,11 @@ CPU is reported, not automatically gated. Promotion also requires interpreting
 matching CPU measurements and operational recovery; a passing short scene alone
 is not a promotion decision. New reports fingerprint the binary with SHA-256.
 
-Controlled lifecycle faults may trigger fallback in the prototype; those
-intervals are distinguished from normal-load failures. Reselection is used to
-exercise its current recovery behavior. Removing polling would require replacing
-that recovery path and testing it, not just deleting a fallback branch.
+Controlled lifecycle faults are distinguished from normal-load failures. Observer
+detachment, copy mode, and producer respawn must recover automatically without
+reselection. A deleted selected pane must clear its stale preview; selecting a
+healthy registration must open a fresh live connection. Every phase must have
+zero polling captures.
 
 Server disconnection is also covered by the Rust test below. Killing the tmux
 server that hosts a TUI necessarily destroys its terminal; the Rust test checks
@@ -75,7 +81,7 @@ python3 -B scripts/test-preview-stress.py
 cargo test -p workbench-core preview::tests::test_tmux_preview -- --ignored --nocapture
 ```
 
-The core-only diagnostic helper reports snapshot counts and transport errors
+The core-only diagnostic helper reports snapshot and transient-error counts
 without retaining pane text. It intentionally adds another observer while the
 TUI draws, so its CPU is not a comparable stress measurement:
 
@@ -87,41 +93,43 @@ python3 scripts/stress-preview.py --duration 20 --scene bursts \
 
 ## Latest result
 
-The full 600-second local macOS arm64 run failed the promotion gate: long-line
-bursts exceeded the live connection's 4 MiB/sec traffic limit, causing unexpected
-polling fallback. A separate diagnostic build recorded the exact limit error.
-Normal active and busy-sibling phases had no unexpected fallback.
+The live-only build passed the full 600-second macOS arm64 run with tmux 3.7c
+and Tokio 1.53.3. Its frozen binary SHA-256 was
+`449816c8ce92bc9fcaece811fa7a578ff6f93f3fe45400bd3b1e95793106543d`.
 
-The run observed 174 latency probes, p95 205 ms, maximum 429 ms, peak Workbench
-RSS 9552 KiB, and post-warm-up RSS growth 672 KiB. It found no observer leaks,
-unexpected input, focus changes, or agent size changes. Lifecycle coverage
-included three detachments, three copy-mode transitions, three producer respawns,
-and one deleted selected pane. The run recorded 607 polling captures, including
-normal-load fallback and deliberate fault intervals; its latency figures therefore
-do not describe an uninterrupted live stream.
+- Zero polling captures and zero unexpected reconnects.
+- 179 probes: p95 130 ms, maximum 194 ms.
+- Peak Workbench RSS 11056 KiB; post-warm-up median growth 464 KiB.
+- No detected observer leaks, unintended input, focus changes, or pane-size changes.
+- Background producers continued advancing while their delivery was paused.
+- Three observer detachments, three copy-mode transitions, and three producer
+  restarts recovered automatically. One deleted selected pane cleared correctly.
+- Cleanup completed without forcing the dummy terminal client to exit.
 
-The long run used the original Tokio 1.53.1 binary. A shorter diagnostic run
-with patched Tokio 1.53.3 reproduced the same traffic-limit failure. The Tokio
-security update does not establish that the preview failure is fixed.
+An earlier qualification attempt completed its application checks but failed
+fixture teardown because the dummy terminal was not drained. It was not counted
+as a pass. A regression test now fills a dummy PTY with 200000 bytes and verifies
+normal shutdown; the complete soak above was rerun with the corrected harness.
 
-Separate sequential 20-second pairs used patched Tokio 1.53.3 in both builds.
-The following are observed combined Workbench/children + tmux + display-client
-CPU percentages of one core:
+Separate sequential 20-second pairs compared this binary with an archived
+five-FPS-active/two-FPS-idle polling build, using Tokio 1.53.3 in both. Binary
+order varied between scenarios. Combined Workbench/children + tmux + display
+client CPU, as percentages of one core:
 
-| Workload | Polling | Live |
+| Workload | Archived polling | Live-only |
 | --- | --- | --- |
-| Quiet, with latency probes | 8.1% | 2.5% |
-| Quiet selection, busy siblings | 13.0% | 6.3% |
-| Selected pane active | 12.6% | 11.8% |
+| Quiet, with latency probes | 8.2% | 3.8% |
+| Quiet selection, busy siblings | 12.3% | 7.4% |
+| Selected pane active | 14.6% | 14.6% |
 
-The quiet pair was rerun after compiler/test jobs finished. Binary order varied
-between scenarios. These short pairs show potential, not a stable CPU guarantee;
-the burst reliability failure blocks promotion regardless of these numbers.
+Active probe p95 was 218 ms polling versus 107 ms live. These short pairs are
+local observations, not stable CPU or latency guarantees. The long soak's mixed
+workload averaged 13.8% combined CPU; do not compare that average directly with
+the individual short scenes.
 
-Live preview remains opt-in, and polling is retained. A candidate follow-up is
-client-local `refresh-client -A pane:pause` for unrelated panes, including the
-Workbench pane, followed by another full run and CPU comparison. The
-[tmux implementation](https://github.com/tmux/tmux/blob/3.7c/control.c) distinguishes
-client-local paused delivery from an off pane that can affect producer reads.
-That optimization is not implemented or validated here. Safety limits are
-unchanged.
+The previous unfiltered prototype exceeded the traffic cap during long-line
+bursts. The replacement pauses delivery from unrelated panes only for its own
+client and keeps the existing safety limits. Enabling output and pausing must
+be one command: tmux resets per-pane offsets when `no-output` changes. Current
+runtime behavior is described in [status detection](status-detection.md#live-pane-preview).
+Polling, its fallback path, and the opt-in feature flag have been removed.

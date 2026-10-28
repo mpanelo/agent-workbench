@@ -351,7 +351,6 @@ async fn event_loop(
     let mut cleanups = JoinSet::<(u64, String, Result<(), String>)>::new();
     let mut mutations = JoinSet::<(Box<maintenance::Mutation>, Result<(), String>)>::new();
     let mut previews = JoinSet::new();
-    let mut live_previews = JoinSet::new();
     let (preview_updates, mut preview_receiver) = watch::channel(None);
     let mut highlights = JoinSet::new();
     let mut input_tick = time::interval(Duration::from_millis(100));
@@ -388,35 +387,23 @@ async fn event_loop(
         };
         if interaction.preview.select(preview_item) {
             previews.abort_all();
-            live_previews.abort_all();
             preview_updates.send_replace(None);
-            if cfg!(feature = "live-preview")
-                && let Some((ticket, item)) = interaction.preview.start_stream()
-            {
+            if let Some((ticket, item)) = interaction.preview.target() {
                 let engine = Arc::clone(&engine);
                 let updates = preview_updates.clone();
-                live_previews.spawn(async move {
+                previews.spawn(async move {
                     let result = engine
                         .stream_preview(&item, |capture| {
-                            updates.send_replace(Some((ticket, capture)));
+                            updates.send_replace(Some((
+                                ticket,
+                                capture.map_err(|error| error.to_string()),
+                            )));
                         })
                         .await;
-                    (ticket, result)
+                    (ticket, result.map_err(|error| error.to_string()))
                 });
             }
             redraw = true;
-        }
-        if let Some((ticket, item)) = interaction.preview.request(std::time::Instant::now()) {
-            let engine = Arc::clone(&engine);
-            previews.spawn(async move {
-                (
-                    ticket,
-                    engine
-                        .preview_work_item(&item)
-                        .await
-                        .map_err(|error| error.to_string()),
-                )
-            });
         }
         if redraw {
             terminal.draw(|frame| {
@@ -442,27 +429,19 @@ async fn event_loop(
             })?;
             redraw = false;
         }
-        let preview_deadline = interaction.preview.deadline();
         tokio::select! {
             changed = preview_receiver.changed() => {
                 if changed.is_ok()
                     && let Some((ticket, capture)) = preview_receiver.borrow_and_update().clone() {
-                    redraw |= interaction.preview.finish(ticket, Ok(capture));
+                    redraw |= interaction.preview.finish(ticket, capture);
                 }
             },
-            completed = live_previews.join_next(), if !live_previews.is_empty() => {
-                if let Some(Ok((ticket, _))) = completed {
-                    interaction.preview.stop_stream(ticket);
-                } else if live_previews.is_empty() {
-                    // A cancelled old generation must not disable a new stream.
-                    // Unexpected worker failures use the existing polling path.
-                    interaction.preview.fail_stream();
-                }
-            },
-            _ = time::sleep_until(time::Instant::from_std(preview_deadline.unwrap_or_else(std::time::Instant::now))), if preview_deadline.is_some() => {},
             completed = previews.join_next(), if !previews.is_empty() => {
                 redraw |= match completed {
-                    Some(Ok((ticket, result))) => interaction.preview.finish(ticket, result),
+                    Some(Ok((ticket, result))) if interaction.preview.owns(ticket) => {
+                        preview_updates.send_replace(None);
+                        interaction.preview.finish(ticket, Err(result.err().unwrap_or_else(|| "Preview stream stopped.".into())))
+                    },
                     Some(Err(error)) if !error.is_cancelled() && previews.is_empty() => interaction.preview.fail(),
                     _ => false,
                 };

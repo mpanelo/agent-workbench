@@ -1,6 +1,4 @@
 //! Read-only selected-pane display. Captures never drive agent status or input.
-use std::time::{Duration, Instant};
-
 use ansi_to_tui::IntoText;
 use ratatui::{
     Frame,
@@ -12,19 +10,10 @@ use workbench_core::{PanePreview, WorkItem};
 
 use crate::{theme, ui::visible};
 
-const REFRESH: Duration = Duration::from_millis(200);
-const IDLE_REFRESH: Duration = Duration::from_millis(500);
-const QUIET: Duration = Duration::from_secs(1);
-
 #[derive(Debug, Default)]
 pub(crate) struct PreviewUi {
     target: Option<WorkItem>,
     generation: u64,
-    busy: bool,
-    streaming: bool,
-    requested: Option<Instant>,
-    quiet_since: Option<Instant>,
-    slow: bool,
     capture: Option<PanePreview>,
     content: Option<Result<Vec<Line<'static>>, String>>,
 }
@@ -38,96 +27,28 @@ impl PreviewUi {
         }
         self.target = target.cloned();
         self.generation = self.generation.wrapping_add(1);
-        self.busy = false;
-        self.streaming = false;
-        self.requested = None;
-        self.quiet_since = None;
-        self.slow = false;
         self.capture = None;
         self.content = None;
         true
     }
 
-    pub fn request(&mut self, now: Instant) -> Option<(u64, WorkItem)> {
-        let target = self.target.as_ref()?;
-        if self.streaming
-            || self.busy
-            || self
-                .requested
-                .is_some_and(|last| now.saturating_duration_since(last) < self.refresh())
-        {
-            return None;
-        }
-        self.busy = true;
-        self.requested = Some(now);
-        Some((self.generation, target.clone()))
+    pub fn target(&self) -> Option<(u64, WorkItem)> {
+        self.target.clone().map(|item| (self.generation, item))
     }
 
-    /// Wake at the capture deadline instead of rounding it to the input tick.
-    pub fn deadline(&self) -> Option<Instant> {
-        if self.target.is_none() || self.busy || self.streaming {
-            return None;
-        }
-        Some(
-            self.requested
-                .map_or_else(Instant::now, |last| last + self.refresh()),
-        )
-    }
-
-    pub fn start_stream(&mut self) -> Option<(u64, WorkItem)> {
-        let target = self.target.clone()?;
-        self.streaming = true;
-        Some((self.generation, target))
-    }
-
-    pub fn stop_stream(&mut self, ticket: u64) {
-        if ticket == self.generation {
-            self.fail_stream();
-        }
-    }
-
-    pub fn fail_stream(&mut self) {
-        self.streaming = false;
-        self.requested = None;
-        self.busy = false;
-    }
-
-    fn refresh(&self) -> Duration {
-        if self.slow { IDLE_REFRESH } else { REFRESH }
-    }
-
-    fn activity(&mut self, changed: bool, now: Instant) {
-        if changed || self.quiet_since.is_none() {
-            self.quiet_since = Some(now);
-            self.slow = false;
-        } else if self
-            .quiet_since
-            .is_some_and(|since| now.saturating_duration_since(since) >= QUIET)
-        {
-            self.slow = true;
-        }
+    pub fn owns(&self, ticket: u64) -> bool {
+        ticket == self.generation && self.target.is_some()
     }
 
     /// Return whether displayed content changed. Identical captures bypass ANSI
     /// decoding as well as rendering; stale results never request a redraw.
     pub fn finish(&mut self, ticket: u64, result: Result<PanePreview, String>) -> bool {
-        self.finish_at(ticket, result, Instant::now())
-    }
-
-    fn finish_at(
-        &mut self,
-        ticket: u64,
-        result: Result<PanePreview, String>,
-        now: Instant,
-    ) -> bool {
         if ticket != self.generation || self.target.is_none() {
             return false;
         }
-        self.busy = false;
         let content = match result {
             Ok(capture) => {
                 if self.capture.as_ref() == Some(&capture) {
-                    self.activity(false, now);
                     return false;
                 }
                 let lines = decode(&capture.text);
@@ -141,14 +62,13 @@ impl PreviewUi {
         };
         let changed = self.content.as_ref() != Some(&content);
         self.content = Some(content);
-        self.activity(changed, now);
         changed
     }
 
     pub fn fail(&mut self) -> bool {
         self.finish(
             self.generation,
-            Err("Preview capture stopped; retrying.".into()),
+            Err("Preview stream stopped. Reselect the work item to reconnect.".into()),
         )
     }
 
@@ -264,6 +184,7 @@ fn decode(content: &str) -> Vec<Line<'static>> {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend, style::Color};
+    use std::time::{Duration, Instant};
 
     fn item(id: &str) -> WorkItem {
         WorkItem {
@@ -317,18 +238,16 @@ mod tests {
     fn test_selection() {
         let (a, b) = (item("A"), item("B"));
         let mut ui = PreviewUi::default();
-        let now = Instant::now();
-        assert!(ui.request(now).is_none());
+        assert!(ui.target().is_none());
         assert!(ui.select(Some(&a)));
-        let (old, requested) = ui.request(now).unwrap();
+        let (old, requested) = ui.target().unwrap();
         assert_eq!(requested, a);
         ui.finish(old, Ok(capture("old output")));
         assert!(screen(&ui, &a, 45, 8).contains("old output"));
         assert!(ui.select(Some(&b)));
-        let (current, _) = ui.request(now).unwrap();
+        let (current, _) = ui.target().unwrap();
         ui.finish(old, Ok(capture("late old output")));
         assert!(ui.content.is_none());
-        assert!(ui.busy);
         ui.finish(current, Ok(capture("new output")));
         let text = screen(&ui, &b, 45, 8);
         assert!(text.contains("Pane preview: B"));
@@ -348,55 +267,24 @@ mod tests {
     }
 
     #[test]
-    fn test_stream_fallback() {
+    fn test_reconnect() {
+        let item = item("A");
         let mut ui = PreviewUi::default();
-        assert!(ui.start_stream().is_none());
-        ui.select(Some(&item("A")));
-        let (old, _) = ui.start_stream().unwrap();
-        let now = Instant::now();
-        assert!(ui.request(now).is_none());
-        assert!(ui.deadline().is_none());
-        assert!(ui.finish(old, Ok(capture("live"))));
-        assert!(ui.request(now + QUIET).is_none());
-        ui.stop_stream(old);
-        assert!(ui.request(now).is_some());
-        assert!(ui.finish(old, Ok(capture("fallback"))));
-        assert!(screen(&ui, &item("A"), 45, 8).contains("fallback"));
-
-        ui.select(Some(&item("B")));
-        let (current, _) = ui.start_stream().unwrap();
-        ui.stop_stream(old);
-        assert!(ui.streaming);
-        assert!(!ui.finish(old, Ok(capture("stale"))));
-        assert!(ui.finish(current, Ok(capture("new"))));
-        ui.fail_stream();
-        assert!(ui.request(now).is_some());
-        ui.select(None);
+        ui.select(Some(&item));
+        let (ticket, _) = ui.target().unwrap();
+        assert!(ui.owns(ticket));
+        assert!(ui.finish(ticket, Ok(capture("old output"))));
+        assert!(ui.finish(ticket, Err("Disconnected; reconnecting.".into())));
+        let text = screen(&ui, &item, 35, 8);
+        assert!(text.contains("Preview unavailable"));
+        assert!(!text.contains("old output"));
         assert!(ui.capture.is_none());
-        assert!(!ui.streaming);
-        assert!(ui.start_stream().is_none());
-    }
-
-    #[test]
-    fn test_refresh() {
-        let mut ui = PreviewUi::default();
-        ui.select(Some(&item("A")));
-        let now = Instant::now();
-        assert_eq!(REFRESH, Duration::from_millis(200));
-        assert_eq!(IDLE_REFRESH, Duration::from_millis(500));
-        let (ticket, _) = ui.request(now).unwrap();
-        assert!(ui.deadline().is_none());
-        assert!(ui.request(now + REFRESH).is_none());
-        ui.finish(ticket, Ok(capture("first")));
-        assert_eq!(ui.deadline(), Some(now + REFRESH));
-        assert!(ui.request(now + Duration::from_millis(100)).is_none());
-        assert!(
-            ui.request(now + REFRESH - Duration::from_millis(1))
-                .is_none()
-        );
-        assert!(ui.request(now + REFRESH).is_some());
-        ui.fail();
-        assert!(ui.request(now + REFRESH * 2).is_some());
+        assert!(!ui.finish(ticket, Err("Disconnected; reconnecting.".into())));
+        assert!(ui.finish(ticket, Ok(capture("recovered"))));
+        assert!(screen(&ui, &item, 35, 8).contains("recovered"));
+        ui.select(None);
+        assert!(!ui.owns(ticket));
+        assert!(!ui.finish(ticket, Err("stale disconnect".into())));
     }
 
     #[test]
@@ -404,13 +292,10 @@ mod tests {
         let item = item("A");
         let mut ui = PreviewUi::default();
         ui.select(Some(&item));
-        let now = Instant::now();
-        let (ticket, _) = ui.request(now).unwrap();
+        let (ticket, _) = ui.target().unwrap();
         assert!(ui.finish(ticket, Ok(capture("first"))));
         let pointer = ui.content.as_ref().unwrap().as_ref().unwrap().as_ptr();
-        assert!(ui.request(now + REFRESH).is_some());
         assert!(!ui.finish(ticket, Ok(capture("first"))));
-        assert!(!ui.busy);
         assert_eq!(
             ui.content.as_ref().unwrap().as_ref().unwrap().as_ptr(),
             pointer
@@ -423,82 +308,7 @@ mod tests {
         assert!(ui.finish(ticket, Ok(capture("changed\n\n"))));
         ui.select(None);
         assert!(ui.capture.is_none());
-        assert!(ui.deadline().is_none());
         assert!(!ui.finish(ticket, Ok(capture("stale"))));
-    }
-
-    #[test]
-    fn test_backoff() {
-        let mut ui = PreviewUi::default();
-        ui.select(Some(&item("A")));
-        let start = Instant::now();
-        let (ticket, _) = ui.request(start).unwrap();
-        assert!(ui.finish_at(ticket, Ok(capture("first")), start));
-        for tick in 1..5 {
-            let now = start + REFRESH * tick;
-            assert!(ui.request(now).is_some());
-            assert!(!ui.finish_at(ticket, Ok(capture("first")), now));
-            assert_eq!(ui.deadline(), Some(now + REFRESH));
-        }
-        let now = start + QUIET;
-        assert!(ui.request(now).is_some());
-        assert!(!ui.finish_at(ticket, Ok(capture("first")), now));
-        assert_eq!(ui.deadline(), Some(now + IDLE_REFRESH));
-        assert!(
-            ui.request(now + IDLE_REFRESH - Duration::from_millis(1))
-                .is_none()
-        );
-        let resumed = now + IDLE_REFRESH;
-        assert!(ui.request(resumed).is_some());
-        assert!(ui.request(resumed + IDLE_REFRESH).is_none());
-        assert!(ui.finish_at(ticket, Ok(capture("resumed")), resumed));
-        assert_eq!(ui.deadline(), Some(resumed + REFRESH));
-        for tick in 1..5 {
-            let now = resumed + REFRESH * tick;
-            assert!(ui.request(now).is_some());
-            assert!(!ui.finish_at(ticket, Ok(capture("resumed")), now));
-            assert!(!ui.slow);
-        }
-        assert!(!ui.finish_at(ticket, Ok(capture("resumed\n\n")), resumed + QUIET));
-        assert!(ui.slow);
-    }
-
-    #[test]
-    fn test_backoff_reset() {
-        let mut ui = PreviewUi::default();
-        ui.select(Some(&item("A")));
-        let start = Instant::now();
-        let (ticket, _) = ui.request(start).unwrap();
-        assert!(ui.finish_at(ticket, Err("missing".into()), start));
-        assert!(!ui.finish_at(ticket, Err("missing".into()), start + QUIET));
-        assert!(ui.slow);
-        assert!(ui.finish_at(ticket, Ok(capture("recovered")), start + QUIET));
-        assert!(!ui.slow);
-        assert!(!ui.finish_at(ticket, Ok(capture("recovered")), start + QUIET * 2));
-        assert!(ui.slow);
-        ui.select(Some(&item("B")));
-        assert!(!ui.slow);
-        assert!(ui.quiet_since.is_none());
-        assert!(!ui.finish_at(ticket, Ok(capture("stale")), start + QUIET * 3));
-        assert!(ui.request(start + QUIET * 3).is_some());
-        ui.select(None);
-        assert!(ui.deadline().is_none());
-        assert!(!ui.slow);
-        assert!(ui.quiet_since.is_none());
-    }
-
-    #[test]
-    fn test_active_polling() {
-        let mut ui = PreviewUi::default();
-        ui.select(Some(&item("A")));
-        let start = Instant::now();
-        for tick in 0..30 {
-            let now = start + REFRESH * tick;
-            let (ticket, _) = ui.request(now).unwrap();
-            assert!(ui.finish_at(ticket, Ok(capture(&format!("update {tick}"))), now));
-            assert_eq!(ui.deadline(), Some(now + REFRESH));
-            assert!(!ui.slow);
-        }
     }
 
     #[test]
@@ -519,7 +329,7 @@ mod tests {
         let item = item("perf");
         let mut ui = PreviewUi::default();
         ui.select(Some(&item));
-        let (ticket, _) = ui.request(Instant::now()).unwrap();
+        let (ticket, _) = ui.target().unwrap();
         let history = (0..240)
             .map(|row| {
                 format!(
@@ -608,7 +418,7 @@ mod tests {
         let item = item("A");
         let mut ui = PreviewUi::default();
         ui.select(Some(&item));
-        let (ticket, _) = ui.request(Instant::now()).unwrap();
+        let (ticket, _) = ui.target().unwrap();
         let output = (0..30).map(|i| format!("row {i:02}\n")).collect::<String>() + "\n\n";
         ui.finish(ticket, Ok(capture(&output)));
         let text = screen(&ui, &item, 45, 8);
@@ -632,7 +442,7 @@ mod tests {
         let item = item("A");
         let mut ui = PreviewUi::default();
         ui.select(Some(&item));
-        let (ticket, _) = ui.request(Instant::now()).unwrap();
+        let (ticket, _) = ui.target().unwrap();
         let text = format!("\x1b[38;2;1;2;3mBEGIN{}TAIL\x1b[0m", "x".repeat(80));
         ui.finish(ticket, Ok(capture(&text)));
         let rendered = screen(&ui, &item, 32, 8);

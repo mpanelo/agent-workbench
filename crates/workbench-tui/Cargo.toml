@@ -5,9 +5,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-[features]
-live-preview = []
-
 [[bin]]
 name = "workbench"
 path = "src/main.rs"

@@ -3,6 +3,8 @@
 
 import hashlib
 import importlib.util
+import os
+import pty
 import subprocess
 import sys
 import tempfile
@@ -17,6 +19,25 @@ spec.loader.exec_module(stress)
 
 
 class Calculations(unittest.TestCase):
+    def test_cleanup(self):
+        fixture = stress.Fixture.__new__(stress.Fixture)
+        fixture.real_tmux = None
+        fixture.master, slave = pty.openpty()
+        fixture.client = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.buffer.write(b'x' * 200000); sys.stdout.flush()",
+            ],
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+        )
+        os.close(slave)
+        self.assertFalse(fixture.close())
+        self.assertEqual(fixture.client.returncode, 0)
+        self.assertIsNone(fixture.master)
+
     def test_fingerprint(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "binary"
