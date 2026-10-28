@@ -264,6 +264,12 @@ hooks, and high-output real agents still need broader testing. Reducing snapshot
 work and unrelated notification traffic would be follow-up experiments, not
 reasons to raise the default polling rate.
 
+The repeatable [six-pane stress test](preview-stress.md) includes Workbench's
+own pane in the session. It found that long-line bursts can exceed the live
+connection's traffic limit and cause unexpected polling fallback. The promotion
+gate failed, so live preview remains opt-in and the polling implementation is
+retained. See the guide for reproduction steps, thresholds, and limitations.
+
 ## Testing
 
 Keep parser and transition tests independent of live agents. Cover layout

@@ -154,6 +154,8 @@ cargo deny --locked check
 Tests require Git; live-tmux tests are opt-in. See [AGENTS.md](AGENTS.md) for
 architecture and style rules, [status detection](docs/status-detection.md) for
 implementation details and testing, and the [roadmap](docs/roadmap.md) for open proposals.
+The [preview stress test](docs/preview-stress.md) exercises six synthetic panes
+on a disposable tmux server without using real agents.
 
 ## License
 

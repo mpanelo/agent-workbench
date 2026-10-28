@@ -584,5 +584,30 @@ exec cat "$base/capture"
         assert!(result.is_err());
         assert!(engine.preview_work_item(&item).await.is_err());
         assert_eq!(engine.work_items().unwrap(), [item]);
+        // The observer must also stop if the server disappears, independently
+        // of any TUI host terminal. Never target an inherited user server.
+        let pane = engine.discover().await.unwrap().sessions[0].windows[0].panes[0]
+            .id
+            .clone();
+        let item = WorkItem {
+            id: "B".into(),
+            title: String::new(),
+            repository: directory.path().into(),
+            workspace: directory.path().into(),
+            branch: None,
+            kind: crate::WorkItemKind::Implementation,
+            pane_id: pane,
+        };
+        engine.register_work_item(item.clone()).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(engine.stream_preview(&item, |_| {}), async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                engine.tmux.execute(&["kill-server".into()]).await.unwrap();
+            })
+            .0
+        })
+        .await
+        .unwrap();
+        assert!(result.is_err());
     }
 }
