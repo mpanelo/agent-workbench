@@ -31,7 +31,7 @@ daemon, or other agents. It does not start agents or change your configuration.
    `/hooks`, inspect and trust the merged hook definitions, then submit a prompt.
    Restart/resume the session after enabling hooks so `SessionStart` is observed.
    Re-review `/hooks` whenever you change the hook definitions. Do not bypass trust.
-5. Register the pane in Workbench's SESSIONS view as usual. Hooks can report before
+5. Show sessions with `Tab` in WORK and register the pane. Hooks can report before
    registration or while Workbench is closed; Workbench still supervises only
    registered panes. `workbench list` shows whether lifecycle signals supply status.
 

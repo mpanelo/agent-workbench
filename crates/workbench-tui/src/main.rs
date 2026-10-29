@@ -14,6 +14,7 @@ mod cleanup;
 mod cli;
 mod help;
 mod interaction;
+mod listing;
 mod maintenance;
 mod preview;
 mod registration;
@@ -132,14 +133,6 @@ impl AppState {
             .and_then(|items| items.as_ref().ok())
             .map_or(&[], Vec::as_slice)
     }
-
-    fn sync_selection(&self, interaction: &mut interaction::Interaction) {
-        // A failed load is not removal evidence. Retain the selected ID until
-        // a successful snapshot proves that its registration disappeared.
-        if let Some(Ok(items)) = &self.work_items {
-            interaction.sync(items);
-        }
-    }
 }
 
 enum RunExit {
@@ -220,7 +213,6 @@ async fn start() -> io::Result<()> {
         }
     }
     let mut interaction = interaction::Interaction::default();
-    let mut view = ui::View::default();
     let mut reviews = review::ReviewUi::new(options.diff_base);
     loop {
         let mut terminal = init_terminal()?;
@@ -228,7 +220,6 @@ async fn start() -> io::Result<()> {
             &mut terminal,
             Arc::clone(&engine),
             &mut interaction,
-            &mut view,
             &mut reviews,
         )
         .await;
@@ -292,7 +283,6 @@ async fn run(
     terminal: &mut ratatui::DefaultTerminal,
     engine: Arc<Engine>,
     interaction: &mut interaction::Interaction,
-    view: &mut ui::View,
     reviews: &mut review::ReviewUi,
 ) -> io::Result<RunExit> {
     let (sender, mut receiver) = watch::channel::<AppState>(AppState::default());
@@ -318,7 +308,7 @@ async fn run(
             }
         }
     });
-    let result = event_loop(terminal, &mut receiver, engine, interaction, view, reviews).await;
+    let result = event_loop(terminal, &mut receiver, engine, interaction, reviews).await;
     discovery.abort();
     // Wait for cancellation so an in-flight command is dropped and killed.
     let _ = discovery.await;
@@ -330,7 +320,6 @@ async fn event_loop(
     receiver: &mut watch::Receiver<AppState>,
     engine: Arc<Engine>,
     interaction: &mut interaction::Interaction,
-    view: &mut ui::View,
     reviews: &mut review::ReviewUi,
 ) -> io::Result<RunExit> {
     let mut state = AppState::default();
@@ -370,8 +359,7 @@ async fn event_loop(
                 .as_ref()
                 .and_then(|result| result.as_deref().ok()),
         );
-        let preview_item = if *view == ui::View::Work
-            && !help.is_open()
+        let preview_item = if !help.is_open()
             && !cleanup.is_open()
             && !maintenance.is_open()
             && registration.pane.is_none()
@@ -418,12 +406,7 @@ async fn event_loop(
                 } else if reviews.is_open() {
                     reviews.render(frame);
                 } else {
-                    match *view {
-                        ui::View::Work => ui::render_work(frame, &state, &mut scroll, interaction),
-                        ui::View::Sessions => {
-                            ui::render_sessions(frame, &state, &mut scroll, interaction)
-                        }
-                    }
+                    ui::render_work(frame, &state, &mut scroll, interaction);
                     removal.render(frame);
                 }
             })?;
@@ -521,7 +504,7 @@ async fn event_loop(
                         // for unchanged existing items until the next normal refresh.
                         state.reload_registry(&engine);
                         state.refresh_attention(&mut interaction.attention_tracker);
-                        *view = ui::View::Work;
+                        interaction.selected_pane = None;
                         scroll = 0;
                         interaction.selected_id = Some(item.id.clone());
                         interaction.reveal_selection = true;
@@ -562,7 +545,6 @@ async fn event_loop(
                 state = updated;
                 state.reload_registry(&engine);
                 state.refresh_attention(&mut interaction.attention_tracker);
-                if let Some(snapshot) = state.snapshot() { interaction.sync_panes(snapshot); }
                 state.sync_selection(interaction);
                 redraw = true;
             }
@@ -588,13 +570,13 @@ async fn event_loop(
                 while event::poll(Duration::ZERO)? {
                     redraw = true;
                     let event = event::read()?;
-                    if matches!(event, Event::Resize(_, _)) { interaction.reveal_selection = true; interaction.reveal_pane = true; }
+                    if matches!(event, Event::Resize(_, _)) { interaction.reveal_selection = true; }
                     let context = if removal.is_open() { removal.help_context() } else if cleanup.is_open() { help::Context::Cleanup } else { maintenance.help_context().unwrap_or_else(|| {
                         if registration.pane.is_some() { help::Context::Registration }
                         else if reviews.is_open() { help::Context::Review }
                         else if interaction.draft.is_some() { help::Context::Reply }
                         else if let Some(bar) = &interaction.response_bar { help::Context::Response { changed: bar.changed, can_reject: bar.can_reject() } }
-                        else { help::Context::view(*view, interaction.show_all_panes) }
+                        else { interaction.help_context() }
                     }) };
                     if help.event(&event, context) {
                         continue;
@@ -724,7 +706,7 @@ async fn event_loop(
                             KeyCode::Char('q') | KeyCode::Esc if interaction.response_bar.is_none() => return Ok(RunExit::Quit),
                             KeyCode::Char('c') if interaction.response_bar.is_none() && key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(RunExit::Quit),
                             _ => {
-                                if let Some(id) = navigate(key, &state, view, &mut scroll, interaction)
+                                if let Some(id) = navigate(key, &state, &mut scroll, interaction)
                                     && let Some(exit) = finish_switch(&id, interaction, engine.try_switch_work_item(&id).await) {
                                         return Ok(exit);
                                     }
@@ -806,16 +788,15 @@ fn open_removal_action(
     }
 }
 
-/// Route list actions against the visible subset, never the hidden WORK list.
+/// Route every action against the selected row's identity and capabilities.
 fn navigate(
     key: impl Into<KeyEvent>,
     state: &AppState,
-    view: &mut ui::View,
     scroll: &mut u16,
     interaction: &mut interaction::Interaction,
 ) -> Option<String> {
     let key = key.into();
-    if interaction.draft.is_some() || interaction.sending {
+    if interaction.draft.is_some() || interaction.sending || key.kind == KeyEventKind::Release {
         return None;
     }
     if key
@@ -826,13 +807,42 @@ fn navigate(
     }
     let items = state.items();
     if interaction.response_bar.is_some() {
-        if *view == ui::View::Work {
-            interaction.response_key(key, items);
-        }
+        interaction.response_key(key, items);
         return None;
     }
     match key.code {
-        KeyCode::Char('x') if *view == ui::View::Work => {
+        KeyCode::Tab if key.kind == KeyEventKind::Press && key.modifiers.is_empty() => {
+            interaction.show_sessions = !interaction.show_sessions;
+            state.sync_selection(interaction);
+            interaction.reveal_selection = true;
+            *scroll = 0;
+        }
+        KeyCode::Down | KeyCode::Char('j') => state.move_row(interaction, 1),
+        KeyCode::Up | KeyCode::Char('k') => state.move_row(interaction, -1),
+        KeyCode::Enter | KeyCode::Char('r') if interaction.selected_pane.is_some() => {
+            // Recheck visibility and discovery rather than registering a stale pane.
+            let rows = state.rows(interaction.show_sessions);
+            interaction.registration_requested = rows.iter().find_map(|row| match row {
+                listing::Row::Session { pane, .. } if row.selected(interaction) => {
+                    Some(pane.id.clone())
+                }
+                _ => None,
+            });
+            if interaction.registration_requested.is_none() {
+                interaction.message =
+                    Some("Session unavailable. Wait for discovery and try again.".into());
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(selected) = interaction.selected(items) {
+                return Some(selected.item.id.clone());
+            }
+            interaction.message = Some("Select an item in WORK first.".into());
+        }
+        KeyCode::Char('r') if key.kind == KeyEventKind::Press && key.modifiers.is_empty() => {
+            interaction.begin_response(items);
+        }
+        KeyCode::Char('x') if interaction.selected_pane.is_none() => {
             match interaction
                 .selected(items)
                 .map(|item| interaction.attention_tracker.capture(item))
@@ -844,54 +854,8 @@ fn navigate(
                 }
             }
         }
-        KeyCode::Char('f') if *view == ui::View::Sessions => {
-            interaction.show_all_panes = !interaction.show_all_panes;
-            if let Some(snapshot) = state.snapshot() {
-                interaction.sync_panes(snapshot);
-            }
-            interaction.reveal_pane = true;
-            *scroll = 0;
-        }
-        KeyCode::Down | KeyCode::Char('j') if *view == ui::View::Sessions => {
-            if let Some(snapshot) = state.snapshot() {
-                interaction.move_pane_selection(snapshot, 1);
-            }
-        }
-        KeyCode::Up | KeyCode::Char('k') if *view == ui::View::Sessions => {
-            if let Some(snapshot) = state.snapshot() {
-                interaction.move_pane_selection(snapshot, -1);
-            }
-        }
-        KeyCode::Enter | KeyCode::Char('r') if *view == ui::View::Sessions => {
-            interaction.registration_requested = state.snapshot().and_then(|snapshot| {
-                interaction.sync_panes(snapshot);
-                interaction.selected_pane.clone()
-            });
-            interaction.message = interaction.registration_requested.is_none().then(|| {
-                "Select a live pane in SESSIONS first; discovery may be unavailable.".into()
-            });
-        }
-        KeyCode::Down | KeyCode::Char('j') if view.is_item_view() => {
-            interaction.move_selection(items, 1)
-        }
-        KeyCode::Up | KeyCode::Char('k') if view.is_item_view() => {
-            interaction.move_selection(items, -1)
-        }
-        KeyCode::Enter if view.is_item_view() => {
-            if let Some(selected) = interaction.selected(items) {
-                return Some(selected.item.id.clone());
-            }
-            interaction.message = Some("Select an item in the current view first.".into());
-        }
-        KeyCode::Char('r')
-            if view.is_item_view()
-                && key.kind == KeyEventKind::Press
-                && key.modifiers.is_empty() =>
-        {
-            interaction.begin_response(items)
-        }
         KeyCode::Char('c')
-            if *view == ui::View::Work
+            if interaction.selected_pane.is_none()
                 && key.kind == KeyEventKind::Press
                 && key.modifiers.is_empty() =>
         {
@@ -903,7 +867,7 @@ fn navigate(
                 .is_none()
                 .then(|| "Select an item in WORK first.".into());
         }
-        KeyCode::Char('e') if *view == ui::View::Work => {
+        KeyCode::Char('e') if interaction.selected_pane.is_none() => {
             interaction.maintenance_requested = interaction
                 .selected(items)
                 .map(|selected| maintenance::Request::Edit(selected.item.clone()));
@@ -912,31 +876,14 @@ fn navigate(
                 .is_none()
                 .then(|| "Select an item in WORK first.".into());
         }
-        KeyCode::Tab if view.is_item_view() => interaction.next_attention(&state.attention),
-        KeyCode::Char('d') if view.is_item_view() => {
+        KeyCode::Char('d') if interaction.selected_pane.is_none() => {
             interaction.review_requested = interaction
                 .selected(items)
                 .map(|selected| selected.item.id.clone());
-            interaction.message = if interaction.review_requested.is_none() {
-                Some("Select an item in the current view first.".into())
-            } else {
-                None
-            };
-        }
-        KeyCode::Char('w' | 's') => {
-            *view = match key.code {
-                KeyCode::Char('w') => ui::View::Work,
-                _ => ui::View::Sessions,
-            };
-            *scroll = 0;
-            state.sync_selection(interaction);
-            interaction.reveal_selection = true;
-            if *view == ui::View::Sessions {
-                if let Some(snapshot) = state.snapshot() {
-                    interaction.sync_panes(snapshot);
-                }
-                interaction.reveal_pane = true;
-            }
+            interaction.message = interaction
+                .review_requested
+                .is_none()
+                .then(|| "Select an item in WORK first.".into());
         }
         _ => {}
     }
@@ -1018,47 +965,24 @@ mod tests {
     fn test_approval_keys() {
         let state = approval_state();
         for code in ['y', 'n'] {
-            for mut view in [ui::View::Work, ui::View::Sessions] {
-                let mut interaction = interaction::Interaction::default();
-                interaction.sync(state.items());
-                navigate(
-                    KeyCode::Char(code),
-                    &state,
-                    &mut view,
-                    &mut 0,
-                    &mut interaction,
-                );
-                assert!(interaction.approval_requested.is_none());
-                navigate(
-                    KeyCode::Char('r'),
-                    &state,
-                    &mut view,
-                    &mut 0,
-                    &mut interaction,
-                );
-                navigate(
-                    KeyCode::Char(code),
-                    &state,
-                    &mut view,
-                    &mut 0,
-                    &mut interaction,
-                );
-                if view == ui::View::Work {
-                    let request = interaction.approval_requested.take().unwrap();
-                    assert_eq!(request.item_id(), "waiting");
-                    assert_eq!(
-                        request.decision(),
-                        if code == 'y' {
-                            ApprovalDecision::ApproveOnce
-                        } else {
-                            ApprovalDecision::RejectAndReply
-                        }
-                    );
+            let mut interaction = interaction::Interaction::default();
+            interaction.sync(state.items());
+            navigate(KeyCode::Char(code), &state, &mut 0, &mut interaction);
+            assert!(interaction.approval_requested.is_none());
+            navigate(KeyCode::Char('r'), &state, &mut 0, &mut interaction);
+            navigate(KeyCode::Char(code), &state, &mut 0, &mut interaction);
+
+            let request = interaction.approval_requested.take().unwrap();
+            assert_eq!(request.item_id(), "waiting");
+            assert_eq!(
+                request.decision(),
+                if code == 'y' {
+                    ApprovalDecision::ApproveOnce
                 } else {
-                    assert!(interaction.approval_requested.is_none());
+                    ApprovalDecision::RejectAndReply
                 }
-            }
-            let mut view = ui::View::Work;
+            );
+
             let mut interaction = interaction::Interaction::default();
             interaction.sync(state.items());
             interaction.begin_response(state.items());
@@ -1071,7 +995,6 @@ mod tests {
                 navigate(
                     KeyEvent::new(KeyCode::Char(code), modifiers),
                     &state,
-                    &mut view,
                     &mut 0,
                     &mut interaction,
                 );
@@ -1081,32 +1004,19 @@ mod tests {
                 navigate(
                     KeyEvent::new_with_kind(KeyCode::Char(code), KeyModifiers::NONE, kind),
                     &state,
-                    &mut view,
                     &mut 0,
                     &mut interaction,
                 );
                 assert!(interaction.approval_requested.is_none());
             }
             interaction.sending = true;
-            navigate(
-                KeyCode::Char(code),
-                &state,
-                &mut view,
-                &mut 0,
-                &mut interaction,
-            );
+            navigate(KeyCode::Char(code), &state, &mut 0, &mut interaction);
             assert!(interaction.approval_requested.is_none());
             interaction.sending = false;
-            navigate(KeyCode::Esc, &state, &mut view, &mut 0, &mut interaction);
+            navigate(KeyCode::Esc, &state, &mut 0, &mut interaction);
             assert!(interaction.response_bar.is_none());
             interaction.begin_reply(state.items());
-            navigate(
-                KeyCode::Char(code),
-                &state,
-                &mut view,
-                &mut 0,
-                &mut interaction,
-            );
+            navigate(KeyCode::Char(code), &state, &mut 0, &mut interaction);
             assert!(interaction.approval_requested.is_none());
             interaction
                 .draft
@@ -1117,18 +1027,11 @@ mod tests {
             assert_eq!(interaction.draft.as_ref().unwrap().text, code.to_string());
             interaction.draft = None;
             interaction.selected_id = Some("finished".into());
-            navigate(
-                KeyCode::Char(code),
-                &state,
-                &mut view,
-                &mut 0,
-                &mut interaction,
-            );
+            navigate(KeyCode::Char(code), &state, &mut 0, &mut interaction);
             assert!(interaction.approval_requested.is_none());
             navigate(
                 KeyCode::Char(code),
                 &AppState::default(),
-                &mut view,
                 &mut 0,
                 &mut interaction,
             );
@@ -1176,15 +1079,9 @@ mod tests {
         let state = approval_state();
         let mut interaction = interaction::Interaction::default();
         interaction.sync(state.items());
-        let mut view = ui::View::Work;
+
         let mut scroll = 4;
-        navigate(
-            KeyCode::Char('r'),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
+        navigate(KeyCode::Char('r'), &state, &mut scroll, &mut interaction);
         assert!(interaction.response_bar.is_some());
         for key in [
             KeyCode::Char('j'),
@@ -1196,27 +1093,20 @@ mod tests {
             KeyCode::Char('q'),
             KeyCode::Tab,
         ] {
-            assert!(navigate(key, &state, &mut view, &mut scroll, &mut interaction).is_none());
+            assert!(navigate(key, &state, &mut scroll, &mut interaction).is_none());
             assert_eq!(interaction.selected_id.as_deref(), Some("waiting"));
-            assert_eq!(view, ui::View::Work);
+
             assert!(interaction.maintenance_requested.is_none());
             assert!(interaction.removal_requested.is_none());
         }
         navigate(
             KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
             &state,
-            &mut view,
             &mut scroll,
             &mut interaction,
         );
         assert_eq!(scroll, 4);
-        navigate(
-            KeyCode::Enter,
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
+        navigate(KeyCode::Enter, &state, &mut scroll, &mut interaction);
         assert!(interaction.response_bar.is_none());
         assert_eq!(interaction.draft.as_ref().unwrap().item_id, "waiting");
         assert!(interaction.approval_requested.is_none());
@@ -1235,16 +1125,10 @@ mod tests {
         let original = state.items().to_vec();
         let mut interaction = interaction::Interaction::default();
         state.refresh_attention(&mut interaction.attention_tracker);
-        let mut view = ui::View::Work;
+
         interaction.sync(state.items());
         interaction.selected_id = Some("finished".into());
-        navigate(
-            KeyCode::Char('x'),
-            &state,
-            &mut view,
-            &mut 0,
-            &mut interaction,
-        );
+        navigate(KeyCode::Char('x'), &state, &mut 0, &mut interaction);
         assert!(interaction.acknowledgement_requested.is_some());
         state.apply_acknowledgement(&mut interaction);
         assert!(interaction.message.is_none());
@@ -1254,15 +1138,9 @@ mod tests {
         assert_eq!(state.items(), original);
         state.refresh_attention(&mut interaction.attention_tracker);
         assert_eq!(state.attention.len(), 1);
-        navigate(KeyCode::Tab, &state, &mut view, &mut 0, &mut interaction);
+        navigate(KeyCode::Down, &state, &mut 0, &mut interaction);
         assert_eq!(interaction.selected_id.as_deref(), Some("waiting"));
-        navigate(
-            KeyCode::Char('x'),
-            &state,
-            &mut view,
-            &mut 0,
-            &mut interaction,
-        );
+        navigate(KeyCode::Char('x'), &state, &mut 0, &mut interaction);
         assert!(interaction.acknowledgement_requested.is_none());
         assert!(
             interaction
@@ -1272,27 +1150,11 @@ mod tests {
                 .contains("input requests cannot be dismissed")
         );
         interaction.begin_reply(state.items());
-        navigate(
-            KeyCode::Char('x'),
-            &state,
-            &mut view,
-            &mut 0,
-            &mut interaction,
-        );
+        navigate(KeyCode::Char('x'), &state, &mut 0, &mut interaction);
         assert!(interaction.acknowledgement_requested.is_none());
         assert_eq!(interaction.draft.as_ref().unwrap().item_id, "waiting");
         interaction.draft = None;
-        {
-            let mut view = ui::View::Sessions;
-            navigate(
-                KeyCode::Char('x'),
-                &state,
-                &mut view,
-                &mut 0,
-                &mut interaction,
-            );
-            assert!(interaction.acknowledgement_requested.is_none());
-        }
+
         if let Some(Ok(items)) = &mut state.work_items {
             items[1].completion_fingerprint = Some(100);
         }
@@ -1301,18 +1163,11 @@ mod tests {
         navigate(
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
             &state,
-            &mut view,
             &mut 0,
             &mut interaction,
         );
         assert!(interaction.acknowledgement_requested.is_none());
-        navigate(
-            KeyCode::Char('x'),
-            &state,
-            &mut view,
-            &mut 0,
-            &mut interaction,
-        );
+        navigate(KeyCode::Char('x'), &state, &mut 0, &mut interaction);
         if let Some(Ok(items)) = &mut state.work_items {
             items[1].status = AgentStatus::WaitingForInput;
             items[1].completion_fingerprint = None;
@@ -1328,13 +1183,7 @@ mod tests {
                 .contains("observed turn changed")
         );
         let empty = AppState::default();
-        navigate(
-            KeyCode::Char('x'),
-            &empty,
-            &mut view,
-            &mut 0,
-            &mut interaction,
-        );
+        navigate(KeyCode::Char('x'), &empty, &mut 0, &mut interaction);
         assert!(interaction.acknowledgement_requested.is_none());
     }
 
@@ -1470,29 +1319,27 @@ mod tests {
             ("hidden", AgentStatus::Running),
             ("A", AgentStatus::Complete),
         ]);
-        for mut view in [ui::View::Work, ui::View::Sessions] {
-            let mut interaction = interaction::Interaction::default();
-            interaction.sync(state.items());
-            for code in [KeyCode::Char('e'), KeyCode::Char('n'), KeyCode::Char('u')] {
-                navigate(code, &state, &mut view, &mut 0, &mut interaction);
-                if view == ui::View::Work && code == KeyCode::Char('e') {
-                    match interaction.maintenance_requested.take().unwrap() {
-                        maintenance::Request::Edit(item) => {
-                            assert_eq!(code, KeyCode::Char('e'));
-                            assert_eq!(item.id, "hidden");
-                        }
+
+        let mut interaction = interaction::Interaction::default();
+        interaction.sync(state.items());
+        for code in [KeyCode::Char('e'), KeyCode::Char('n'), KeyCode::Char('u')] {
+            navigate(code, &state, &mut 0, &mut interaction);
+            if code == KeyCode::Char('e') {
+                match interaction.maintenance_requested.take().unwrap() {
+                    maintenance::Request::Edit(item) => {
+                        assert_eq!(code, KeyCode::Char('e'));
+                        assert_eq!(item.id, "hidden");
                     }
-                } else {
-                    assert!(interaction.maintenance_requested.is_none());
                 }
+            } else {
+                assert!(interaction.maintenance_requested.is_none());
             }
         }
-        let mut view = ui::View::Work;
+
         let mut interaction = interaction::Interaction::default();
         navigate(
             KeyCode::Char('e'),
             &AppState::default(),
-            &mut view,
             &mut 0,
             &mut interaction,
         );
@@ -1508,48 +1355,31 @@ mod tests {
             navigate(
                 KeyEvent::new(KeyCode::Char(code), modifier),
                 &state,
-                &mut view,
                 &mut 0,
                 &mut interaction,
             );
             assert!(interaction.maintenance_requested.is_none());
         }
         interaction.begin_reply(state.items());
-        navigate(
-            KeyCode::Char('u'),
-            &state,
-            &mut view,
-            &mut 0,
-            &mut interaction,
-        );
+        navigate(KeyCode::Char('u'), &state, &mut 0, &mut interaction);
         assert!(interaction.maintenance_requested.is_none());
     }
 
     #[test]
     fn test_removal_key() {
         let state = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
-        for mut view in [ui::View::Work, ui::View::Sessions] {
-            let mut interaction = interaction::Interaction {
-                selected_id: Some("B".into()),
-                ..Default::default()
-            };
-            navigate(
-                KeyCode::Char('c'),
-                &state,
-                &mut view,
-                &mut 0,
-                &mut interaction,
-            );
-            if view == ui::View::Work {
-                assert_eq!(
-                    interaction.removal_requested.take(),
-                    Some(state.items()[1].item.clone())
-                );
-            } else {
-                assert!(interaction.removal_requested.is_none());
-            }
-        }
-        let mut view = ui::View::Work;
+
+        let mut interaction = interaction::Interaction {
+            selected_id: Some("B".into()),
+            ..Default::default()
+        };
+        navigate(KeyCode::Char('c'), &state, &mut 0, &mut interaction);
+
+        assert_eq!(
+            interaction.removal_requested.take(),
+            Some(state.items()[1].item.clone())
+        );
+
         let mut interaction = interaction::Interaction::default();
         interaction.sync(state.items());
         for modifier in [
@@ -1561,7 +1391,6 @@ mod tests {
             navigate(
                 KeyEvent::new(KeyCode::Char('c'), modifier),
                 &state,
-                &mut view,
                 &mut 0,
                 &mut interaction,
             );
@@ -1570,23 +1399,16 @@ mod tests {
         for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
             let mut key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
             key.kind = kind;
-            navigate(key, &state, &mut view, &mut 0, &mut interaction);
+            navigate(key, &state, &mut 0, &mut interaction);
             assert!(interaction.removal_requested.is_none());
         }
         interaction.begin_reply(state.items());
-        navigate(
-            KeyCode::Char('c'),
-            &state,
-            &mut view,
-            &mut 0,
-            &mut interaction,
-        );
+        navigate(KeyCode::Char('c'), &state, &mut 0, &mut interaction);
         assert!(interaction.removal_requested.is_none());
         interaction.draft = None;
         navigate(
             KeyCode::Char('c'),
             &AppState::default(),
-            &mut view,
             &mut 0,
             &mut interaction,
         );
@@ -1614,15 +1436,9 @@ mod tests {
                 selected_id: Some("B".into()),
                 ..Default::default()
             };
-            let mut view = ui::View::Work;
+
             let mut scroll = 5;
-            navigate(
-                KeyCode::Char('c'),
-                &state,
-                &mut view,
-                &mut scroll,
-                &mut interaction,
-            );
+            navigate(KeyCode::Char('c'), &state, &mut scroll, &mut interaction);
             assert!(interaction.maintenance_requested.is_none());
             let mut menu = removal::RemovalUi::default();
             menu.open(interaction.removal_requested.take().unwrap());
@@ -1632,7 +1448,7 @@ mod tests {
             let mut cleanup = cleanup::CleanupUi::default();
             let action = open_removal_action(menu.key(KeyCode::Char(code).into()), &mut cleanup);
             assert_eq!(engine.work_items().unwrap(), saved);
-            assert_eq!(view, ui::View::Work);
+
             assert_eq!(scroll, 5);
             if code == 'u' {
                 let Some(RemovalAction::Unregister(mutation)) = action else {
@@ -1851,214 +1667,6 @@ mod tests {
         assert!(pending_refresh.attention.is_empty());
     }
 
-    #[test]
-    fn test_pane_filter() {
-        use workbench_core::{Pane, Session, Window};
-        let mut state = state(&[("registered-shell", AgentStatus::Unknown)]);
-        state.discovery = Some(Ok(Snapshot {
-            sessions: vec![Session {
-                id: "$1".into(),
-                name: "main".into(),
-                windows: vec![Window {
-                    id: "@1".into(),
-                    index: 0,
-                    name: "mixed".into(),
-                    panes: [("%1", "fish"), ("%2", "claude"), ("%3", "codex")]
-                        .into_iter()
-                        .map(|(id, command)| Pane {
-                            id: id.into(),
-                            index: 0,
-                            title: "Agent".into(),
-                            current_command: Some(command.into()),
-                            working_directory: None,
-                        })
-                        .collect(),
-                }],
-            }],
-        }));
-        let mut interaction = interaction::Interaction {
-            selected_pane: Some("%1".into()),
-            ..Default::default()
-        };
-        let mut view = ui::View::Sessions;
-        let mut scroll = 25;
-        navigate(
-            KeyCode::Enter,
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert_eq!(
-            interaction.registration_requested.take().as_deref(),
-            Some("%2")
-        );
-        navigate(
-            KeyCode::Char('j'),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert_eq!(interaction.selected_pane.as_deref(), Some("%3"));
-        navigate(
-            KeyCode::Char('f'),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert!(interaction.show_all_panes);
-        assert_eq!(interaction.selected_pane.as_deref(), Some("%3"));
-        assert_eq!(scroll, 0);
-        navigate(
-            KeyCode::Home,
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        navigate(
-            KeyCode::Char('r'),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert_eq!(
-            interaction.registration_requested.take().as_deref(),
-            Some("%3")
-        );
-        navigate(
-            KeyCode::Char('f'),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert_eq!(interaction.selected_pane.as_deref(), Some("%3"));
-        assert_eq!(state.items().len(), 1);
-        assert_eq!(
-            state.snapshot().unwrap().sessions[0].windows[0].panes.len(),
-            3
-        );
-        if let Some(Ok(snapshot)) = &mut state.discovery {
-            for pane in &mut snapshot.sessions[0].windows[0].panes {
-                pane.current_command = Some("fish".into());
-            }
-        }
-        navigate(
-            KeyCode::Enter,
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert!(interaction.selected_pane.is_none());
-        assert!(interaction.registration_requested.is_none());
-        assert!(
-            interaction
-                .message
-                .as_ref()
-                .unwrap()
-                .contains("Select a live pane")
-        );
-        navigate(
-            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert!(!interaction.show_all_panes);
-        view = ui::View::Work;
-        navigate(
-            KeyCode::Char('f'),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert!(!interaction.show_all_panes);
-    }
-
-    #[test]
-    fn test_register_pane() {
-        use workbench_core::{Pane, Session, Window};
-        let mut state = state(&[]);
-        state.discovery = Some(Ok(Snapshot {
-            sessions: vec![Session {
-                id: "$1".into(),
-                name: "main".into(),
-                windows: vec![Window {
-                    id: "@1".into(),
-                    index: 0,
-                    name: "task".into(),
-                    panes: ["%1", "%2"]
-                        .into_iter()
-                        .map(|id| Pane {
-                            id: id.into(),
-                            index: 0,
-                            title: "Agent".into(),
-                            current_command: Some("codex".into()),
-                            working_directory: None,
-                        })
-                        .collect(),
-                }],
-            }],
-        }));
-        let mut view = ui::View::Sessions;
-        let mut scroll = 0;
-        let mut interaction = interaction::Interaction::default();
-        navigate(
-            KeyCode::Char('j'),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert_eq!(interaction.selected_pane.as_deref(), Some("%2"));
-        navigate(
-            KeyCode::Enter,
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert_eq!(
-            interaction.registration_requested.take().as_deref(),
-            Some("%2")
-        );
-        navigate(
-            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert!(interaction.registration_requested.is_none());
-        assert!(interaction.draft.is_none());
-        state.discovery = Some(Err("Server unavailable".into()));
-        navigate(
-            KeyCode::Char('r'),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert!(interaction.registration_requested.is_none());
-        assert!(interaction.message.as_ref().unwrap().contains("live pane"));
-        state.discovery = Some(Ok(Snapshot::default()));
-        navigate(
-            KeyCode::Enter,
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert!(interaction.registration_requested.is_none());
-    }
-
     fn state(items: &[(&str, AgentStatus)]) -> AppState {
         AppState::from_refresh(
             Ok(Snapshot::default()),
@@ -2088,60 +1696,45 @@ mod tests {
     #[test]
     fn test_scroll_keys() {
         let state = state(&[("A", AgentStatus::WaitingForInput)]);
-        for mut view in [ui::View::Work, ui::View::Sessions] {
-            let original_view = view;
-            let mut interaction = interaction::Interaction::default();
-            interaction.sync(state.items());
-            let selected = interaction.selected_id.clone();
-            let mut scroll = 7;
-            let reveal_selection = interaction.reveal_selection;
-            for key in ['d', 'd', 'u', 'u', 'u'] {
-                assert!(
-                    navigate(
-                        KeyEvent::new(KeyCode::Char(key), KeyModifiers::CONTROL),
-                        &state,
-                        &mut view,
-                        &mut scroll,
-                        &mut interaction
-                    )
-                    .is_none()
-                );
-                assert_eq!(scroll, 7);
-                assert_eq!(view, original_view);
-                assert_eq!(interaction.selected_id, selected);
-                assert!(interaction.message.is_none());
-                assert!(interaction.draft.is_none());
-                assert_eq!(interaction.reveal_selection, reveal_selection);
-            }
-            scroll = 7;
-            navigate(
-                KeyCode::PageDown,
-                &state,
-                &mut view,
-                &mut scroll,
-                &mut interaction,
+
+        let mut interaction = interaction::Interaction::default();
+        interaction.sync(state.items());
+        let selected = interaction.selected_id.clone();
+        let mut scroll = 7;
+        let reveal_selection = interaction.reveal_selection;
+        for key in ['d', 'd', 'u', 'u', 'u'] {
+            assert!(
+                navigate(
+                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::CONTROL),
+                    &state,
+                    &mut scroll,
+                    &mut interaction
+                )
+                .is_none()
             );
             assert_eq!(scroll, 7);
-            navigate(
-                KeyCode::PageUp,
-                &state,
-                &mut view,
-                &mut scroll,
-                &mut interaction,
-            );
+
+            assert_eq!(interaction.selected_id, selected);
+            assert!(interaction.message.is_none());
+            assert!(interaction.draft.is_none());
+            assert_eq!(interaction.reveal_selection, reveal_selection);
+        }
+        scroll = 7;
+        navigate(KeyCode::PageDown, &state, &mut scroll, &mut interaction);
+        assert_eq!(scroll, 7);
+        navigate(KeyCode::PageUp, &state, &mut scroll, &mut interaction);
+        assert_eq!(scroll, 7);
+        for code in [KeyCode::Home, KeyCode::F(1)] {
+            navigate(code, &state, &mut scroll, &mut interaction);
             assert_eq!(scroll, 7);
-            for code in [KeyCode::Home, KeyCode::F(1)] {
-                navigate(code, &state, &mut view, &mut scroll, &mut interaction);
-                assert_eq!(scroll, 7);
-                assert_eq!(interaction.selected_id, selected);
-            }
+            assert_eq!(interaction.selected_id, selected);
         }
     }
 
     #[test]
     fn test_empty_scroll_keys() {
         let state = state(&[]);
-        let mut view = ui::View::Work;
+
         let mut interaction = interaction::Interaction::default();
         for initial_offset in [0, u16::MAX] {
             let mut scroll = initial_offset;
@@ -2149,12 +1742,11 @@ mod tests {
                 navigate(
                     KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL),
                     &state,
-                    &mut view,
                     &mut scroll,
                     &mut interaction,
                 );
                 assert_eq!(scroll, initial_offset);
-                assert_eq!(view, ui::View::Work);
+
                 assert!(interaction.review_requested.is_none());
                 assert!(interaction.removal_requested.is_none());
             }
@@ -2164,7 +1756,7 @@ mod tests {
     #[test]
     fn test_modified_keys() {
         let state = state(&[("A", AgentStatus::WaitingForInput)]);
-        let mut view = ui::View::Work;
+
         let mut interaction = interaction::Interaction::default();
         interaction.sync(state.items());
         let mut scroll = 10;
@@ -2176,7 +1768,7 @@ mod tests {
                 KeyModifiers::CONTROL | KeyModifiers::ALT,
             ),
         ] {
-            navigate(key, &state, &mut view, &mut scroll, &mut interaction);
+            navigate(key, &state, &mut scroll, &mut interaction);
             assert_eq!(scroll, 10);
             assert!(interaction.message.is_none());
             assert!(interaction.draft.is_none());
@@ -2187,169 +1779,12 @@ mod tests {
             navigate(
                 KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL),
                 &state,
-                &mut view,
                 &mut scroll,
                 &mut interaction,
             );
             assert_eq!(scroll, 10);
             assert_eq!(interaction.draft.as_ref().unwrap().text, "yes");
         }
-    }
-
-    #[test]
-    fn test_removed_alias() {
-        let state = state(&[("A", AgentStatus::Running), ("B", AgentStatus::Complete)]);
-        for mut view in [ui::View::Work, ui::View::Sessions] {
-            let previous_view = view;
-            let mut interaction = interaction::Interaction {
-                selected_id: Some("B".into()),
-                detail_item_id: Some("B".into()),
-                work_list_offset: 4,
-                message: Some("existing notice".into()),
-                reveal_selection: false,
-                reveal_pane: false,
-                ..Default::default()
-            };
-            let mut scroll = 12;
-            assert!(
-                navigate(
-                    KeyCode::Char('a'),
-                    &state,
-                    &mut view,
-                    &mut scroll,
-                    &mut interaction
-                )
-                .is_none()
-            );
-            assert_eq!(view, previous_view);
-            assert_eq!(scroll, 12);
-            assert_eq!(interaction.selected_id.as_deref(), Some("B"));
-            assert_eq!(interaction.detail_item_id.as_deref(), Some("B"));
-            assert_eq!(interaction.work_list_offset, 4);
-            assert_eq!(interaction.message.as_deref(), Some("existing notice"));
-            assert!(!interaction.reveal_selection);
-            assert!(!interaction.reveal_pane);
-            for (key, expected) in [('w', ui::View::Work), ('s', ui::View::Sessions)] {
-                navigate(
-                    KeyCode::Char(key),
-                    &state,
-                    &mut view,
-                    &mut scroll,
-                    &mut interaction,
-                );
-                assert_eq!(view, expected);
-                assert_eq!(scroll, 0);
-                assert_eq!(interaction.selected_id.as_deref(), Some("B"));
-            }
-        }
-    }
-
-    #[test]
-    fn test_work_actions() {
-        let state = state(&[
-            ("hidden", AgentStatus::Running),
-            ("B", AgentStatus::Complete),
-            ("C", AgentStatus::WaitingForInput),
-        ]);
-        let mut view = ui::View::default();
-        assert_eq!(view, ui::View::Work);
-        let mut interaction = interaction::Interaction::default();
-        interaction.sync(state.items());
-        let mut scroll = 0;
-        assert_eq!(interaction.selected_id.as_deref(), Some("hidden"));
-        navigate(
-            KeyCode::Tab,
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert_eq!(interaction.selected_id.as_deref(), Some("B"));
-        navigate(
-            KeyCode::Char('j'),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert_eq!(
-            navigate(
-                KeyCode::Enter,
-                &state,
-                &mut view,
-                &mut scroll,
-                &mut interaction
-            )
-            .as_deref(),
-            Some("C")
-        );
-        navigate(
-            KeyCode::Char('r'),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert_eq!(interaction.draft.as_ref().unwrap().item_id, "C");
-        interaction.draft = None;
-        navigate(
-            KeyCode::Tab,
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert_eq!(interaction.selected_id.as_deref(), Some("B"));
-        navigate(
-            KeyCode::Char('d'),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert_eq!(interaction.review_requested.as_deref(), Some("B"));
-        navigate(
-            KeyCode::Char('w'),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert_eq!(view, ui::View::Work);
-        navigate(
-            KeyCode::Home,
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert_eq!(interaction.selected_id.as_deref(), Some("B"));
-        navigate(
-            KeyCode::Char('a'),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert_eq!(interaction.selected_id.as_deref(), Some("B"));
-        navigate(
-            KeyCode::Char('s'),
-            &state,
-            &mut view,
-            &mut scroll,
-            &mut interaction,
-        );
-        assert_eq!(view, ui::View::Sessions);
-        assert!(
-            navigate(
-                KeyCode::Enter,
-                &state,
-                &mut view,
-                &mut scroll,
-                &mut interaction
-            )
-            .is_none()
-        );
     }
 
     #[test]
@@ -2392,38 +1827,16 @@ mod tests {
             Err("state unreadable".into()),
         );
         for state in [empty, failed] {
-            let mut view = ui::View::Work;
             let mut scroll = 0;
             let mut interaction = interaction::Interaction {
                 selected_id: Some("hidden".into()),
                 ..Default::default()
             };
-            assert!(
-                navigate(
-                    KeyCode::Enter,
-                    &state,
-                    &mut view,
-                    &mut scroll,
-                    &mut interaction
-                )
-                .is_none()
-            );
-            navigate(
-                KeyCode::Char('r'),
-                &state,
-                &mut view,
-                &mut scroll,
-                &mut interaction,
-            );
+            assert!(navigate(KeyCode::Enter, &state, &mut scroll, &mut interaction).is_none());
+            navigate(KeyCode::Char('r'), &state, &mut scroll, &mut interaction);
             assert!(interaction.draft.is_none());
             assert!(state.attention.is_empty());
-            navigate(
-                KeyCode::Char('d'),
-                &state,
-                &mut view,
-                &mut scroll,
-                &mut interaction,
-            );
+            navigate(KeyCode::Char('d'), &state, &mut scroll, &mut interaction);
             assert!(interaction.review_requested.is_none());
         }
     }

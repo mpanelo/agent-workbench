@@ -12,27 +12,13 @@ use crate::AppState;
 use crate::interaction::{ApprovalPhase, Interaction};
 use crate::theme;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum View {
-    #[default]
-    Work,
-    Sessions,
-}
-
-impl View {
-    pub fn is_item_view(self) -> bool {
-        self != Self::Sessions
-    }
-}
-
 pub(crate) fn render_work(
     frame: &mut Frame<'_>,
     state: &AppState,
     scroll: &mut u16,
     interaction: &mut Interaction,
 ) {
-    // This shared viewport offset is only used to reveal selections in SESSIONS.
-    // WORK details always render from the top.
+    // Details always render from the top; list navigation reveals the selected row.
     *scroll = 0;
     theme::paint(frame);
     let [header, body, notice, composer, footer] = Layout::vertical([
@@ -48,9 +34,15 @@ pub(crate) fn render_work(
         Some(Err(_)) => "unavailable".into(),
         Some(Ok(_)) => state.attention.len().to_string(),
     };
-    let title = format!("AGENT WORKBENCH — WORK • attention: {count}");
+    let sessions = if interaction.show_sessions {
+        "shown"
+    } else {
+        "hidden"
+    };
+    let title = format!("AGENT WORKBENCH · WORK • attention: {count} • sessions: {sessions}");
     frame.render_widget(Paragraph::new(title).style(theme::header()), header);
     let mut lines = Vec::new();
+    let rows = state.rows(interaction.show_sessions);
     match &state.work_items {
         None => lines.push(Line::from("Loading work items…")),
         Some(Err(error)) => {
@@ -62,22 +54,34 @@ pub(crate) fn render_work(
                 "The state file has not been changed. Retrying automatically.",
             ));
         }
-        Some(Ok(items)) if items.is_empty() => {
+        Some(Ok(_)) if rows.is_empty() => {
             lines.push(Line::from("No work items registered."));
-            lines.push(Line::from(
-                "Press s, select a pane with j/k, then r to register it here.",
-            ));
+            lines.push(Line::from(if interaction.show_sessions {
+                "No unregistered agent sessions found."
+            } else {
+                "Press Tab to show sessions and register an agent."
+            }));
+            if interaction.show_sessions {
+                match &state.discovery {
+                    None => lines.push(Line::from("Discovering sessions…")),
+                    Some(Err(error)) => lines.push(Line::styled(
+                        format!(
+                            "Discovery unavailable: {}. Retrying automatically.",
+                            visible(error)
+                        ),
+                        theme::error(),
+                    )),
+                    _ => {}
+                }
+            }
         }
         Some(Ok(items)) => {
             // Each item always occupies exactly one row. Prompts, errors and
             // metadata live in a separate viewport and cannot move list rows.
-            let list_height = items.len().min(usize::from((body.height / 3).max(1))) as u16;
+            let list_height = rows.len().min(usize::from((body.height / 3).max(1))) as u16;
             let [list, details] =
                 Layout::vertical([Constraint::Length(list_height), Constraint::Min(0)]).areas(body);
-            if let Some(index) = items
-                .iter()
-                .position(|state| interaction.selected_id.as_ref() == Some(&state.item.id))
-            {
+            if let Some(index) = rows.iter().position(|row| row.selected(interaction)) {
                 if index < interaction.work_list_offset {
                     interaction.work_list_offset = index;
                 }
@@ -88,15 +92,15 @@ pub(crate) fn render_work(
             }
             interaction.work_list_offset = interaction
                 .work_list_offset
-                .min(items.len().saturating_sub(usize::from(list.height)));
-            // Measure all registered IDs, not only visible rows, so scrolling
+                .min(rows.len().saturating_sub(usize::from(list.height)));
+            // Measure all row labels, not only visible rows, so navigation
             // and status changes cannot shift the columns. Reserve space for
             // selection, gaps, attention and a feedback glyph. Reserve the same
             // space even without feedback so approval never shifts the columns.
             let available = usize::from(list.width).saturating_sub(10);
-            let id_width = items
+            let id_width = rows
                 .iter()
-                .map(|entry| Line::from(visible(&entry.item.id)).width())
+                .map(|row| Line::from(visible(row.label())).width())
                 .max()
                 .unwrap_or(0)
                 .min(
@@ -105,42 +109,57 @@ pub(crate) fn render_work(
                         .max(available / 3),
                 );
             let status_width = WORK_STATUS_WIDTH.min(available.saturating_sub(id_width));
-            for entry in items
+            for row in rows
                 .iter()
                 .skip(interaction.work_list_offset)
                 .take(usize::from(list.height))
             {
-                let item = &entry.item;
-                let selected = interaction.selected_id.as_ref() == Some(&item.id);
+                let selected = row.selected(interaction);
                 let mut heading = vec![Span::styled(
                     format!(
                         "{}{}  ",
                         if selected { "> " } else { "  " },
-                        work_cell(&visible(&item.id), id_width),
+                        work_cell(&visible(row.label()), id_width),
                     ),
                     theme::accent(),
                 )];
-                let (label, style) = entry.resource_issue().map_or_else(
-                    || (entry.status.to_string(), theme::status(entry.status)),
-                    |issue| (issue.to_string(), theme::resource_issue(issue)),
-                );
-                heading.push(Span::styled(work_cell(&label, status_width), style));
-                let attention = state
-                    .attention
-                    .iter()
-                    .any(|attention| attention.item.id == item.id);
-                heading.push(Span::styled(
-                    if attention { "  !" } else { "   " },
-                    theme::notice(),
-                ));
-                if let Some(feedback) = interaction
-                    .approval_feedback
-                    .as_ref()
-                    .filter(|feedback| feedback.item_id == item.id)
-                {
+                if let crate::listing::Row::Work(entry) = row {
+                    let item = &entry.item;
+                    let (label, style) = entry.resource_issue().map_or_else(
+                        || (entry.status.to_string(), theme::status(entry.status)),
+                        |issue| (issue.to_string(), theme::resource_issue(issue)),
+                    );
+                    heading.push(Span::styled(work_cell(&label, status_width), style));
+                    let attention = state
+                        .attention
+                        .iter()
+                        .any(|attention| attention.item.id == item.id);
                     heading.push(Span::styled(
-                        format!("  {}", feedback.label()),
-                        approval_feedback_style(feedback.phase),
+                        if attention { "  !" } else { "   " },
+                        theme::notice(),
+                    ));
+                    if let Some(feedback) = interaction
+                        .approval_feedback
+                        .as_ref()
+                        .filter(|feedback| feedback.item_id == item.id)
+                    {
+                        heading.push(Span::styled(
+                            format!("  {}", feedback.label()),
+                            approval_feedback_style(feedback.phase),
+                        ));
+                    }
+                } else if let crate::listing::Row::Session { session, pane, .. } = row {
+                    heading.push(Span::styled(
+                        work_cell("UNREGISTERED", status_width),
+                        theme::muted(),
+                    ));
+                    heading.push(Span::styled(
+                        format!(
+                            "      {} ·  {}",
+                            visible(session),
+                            visible(pane.current_command.as_deref().unwrap_or("unavailable"))
+                        ),
+                        theme::muted(),
                     ));
                 }
                 lines.push(selectable_line(Line::from(heading), selected, list.width));
@@ -163,6 +182,8 @@ pub(crate) fn render_work(
             }
             if let Some(state) = selected {
                 title.push(Span::raw(format!(" — {}", visible(&state.item.id))));
+            } else if let Some(row) = rows.iter().find(|row| row.selected(interaction)) {
+                title.push(Span::raw(format!(" · {}", visible(row.label()))));
             }
             let block = Block::bordered()
                 .title(Line::from(title))
@@ -172,7 +193,11 @@ pub(crate) fn render_work(
                     theme::border(true)
                 })
                 .title_style(theme::accent());
-            let (mut detail_area, mut preview_area) = crate::preview::areas(details, None);
+            let (mut detail_area, mut preview_area) = if selected.is_some() {
+                crate::preview::areas(details, None)
+            } else {
+                (details, None)
+            };
             let inner = block.inner(detail_area);
             let mut prompt_start = None;
             if let Some(Err(error)) = &state.discovery {
@@ -261,6 +286,30 @@ pub(crate) fn render_work(
                         lines.push(Line::from(format!("  {}", visible(&state.status_detail))));
                     }
                 }
+            } else if let Some(crate::listing::Row::Session {
+                session,
+                window,
+                pane,
+            }) = rows.iter().find(|row| row.selected(interaction))
+            {
+                lines.push(Line::styled("Unregistered agent session", theme::muted()));
+                lines.push(metadata(" Session", session, theme::accent()));
+                lines.push(metadata(" Window", window_label(window), theme::accent()));
+                let command = pane.current_command.as_deref().unwrap_or("unavailable");
+                lines.push(metadata(" Agent", command, theme::text()));
+                let title = session_pane_title(&pane.title, command, session, window);
+                if !title.is_empty() {
+                    lines.push(metadata("Title", title, theme::text()));
+                }
+                lines.push(metadata(
+                    "Directory",
+                    &pane
+                        .working_directory
+                        .as_ref()
+                        .map(|path| display_path(path))
+                        .unwrap_or_else(|| "unavailable".into()),
+                    theme::path(),
+                ));
             } else {
                 lines.push(Line::from("Select a work item to inspect its details."));
             }
@@ -273,7 +322,7 @@ pub(crate) fn render_work(
                 lines.truncate(start);
                 push_prompt(&mut lines, prompt, block.inner(details).width);
                 (detail_area, preview_area) = crate::preview::stacked(details, lines.len());
-            } else {
+            } else if selected.is_some() {
                 (detail_area, preview_area) = crate::preview::areas(details, Some(lines.len()));
             }
             let inner = block.inner(detail_area);
@@ -341,7 +390,7 @@ pub(crate) fn render_work(
             }
             .hints()
         } else {
-            crate::help::Context::Work.hints()
+            interaction.help_context().hints()
         }),
         footer,
     );
@@ -431,155 +480,6 @@ fn push_prompt(lines: &mut Vec<Line<'static>>, text: &str, width: u16) {
     }
 }
 
-pub(crate) fn render_sessions(
-    frame: &mut Frame<'_>,
-    state: &AppState,
-    scroll: &mut u16,
-    interaction: &mut Interaction,
-) {
-    theme::paint(frame);
-    let [header, body, notice, footer] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(0),
-        Constraint::Length(if interaction.message.is_some() { 2 } else { 0 }),
-        Constraint::Length(1),
-    ])
-    .areas(frame.area());
-    frame.render_widget(
-        Paragraph::new(if interaction.show_all_panes {
-            "AGENT WORKBENCH — SESSIONS (all panes)"
-        } else {
-            "AGENT WORKBENCH — SESSIONS (agents only)"
-        })
-        .style(theme::header()),
-        header,
-    );
-    let mut lines = Vec::<Line<'static>>::new();
-    let mut selected_row = None;
-    match &state.discovery {
-        None => lines.push(Line::from("Discovering sessions…")),
-        Some(Err(error)) => {
-            *scroll = 0;
-            frame.render_widget(
-                Paragraph::new(format!(
-                    "Discovery unavailable\n\n{}\n\nRetrying automatically every 2 seconds…",
-                    visible(error)
-                ))
-                .style(theme::error())
-                .wrap(Wrap { trim: false }),
-                body,
-            );
-        }
-        Some(Ok(snapshot)) if snapshot.sessions.is_empty() => {
-            lines.push(Line::from("No tmux sessions found."));
-        }
-        Some(Ok(snapshot)) => {
-            let snapshot = interaction.sessions_snapshot(snapshot);
-            if snapshot.sessions.is_empty() {
-                lines.push(Line::from("No recognized coding-agent panes found."));
-                lines.push(Line::from(
-                    "Press f to show all panes, including wrappers and unknown agents.",
-                ));
-            }
-            for session in &snapshot.sessions {
-                lines.push(Line::styled(
-                    format!(" {}", visible(&session.name)),
-                    theme::accent().fg(theme::MAUVE),
-                ));
-                for window in &session.windows {
-                    lines.push(Line::styled(
-                        format!("   {}", visible(window_label(&window.name))),
-                        theme::accent().fg(theme::BLUE),
-                    ));
-                    for pane in &window.panes {
-                        let selected =
-                            interaction.selected_pane.as_deref() == Some(pane.id.as_str());
-                        if selected && selected_row.is_none() {
-                            selected_row = Some(lines.len());
-                        }
-                        let registered = state
-                            .items()
-                            .iter()
-                            .filter(|item| item.item.pane_id == pane.id)
-                            .map(|item| visible(&item.item.id))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        let command = pane.current_command.as_deref().unwrap_or("unavailable");
-                        let mut row = vec![
-                            Span::raw(if selected { "  > " } else { "    " }),
-                            Span::styled(" ", ratatui::style::Style::default().fg(theme::TEAL)),
-                            Span::raw(visible(command)),
-                        ];
-                        if !registered.is_empty() {
-                            row.push(Span::styled(
-                                format!("  [Registered: {registered}]"),
-                                ratatui::style::Style::default().fg(theme::GREEN),
-                            ));
-                        }
-                        let title =
-                            session_pane_title(&pane.title, command, &session.name, &window.name);
-                        if !title.is_empty() {
-                            row.push(Span::raw(format!(" — {}", visible(title))));
-                        }
-                        lines.push(selectable_line(Line::from(row), selected, body.width));
-                        lines.push(Line::styled(
-                            format!(
-                                "      {}",
-                                pane.working_directory
-                                    .as_ref()
-                                    .map(|path| visible(&display_path(path)))
-                                    .unwrap_or_else(|| "Directory unavailable".to_owned())
-                            ),
-                            theme::path(),
-                        ));
-                    }
-                }
-                lines.push(Line::from(""));
-            }
-        }
-    }
-    if !matches!(state.discovery, Some(Err(_))) {
-        let max_scroll = lines
-            .len()
-            .saturating_sub(body.height as usize)
-            .min(u16::MAX as usize) as u16;
-        if interaction.reveal_pane {
-            if let Some(row) = selected_row {
-                let row = row.min(u16::MAX as usize) as u16;
-                if row < *scroll {
-                    *scroll = row;
-                }
-                let end = row.saturating_add(1);
-                if end >= scroll.saturating_add(body.height) {
-                    *scroll = end.saturating_sub(body.height.saturating_sub(1));
-                    // With a one-row viewport, keep the selectable row visible.
-                    *scroll = (*scroll).min(row);
-                }
-            }
-            interaction.reveal_pane = false;
-        }
-        *scroll = (*scroll).min(max_scroll);
-        frame.render_widget(Paragraph::new(lines).scroll((*scroll, 0)), body);
-    }
-    if let Some(message) = &interaction.message {
-        frame.render_widget(
-            Paragraph::new(visible(message))
-                .style(theme::notice())
-                .wrap(Wrap { trim: false }),
-            notice,
-        );
-    }
-    frame.render_widget(
-        theme::footer(
-            crate::help::Context::Sessions {
-                all: interaction.show_all_panes,
-            }
-            .hints(),
-        ),
-        footer,
-    );
-}
-
 /// Replace a pre-existing branch glyph with our window marker, display-only.
 fn window_label(name: &str) -> &str {
     name.trim().strip_prefix(" ").unwrap_or(name.trim()).trim()
@@ -638,7 +538,6 @@ pub(crate) fn visible(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::DiscoveryState;
     use ratatui::{Terminal, backend::TestBackend};
     use workbench_core::{
         AgentStatus, Pane, PaneAvailability, Session, Snapshot, Window, WorkItem, WorkItemKind,
@@ -646,34 +545,6 @@ mod tests {
     };
 
     use super::*;
-
-    fn screen(state: DiscoveryState, width: u16, height: u16, scroll: &mut u16) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let state = AppState {
-            discovery: state,
-            ..AppState::default()
-        };
-        let mut interaction = Interaction {
-            show_all_panes: true,
-            ..Interaction::default()
-        };
-        if let Some(snapshot) = state.snapshot() {
-            interaction.sync_panes(snapshot);
-        }
-        // This helper tests explicit scroll clamping, not selection navigation.
-        interaction.reveal_pane = false;
-        terminal
-            .draw(|frame| render_sessions(frame, &state, scroll, &mut interaction))
-            .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .content()
-            .chunks(width as usize)
-            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
 
     fn snapshot() -> Snapshot {
         Snapshot {
@@ -694,226 +565,6 @@ mod tests {
                 }],
             }],
         }
-    }
-
-    #[test]
-    fn test_agent_filter() {
-        let mut snapshot = snapshot();
-        let mut shell = snapshot.sessions[0].windows[0].panes[0].clone();
-        shell.id = "%15".into();
-        shell.title = "Shell named codex".into();
-        shell.current_command = Some("fish".into());
-        let mut shell_window = snapshot.sessions[0].windows[0].clone();
-        shell_window.name = "hidden-shell-window".into();
-        shell_window.panes = vec![shell.clone()];
-        snapshot.sessions[0].windows.push(shell_window.clone());
-        snapshot.sessions.push(Session {
-            id: "$2".into(),
-            name: "hidden-shell-session".into(),
-            windows: vec![shell_window],
-        });
-        snapshot.sessions[0].windows[0].panes.push(shell);
-        let mut state = AppState::from_refresh(Ok(snapshot.clone()), Ok(vec![]));
-        let mut interaction = Interaction::default();
-        let draw = |state: &AppState, interaction: &mut Interaction| {
-            if let Some(snapshot) = state.snapshot() {
-                interaction.sync_panes(snapshot);
-            }
-            let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
-            terminal
-                .draw(|frame| render_sessions(frame, state, &mut 0, interaction))
-                .unwrap();
-            terminal
-                .backend()
-                .buffer()
-                .content()
-                .iter()
-                .map(|cell| cell.symbol())
-                .collect::<String>()
-        };
-        let text = draw(&state, &mut interaction);
-        assert!(text.contains("SESSIONS (agents only)"));
-        assert!(text.contains("codex — Agent"));
-        assert!(text.contains("All panes: f"));
-        for hidden in ["fish", "hidden-shell-window", "hidden-shell-session"] {
-            assert!(!text.contains(hidden), "{text}");
-        }
-        interaction.show_all_panes = true;
-        let text = draw(&state, &mut interaction);
-        for expected in [
-            "SESSIONS (all panes)",
-            "fish — Shell named codex",
-            "hidden-shell-window",
-            "hidden-shell-session",
-            "Agents only: f",
-        ] {
-            assert!(text.contains(expected), "{text}");
-        }
-        interaction.show_all_panes = false;
-        snapshot.sessions[0].windows[0].panes.remove(0);
-        state.discovery = Some(Ok(snapshot));
-        let text = draw(&state, &mut interaction);
-        assert!(text.contains("No recognized coding-agent panes found."));
-        assert!(text.contains("Press f to show all panes"));
-        assert!(interaction.selected_pane.is_none());
-    }
-
-    #[test]
-    fn test_pane_titles() {
-        let window = " nvim-v0-12";
-        for (title, expected) in [
-            (
-                "Assess Neovim migration effort | nvim-v0-12",
-                "Assess Neovim migration effort",
-            ),
-            (
-                "Assess Neovim migration effort |  nvim-v0-12",
-                "Assess Neovim migration effort",
-            ),
-            (
-                "Assess Neovim migration effort | dotfiles | nvim-v0-12",
-                "Assess Neovim migration effort",
-            ),
-            (" nvim-v0-12 ", ""),
-            (" nvim-v0-12", ""),
-            ("dotfiles", ""),
-            ("codex", ""),
-            ("", ""),
-            (
-                "Discuss nvim-v0-12 migration",
-                "Discuss nvim-v0-12 migration",
-            ),
-            ("Task | nvim-v0-12-extra", "Task | nvim-v0-12-extra"),
-            ("Task | unrelated", "Task | unrelated"),
-            (
-                "Task | nvim-v0-12 | unrelated",
-                "Task | nvim-v0-12 | unrelated",
-            ),
-        ] {
-            assert_eq!(
-                session_pane_title(title, "codex", "dotfiles", window),
-                expected,
-                "{title}"
-            );
-        }
-        let mut snapshot = snapshot();
-        snapshot.sessions[0].name = "dotfiles".into();
-        snapshot.sessions[0].windows[0].name = window.into();
-        snapshot.sessions[0].windows[0].panes[0].title =
-            "Assess Neovim migration effort | nvim-v0-12".into();
-        let original = snapshot.clone();
-        let text = screen(Some(Ok(snapshot.clone())), 100, 12, &mut 0);
-        assert_eq!(text.matches("nvim-v0-12").count(), 1, "{text}");
-        assert!(text.contains(" dotfiles"));
-        assert!(text.contains(" nvim-v0-12"));
-        assert!(text.contains(">  codex — Assess Neovim migration effort"));
-        assert!(!text.contains(""));
-        assert_eq!(snapshot, original);
-    }
-
-    #[test]
-    fn test_duplicate_panes() {
-        let mut snapshot = snapshot();
-        let pane = &mut snapshot.sessions[0].windows[0].panes[0];
-        pane.title = "codex".into();
-        let mut second = pane.clone();
-        second.id = "%15".into();
-        second.title.clear();
-        snapshot.sessions[0].windows[0].panes.push(second);
-        let text = screen(Some(Ok(snapshot.clone())), 80, 16, &mut 0);
-        assert_eq!(text.matches("codex").count(), 2);
-        assert!(!text.contains("codex —"));
-        assert!(!text.contains("%14"));
-        assert!(!text.contains("%15"));
-
-        let state = AppState::from_refresh(Ok(snapshot.clone()), Ok(vec![]));
-        let mut interaction = Interaction::default();
-        interaction.sync_panes(&snapshot);
-        interaction.move_pane_selection(&snapshot, 1);
-        assert_eq!(interaction.selected_pane.as_deref(), Some("%15"));
-        for (width, height) in [(40, 4), (1, 1), (0, 1)] {
-            interaction.reveal_pane = true;
-            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-            terminal
-                .draw(|frame| render_sessions(frame, &state, &mut 0, &mut interaction))
-                .unwrap();
-            if width == 40 {
-                let text: String = terminal
-                    .backend()
-                    .buffer()
-                    .content()
-                    .iter()
-                    .map(|cell| cell.symbol())
-                    .collect();
-                assert!(text.contains(">  codex"), "{text}");
-            }
-            assert_eq!(interaction.selected_pane.as_deref(), Some("%15"));
-        }
-    }
-
-    #[test]
-    fn test_pane_selection() {
-        let mut snapshot = snapshot();
-        let mut later = snapshot.sessions[0].windows[0].panes[0].clone();
-        later.id = "%15".into();
-        later.title = "Later agent".into();
-        for index in 0..8 {
-            let mut middle = later.clone();
-            middle.id = format!("%{}", index + 100);
-            middle.title = format!("Middle agent {index}");
-            snapshot.sessions[0].windows[0].panes.push(middle);
-        }
-        snapshot.sessions[0].windows[0].panes.push(later);
-        let state = AppState::from_refresh(
-            Ok(snapshot),
-            Ok(vec![registered(
-                PaneAvailability::Present,
-                WorkItemKind::Implementation,
-            )]),
-        );
-        let mut interaction = Interaction {
-            selected_pane: Some("%15".into()),
-            reveal_pane: true,
-            ..Interaction::default()
-        };
-        let mut scroll = 0;
-        let mut terminal = Terminal::new(TestBackend::new(100, 8)).unwrap();
-        terminal
-            .draw(|frame| render_sessions(frame, &state, &mut scroll, &mut interaction))
-            .unwrap();
-        let text: String = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-        assert!(text.contains(">  codex — Later agent"));
-        assert!(text.contains("/work/my repo"));
-        assert_eq!(interaction.selected_pane.as_deref(), Some("%15"));
-        assert!(scroll > 0);
-        let mut terminal = Terminal::new(TestBackend::new(100, 32)).unwrap();
-        interaction.selected_pane = Some("%14".into());
-        interaction.reveal_pane = true;
-        terminal
-            .draw(|frame| render_sessions(frame, &state, &mut scroll, &mut interaction))
-            .unwrap();
-        let text: String = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-        assert!(text.contains("Registered: ABC-123"));
-        assert!(!text.contains("w: work items"));
-        theme::assert_text_style(
-            terminal.backend().buffer(),
-            "[Registered: ABC-123]",
-            theme::GREEN,
-            theme::SURFACE,
-        );
-        assert!(text.contains("Register: <enter>/r"));
     }
 
     fn work_screen(state: &AppState, width: u16, height: u16, scroll: &mut u16) -> String {
@@ -996,14 +647,9 @@ mod tests {
             "Respond: r | Edit: e | Clean Up: c | Acknowledge finished turn: x | … | Help: ?"
         );
         assert_eq!(text.lines().nth(8).unwrap().trim_end(), "");
-        let text = screen(None, 80, 10, &mut 0);
-        assert_eq!(
-            text.lines().last().unwrap().trim_end(),
-            "Agents only: f | Work: w | Quit: q | Register: <enter>/r | Help: ?"
-        );
         let text = work_screen(&state, 200, 10, &mut 0);
         let footer = text.lines().last().unwrap();
-        assert!(footer.contains("Sessions: s"));
+        assert!(footer.contains("Show sessions: Tab"));
         assert!(!footer.contains("Work: w"));
         assert!(!footer.contains("Views:"));
     }
@@ -1115,7 +761,6 @@ mod tests {
         let mut interaction = Interaction::default();
         interaction.sync(&state.attention);
         let mut scroll = 0;
-        let mut view = View::Work;
         terminal
             .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
             .unwrap();
@@ -1127,7 +772,6 @@ mod tests {
                     crossterm::event::KeyModifiers::CONTROL,
                 ),
                 &state,
-                &mut view,
                 &mut scroll,
                 &mut interaction,
             );
@@ -1151,7 +795,7 @@ mod tests {
         let state = AppState::from_refresh(Ok(snapshot()), Ok(states));
         let mut interaction = Interaction::default();
         interaction.sync(state.items());
-        interaction.move_selection(state.items(), 1);
+        state.move_row(&mut interaction, 1);
         interaction.begin_reply(state.items());
         interaction.draft.as_mut().unwrap().insert("y").unwrap();
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
@@ -1480,7 +1124,7 @@ mod tests {
         interaction.sync(state.items());
         interaction.begin_approval(&request);
         interaction.finish_approval(&request, Ok(()));
-        interaction.move_selection(state.items(), 1);
+        state.move_row(&mut interaction, 1);
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal
             .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
@@ -1499,7 +1143,7 @@ mod tests {
         if let Some(Ok(items)) = &mut state.work_items {
             items[0].status = AgentStatus::Running;
         }
-        interaction.move_selection(state.items(), -1);
+        state.move_row(&mut interaction, -1);
         for (width, height) in [(40, 14), (24, 8), (1, 1), (0, 1)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal
@@ -1566,34 +1210,6 @@ mod tests {
                 .content()
                 .iter()
                 .all(|cell| matches!(cell.bg, ratatui::style::Color::Rgb(_, _, _)))
-        );
-    }
-
-    #[test]
-    fn test_session_colors() {
-        let state = AppState::from_refresh(Ok(snapshot()), Ok(vec![]));
-        let mut interaction = Interaction::default();
-        interaction.sync_panes(&snapshot());
-        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
-        terminal
-            .draw(|frame| render_sessions(frame, &state, &mut 0, &mut interaction))
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        theme::assert_text_style(buffer, "AGENT WORKBENCH", theme::LAVENDER, theme::MANTLE);
-        theme::assert_text_style(buffer, "codex", theme::TEXT, theme::SURFACE);
-        theme::assert_text_style(buffer, " main", theme::MAUVE, theme::BASE);
-        theme::assert_text_style(buffer, " auth", theme::BLUE, theme::BASE);
-        theme::assert_text_style(buffer, "", theme::TEAL, theme::SURFACE);
-        theme::assert_text_style(buffer, "/work/my repo", theme::TEXT, theme::BASE);
-        let failed = AppState::from_refresh(Err("test discovery error".into()), Ok(vec![]));
-        terminal
-            .draw(|frame| render_sessions(frame, &failed, &mut 0, &mut interaction))
-            .unwrap();
-        theme::assert_text_style(
-            terminal.backend().buffer(),
-            "Discovery unavailable",
-            theme::RED,
-            theme::BASE,
         );
     }
 
@@ -1669,7 +1285,7 @@ mod tests {
         let state = AppState::from_refresh(Ok(snapshot()), Ok(states));
         let mut interaction = Interaction::default();
         interaction.sync(&state.attention);
-        interaction.move_selection(&state.attention, 2);
+        state.move_row(&mut interaction, 2);
         interaction.begin_reply(&state.attention);
         interaction
             .draft
@@ -1938,7 +1554,7 @@ mod tests {
         let mut scroll = 100;
         let text = work_screen(&state, 100, 10, &mut scroll);
         assert!(text.contains("No work items registered"));
-        assert!(text.contains("r to register"));
+        assert!(text.contains("Tab to show sessions"));
         assert_eq!(scroll, 0);
         work_screen(&state, 1, 1, &mut scroll);
     }
@@ -1957,7 +1573,7 @@ mod tests {
         };
         let mut interaction = Interaction::default();
         interaction.sync(state.items());
-        interaction.move_selection(state.items(), 2);
+        state.move_row(&mut interaction, 2);
         let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
         let mut scroll = 0;
         terminal
@@ -2257,7 +1873,7 @@ mod tests {
             .draw(|frame| render_work(frame, &updated, &mut scroll, &mut interaction))
             .unwrap();
         assert_eq!(scroll, 0);
-        interaction.move_selection(state.items(), -1);
+        state.move_row(&mut interaction, -1);
         terminal
             .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
             .unwrap();
@@ -2276,17 +1892,14 @@ mod tests {
             )]),
         );
         let now = std::time::Instant::now();
-        for view in [View::Work, View::Sessions] {
+        {
             for (width, height) in [(140, 30), (40, 12), (1, 1)] {
                 let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
                 let mut interaction = Interaction::default();
                 state.sync_selection(&mut interaction);
                 let mut draw = |interaction: &mut Interaction| {
                     terminal
-                        .draw(|frame| match view {
-                            View::Work => render_work(frame, &state, &mut 0, interaction),
-                            View::Sessions => render_sessions(frame, &state, &mut 0, interaction),
-                        })
+                        .draw(|frame| render_work(frame, &state, &mut 0, interaction))
                         .unwrap();
                     terminal.backend().buffer().clone()
                 };
@@ -2460,66 +2073,43 @@ mod tests {
         assert_eq!(interaction.draft.as_ref().unwrap().item_id, "ABC-123");
         assert!(terminal.backend().cursor_visible());
     }
-
     #[test]
-    fn test_session_context() {
-        let text = screen(Some(Ok(snapshot())), 100, 12, &mut 0);
-        for expected in [
-            "SESSIONS",
-            " main",
-            "   auth",
-            ">  codex — Agent",
-            "/work/my repo",
+    fn test_pane_titles() {
+        let window = " nvim-v0-12";
+        for (title, expected) in [
+            (
+                "Assess Neovim migration effort | nvim-v0-12",
+                "Assess Neovim migration effort",
+            ),
+            (
+                "Assess Neovim migration effort |  nvim-v0-12",
+                "Assess Neovim migration effort",
+            ),
+            (
+                "Assess Neovim migration effort | dotfiles | nvim-v0-12",
+                "Assess Neovim migration effort",
+            ),
+            (" nvim-v0-12 ", ""),
+            (" nvim-v0-12", ""),
+            ("dotfiles", ""),
+            ("codex", ""),
+            ("", ""),
+            (
+                "Discuss nvim-v0-12 migration",
+                "Discuss nvim-v0-12 migration",
+            ),
+            ("Task | nvim-v0-12-extra", "Task | nvim-v0-12-extra"),
+            ("Task | unrelated", "Task | unrelated"),
+            (
+                "Task | nvim-v0-12 | unrelated",
+                "Task | nvim-v0-12 | unrelated",
+            ),
         ] {
-            assert!(text.contains(expected), "missing {expected:?} in {text}");
+            assert_eq!(
+                session_pane_title(title, "codex", "dotfiles", window),
+                expected,
+                "{title}"
+            );
         }
-        for hidden in [
-            "$1", "@2", "%14", "pane 0", "2  auth", "command:", "title:", "cwd:",
-        ] {
-            assert!(!text.contains(hidden), "unexpected {hidden:?} in {text}");
-        }
-    }
-
-    #[test]
-    fn test_session_states() {
-        assert!(screen(None, 80, 10, &mut 0).contains("Discovering sessions"));
-        assert!(
-            screen(Some(Ok(Snapshot::default())), 80, 10, &mut 0)
-                .contains("No tmux sessions found")
-        );
-        let mut scroll = 20;
-        let text = screen(
-            Some(Err("tmux was not found. Install tmux on PATH.".into())),
-            80,
-            10,
-            &mut scroll,
-        );
-        assert!(text.contains("tmux was not found"));
-        assert!(text.contains("Retrying automatically"));
-        assert_eq!(scroll, 0);
-    }
-
-    #[test]
-    fn test_escaped_metadata() {
-        let mut snapshot = snapshot();
-        let pane = &mut snapshot.sessions[0].windows[0].panes[0];
-        pane.current_command = None;
-        pane.working_directory = None;
-        pane.title = "one\ntwo\tthree\x1b".into();
-        let text = screen(Some(Ok(snapshot)), 100, 12, &mut 0);
-        assert!(text.contains(">  unavailable"));
-        assert!(text.contains("Directory unavailable"));
-        assert!(text.contains("one\\ntwo\\tthree\\u{1b}"));
-    }
-
-    #[test]
-    fn test_session_resize() {
-        let mut scroll = u16::MAX;
-        let text = screen(Some(Ok(snapshot())), 100, 5, &mut scroll);
-        assert_eq!(scroll, 2);
-        assert!(text.contains("/work/my repo"));
-        screen(Some(Ok(Snapshot::default())), 10, 2, &mut scroll);
-        assert_eq!(scroll, 1);
-        screen(Some(Ok(snapshot())), 1, 1, &mut scroll);
     }
 }

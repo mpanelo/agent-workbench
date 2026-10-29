@@ -33,13 +33,17 @@ Workmux is optional unless you use workspace cleanup.
 
 1. Start your coding agents in tmux panes.
 2. Run `workbench` in a separate tmux window.
-3. Press `s` for SESSIONS, select an agent, and press `<enter>` to register it.
+3. Press `Tab` to show unregistered agent sessions, select one, and press
+   `<enter>` to register it.
 4. Confirm the Work ID, optional Short Description, and work type. Workspace and
    branch are detected automatically. Press `<enter>` to save.
-5. Press `w` to return to WORK.
+5. Press `Tab` to hide unregistered sessions when you want to focus on work.
 
-WORK keeps registered items in a stable order. `Tab` selects the next item needing
-attention. In SESSIONS, `f` switches between recognized agents and all panes.
+WORK keeps registered items in a stable order, with `!` marking attention.
+Unregistered sessions are hidden at startup. `Tab` shows them below registered
+work in the same list. Only recognized coding-agent panes appear, and registered
+panes are not repeated. Select an unregistered session to see its details;
+`<enter>` or `r` opens registration. Work actions apply only to registered items.
 
 The selected work item includes a read-only pane preview with live colors and
 recent output. It sits beside details on wide screens and below them when space
@@ -53,6 +57,7 @@ Long input requests take priority when space is limited.
 
 | Action in WORK | Key |
 | --- | --- |
+| Show/hide unregistered sessions | `Tab` |
 | Open agent pane | `<enter>` |
 | Respond to agent | `r` |
 | Review diff | `d` |
@@ -60,7 +65,7 @@ Long input requests take priority when space is limited.
 | Open cleanup options | `c` |
 | Acknowledge finished turn | `x` |
 
-Press `?` for contextual help and `q` to quit from the main views. Menu controls
+Press `?` for contextual help and `q` to quit from WORK. Menu controls
 are shown inline. Use tmux navigation to return after opening an agent pane.
 
 Replies are single-line messages. Supported Codex approvals offer approve-once,

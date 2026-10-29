@@ -37,7 +37,7 @@ impl fmt::Display for RegistrationError {
                 "Pane directory changed while registering; cancel and select the pane again.",
             ),
             Self::MissingDirectory => f.write_str(
-                "Pane directory is unavailable. SESSIONS registration requires detected Git metadata; use workbench register for manual registration.",
+                "Pane directory is unavailable. Session registration requires detected Git metadata; use workbench register for manual registration.",
             ),
             Self::GitMetadataUnavailable(error) => write!(
                 f,

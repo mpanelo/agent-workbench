@@ -401,9 +401,18 @@ mod tests {
     fn test_footer_resize() {
         use crate::help::Context;
         for context in [
-            Context::Work,
-            Context::Sessions { all: false },
-            Context::Sessions { all: true },
+            Context::Work {
+                sessions: false,
+                unregistered: false,
+            },
+            Context::Work {
+                sessions: true,
+                unregistered: true,
+            },
+            Context::Work {
+                sessions: true,
+                unregistered: false,
+            },
             Context::Review,
             Context::Reply,
             Context::Registration,

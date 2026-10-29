@@ -239,7 +239,7 @@ impl Engine {
                 " The worktree also has staged, unstaged, or untracked changes; resolve those before cleanup."
             };
             return Err(fail(format!(
-                "Registered branch {:?} differs from current Git branch {branch:?}. Nothing was removed. Use Unregister, then register the pane again from SESSIONS to refresh the saved branch.{dirt}",
+                "Registered branch {:?} differs from current Git branch {branch:?}. Nothing was removed. Use Unregister, then show sessions in WORK and register the pane again to refresh the saved branch.{dirt}",
                 expected.branch.as_deref().unwrap_or("(not recorded)")
             )));
         }
@@ -1263,7 +1263,7 @@ esac
                 .to_string();
             assert!(message.contains("Registered branch \"feature-typo\""));
             assert!(message.contains("current Git branch \"feature\""));
-            assert!(message.contains("SESSIONS"));
+            assert!(message.contains("show sessions in WORK"));
             assert_eq!(
                 message.contains("also has staged, unstaged, or untracked"),
                 dirty

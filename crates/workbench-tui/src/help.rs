@@ -7,12 +7,11 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::{theme, ui::View};
+use crate::theme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Context {
-    Work,
-    Sessions { all: bool },
+    Work { sessions: bool, unregistered: bool },
     Review,
     Reply,
     Response { changed: bool, can_reject: bool },
@@ -23,21 +22,13 @@ pub enum Context {
 }
 
 impl Context {
-    pub fn view(view: View, all: bool) -> Self {
-        match view {
-            View::Work => Self::Work,
-            View::Sessions => Self::Sessions { all },
-        }
-    }
-
     pub fn text_input(self) -> bool {
         matches!(self, Self::Reply | Self::Registration | Self::Edit)
     }
 
     pub fn title(self) -> &'static str {
         match self {
-            Self::Work => "WORK",
-            Self::Sessions { .. } => "SESSIONS",
+            Self::Work { .. } => "WORK",
             Self::Review => "REVIEW",
             Self::Reply => "REPLY",
             Self::Response { .. } => "RESPONSE",
@@ -52,15 +43,21 @@ impl Context {
     // remain supported without appearing in either list.
     pub fn hints(self) -> &'static str {
         match self {
-            Self::Work => {
-                "Respond: r | Edit: e | Clean Up: c | Acknowledge finished turn: x | Sessions: s | Quit: q | Open: <enter> | Review: d | Help: ?"
+            Self::Work {
+                sessions: false, ..
+            } => {
+                "Respond: r | Edit: e | Clean Up: c | Acknowledge finished turn: x | Show sessions: Tab | Quit: q | Open: <enter> | Review: d | Help: ?"
             }
-            Self::Sessions { all: false } => {
-                "All panes: f | Work: w | Quit: q | Register: <enter>/r | Help: ?"
+            Self::Work {
+                sessions: true,
+                unregistered: false,
+            } => {
+                "Respond: r | Edit: e | Clean Up: c | Acknowledge finished turn: x | Hide sessions: Tab | Quit: q | Open: <enter> | Review: d | Help: ?"
             }
-            Self::Sessions { all: true } => {
-                "Agents only: f | Work: w | Quit: q | Register: <enter>/r | Help: ?"
-            }
+            Self::Work {
+                sessions: true,
+                unregistered: true,
+            } => "Register: <enter>/r | Hide sessions: Tab | Quit: q | Help: ?",
             Self::Review => {
                 "Toggle mark: Space | Scroll: <c-d>/<c-u> | Reload: r | Full/since: c | Pending: Tab | Back: Esc | Quit: q | Help: ?"
             }
@@ -96,8 +93,7 @@ impl Context {
             .map(theme::shortcut_line)
             .collect();
         let extras: &[&str] = match self {
-            Self::Work => &["Next attention item: Tab", "Quit (alternatives): Esc/<c-c>"],
-            Self::Sessions { .. } => &["Quit (alternatives): Esc/<c-c>"],
+            Self::Work { .. } => &["Quit (alternatives): Esc/<c-c>"],
             Self::Review => &["Quit (alternative): <c-c>"],
             _ => &[],
         };
@@ -195,7 +191,7 @@ impl HelpUi {
         ])
         .areas(frame.area());
         frame.render_widget(
-            Paragraph::new(format!("KEYBINDINGS — {}", context.title())).style(theme::header()),
+            Paragraph::new(format!("KEYBINDINGS · {}", context.title())).style(theme::header()),
             header,
         );
         let lines = wrapped_lines(context.lines(), body.width);
@@ -256,17 +252,30 @@ mod tests {
     #[test]
     fn test_view_bindings() {
         for (context, required, excluded) in [
-            (Context::Work, "Clean Up: c", "Unregister: u"),
+            (
+                Context::Work {
+                    sessions: false,
+                    unregistered: false,
+                },
+                "Clean Up: c",
+                "Unregister: u",
+            ),
             (Context::Cleanup, "Choose: Tab", "Unregister entry: <enter>"),
             (
-                Context::Sessions { all: false },
-                "All panes: f",
-                "Agents only: f",
+                Context::Work {
+                    sessions: true,
+                    unregistered: true,
+                },
+                "Register: <enter>/r",
+                "Review: d",
             ),
             (
-                Context::Sessions { all: true },
-                "Agents only: f",
-                "All panes: f",
+                Context::Work {
+                    sessions: true,
+                    unregistered: false,
+                },
+                "Hide sessions: Tab",
+                "Register: <enter>/r",
             ),
             (Context::Review, "Back: Esc", "Unregister: u"),
             (Context::Reply, "Send: <enter>", "Save: <enter>"),
@@ -301,7 +310,7 @@ mod tests {
                 context: Some(context),
             };
             let text = screen(&mut help, 80, 40);
-            assert!(text.contains(&format!("KEYBINDINGS — {}", context.title())));
+            assert!(text.contains(&format!("KEYBINDINGS · {}", context.title())));
             assert!(text.contains(required), "{text}");
             assert!(!text.contains(excluded), "{text}");
             assert!(!text.contains("Home"));
@@ -310,14 +319,8 @@ mod tests {
             assert!(!text.contains("Work: a"));
             assert!(!text.contains("Views:"));
             assert!(!context.hints().contains("Views:"));
-            assert_eq!(
-                text.matches("Sessions: s").count(),
-                usize::from(context == Context::Work)
-            );
-            assert_eq!(
-                text.matches("Work: w").count(),
-                usize::from(matches!(context, Context::Sessions { .. }))
-            );
+            assert!(!text.contains("Sessions: s"));
+            assert!(!text.contains("Work: w"));
             for hidden in ["j/k", "↑", "↓", "←", "→", "(arrows)"] {
                 assert!(!text.contains(hidden), "unexpected {hidden}: {text}");
                 assert!(!context.hints().contains(hidden));
@@ -342,11 +345,6 @@ mod tests {
                     }
             );
         }
-        assert_eq!(Context::view(View::Work, false), Context::Work);
-        assert_eq!(
-            Context::view(View::Sessions, true),
-            Context::Sessions { all: true }
-        );
     }
 
     #[test]
@@ -364,14 +362,23 @@ mod tests {
             }
             // Cancellation belongs to the popup, not a hidden help screen.
             assert!(!help.event(&key(KeyCode::Esc), context));
-            assert!(help.event(&key(KeyCode::Char('?')), Context::Work));
+            assert!(help.event(
+                &key(KeyCode::Char('?')),
+                Context::Work {
+                    sessions: false,
+                    unregistered: false
+                }
+            ));
             assert!(help.is_open());
         }
     }
 
     #[test]
     fn test_modal_input() {
-        let context = Context::Work;
+        let context = Context::Work {
+            sessions: false,
+            unregistered: false,
+        };
         for close in [
             key(KeyCode::Esc),
             key(KeyCode::Char('q')),
@@ -437,8 +444,14 @@ mod tests {
             assert_eq!(draft.cursor, cursor);
         }
         for context in [
-            Context::Work,
-            Context::Sessions { all: false },
+            Context::Work {
+                sessions: false,
+                unregistered: false,
+            },
+            Context::Work {
+                sessions: true,
+                unregistered: true,
+            },
             Context::Review,
             Context::Cleanup,
         ] {
@@ -450,7 +463,13 @@ mod tests {
 
     #[test]
     fn test_static_help() {
-        for context in [Context::Work, Context::Review] {
+        for context in [
+            Context::Work {
+                sessions: false,
+                unregistered: false,
+            },
+            Context::Review,
+        ] {
             let mut help = HelpUi::default();
             help.event(&key(KeyCode::Char('?')), context);
             let baseline = screen(&mut help, 40, 8);
@@ -482,9 +501,18 @@ mod tests {
     #[test]
     fn test_scroll_bindings() {
         for context in [
-            Context::Work,
-            Context::Sessions { all: false },
-            Context::Sessions { all: true },
+            Context::Work {
+                sessions: false,
+                unregistered: false,
+            },
+            Context::Work {
+                sessions: true,
+                unregistered: true,
+            },
+            Context::Work {
+                sessions: true,
+                unregistered: false,
+            },
             Context::Reply,
             Context::Response {
                 changed: false,

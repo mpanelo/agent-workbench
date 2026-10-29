@@ -212,7 +212,6 @@ Primary views:
 
 ```text
 WORK
-SESSIONS
 REVIEW
 ```
 
@@ -221,6 +220,8 @@ Avoid putting business logic into widgets.
 WORK combines supervision and attention. Keep its compact list in registration
 order, with details in a separate viewport. Status/prompt changes must not move
 the selected item or its list row. Acknowledging attention keeps the item visible.
+Unregistered agent sessions share this list and are hidden by default. Showing
+them must not duplicate registered panes or enable work actions on session rows.
 
 Rendering code should receive state from the core and emit user intents/actions back to the core.
 

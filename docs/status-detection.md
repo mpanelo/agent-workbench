@@ -2,7 +2,7 @@
 
 This is the developer reference for current detection behavior. For user setup,
 compatibility, troubleshooting, and disabling hooks, see [Codex hooks](codex-hooks.md).
-Recognizing a coding-agent command in SESSIONS does not imply lifecycle support.
+Recognizing a coding-agent command in the session list does not imply lifecycle support.
 Status inference currently targets Codex; other agents can still be registered,
 opened, replied to, and reviewed.
 

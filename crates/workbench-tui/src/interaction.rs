@@ -2,8 +2,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use workbench_core::{
-    ActionError, ApprovalDecision, ApprovalError, ApprovalRequest, MAX_INPUT_BYTES, Snapshot,
-    WorkItemState,
+    ActionError, ApprovalDecision, ApprovalError, ApprovalRequest, MAX_INPUT_BYTES, WorkItemState,
 };
 
 /// Cursor measured in Unicode characters before the end. A default cursor is
@@ -182,7 +181,7 @@ impl ResponseBar {
         self.reject.is_some()
     }
 
-    fn observe(&mut self, items: &[WorkItemState]) {
+    pub(crate) fn observe(&mut self, items: &[WorkItemState]) {
         self.changed |= !items.iter().any(|item| self.approve.is_current(item));
     }
 }
@@ -199,8 +198,7 @@ pub(crate) struct Interaction {
     pub reveal_selection: bool,
     pub review_requested: Option<String>,
     pub selected_pane: Option<String>,
-    pub show_all_panes: bool,
-    pub reveal_pane: bool,
+    pub show_sessions: bool,
     pub registration_requested: Option<String>,
     pub maintenance_requested: Option<crate::maintenance::Request>,
     pub removal_requested: Option<workbench_core::WorkItem>,
@@ -212,6 +210,13 @@ pub(crate) struct Interaction {
 }
 
 impl Interaction {
+    pub fn help_context(&self) -> crate::help::Context {
+        crate::help::Context::Work {
+            sessions: self.show_sessions,
+            unregistered: self.selected_pane.is_some(),
+        }
+    }
+
     pub fn tick_message(&mut self, now: Instant) -> bool {
         if self
             .message
@@ -397,44 +402,6 @@ impl Interaction {
         self.reveal_selection = true;
     }
 
-    pub fn sync_panes(&mut self, snapshot: &Snapshot) {
-        let visible = self.sessions_snapshot(snapshot);
-        let ids = pane_ids(&visible);
-        if self
-            .selected_pane
-            .as_deref()
-            .is_some_and(|id| ids.contains(&id))
-        {
-            return;
-        }
-        self.selected_pane = ids.first().map(|id| (*id).to_owned());
-        self.reveal_pane = true;
-    }
-
-    pub fn move_pane_selection(&mut self, snapshot: &Snapshot, delta: isize) {
-        self.sync_panes(snapshot);
-        let visible = self.sessions_snapshot(snapshot);
-        let ids = pane_ids(&visible);
-        if ids.is_empty() {
-            return;
-        }
-        let position = ids
-            .iter()
-            .position(|id| Some(*id) == self.selected_pane.as_deref())
-            .unwrap_or(0);
-        self.selected_pane =
-            Some(ids[position.saturating_add_signed(delta).min(ids.len() - 1)].to_owned());
-        self.reveal_pane = true;
-    }
-
-    pub fn sessions_snapshot(&self, snapshot: &Snapshot) -> Snapshot {
-        if self.show_all_panes {
-            snapshot.clone()
-        } else {
-            snapshot.coding_agent_panes()
-        }
-    }
-
     pub fn sync(&mut self, items: &[WorkItemState]) {
         if let Some(bar) = &mut self.response_bar {
             bar.observe(items);
@@ -451,6 +418,9 @@ impl Interaction {
     }
 
     pub fn selected<'a>(&self, items: &'a [WorkItemState]) -> Option<&'a WorkItemState> {
+        if self.selected_pane.is_some() {
+            return None;
+        }
         let id = self.selected_id.as_ref()?;
         items.iter().find(|state| state.item.id == *id)
     }
@@ -469,24 +439,6 @@ impl Interaction {
         self.reveal_selection = true;
     }
 
-    pub fn next_attention(&mut self, items: &[WorkItemState]) {
-        let start = items
-            .iter()
-            .position(|state| self.selected_id.as_ref() == Some(&state.item.id))
-            .map_or(0, |index| index + 1);
-        let next = (0..items.len())
-            .map(|offset| (start + offset) % items.len())
-            .find(|index| items[*index].needs_attention());
-        if let Some(index) = next {
-            self.selected_id = Some(items[index].item.id.clone());
-            self.reveal_selection = true;
-        } else {
-            self.message = Some(
-                "No items are currently known to need attention. UNKNOWN is inconclusive.".into(),
-            );
-        }
-    }
-
     pub fn begin_reply(&mut self, items: &[WorkItemState]) {
         if self.sending {
             return;
@@ -502,21 +454,6 @@ impl Interaction {
             self.message = None;
         }
     }
-}
-
-fn pane_ids(snapshot: &Snapshot) -> Vec<&str> {
-    let mut ids = Vec::new();
-    for pane in snapshot
-        .sessions
-        .iter()
-        .flat_map(|session| &session.windows)
-        .flat_map(|window| &window.panes)
-    {
-        if !ids.contains(&pane.id.as_str()) {
-            ids.push(pane.id.as_str());
-        }
-    }
-    ids
 }
 
 #[cfg(test)]
@@ -600,46 +537,6 @@ mod tests {
 
         interaction.finish_focus("ABC-123", Ok(()));
         assert!(interaction.message.is_none());
-    }
-
-    #[test]
-    fn test_pane_selection() {
-        use workbench_core::{Pane, Session, Window};
-        let mut snapshot = Snapshot {
-            sessions: vec![Session {
-                id: "$1".into(),
-                name: "main".into(),
-                windows: vec![Window {
-                    id: "@1".into(),
-                    index: 0,
-                    name: "task".into(),
-                    panes: ["%1", "%2", "%3"]
-                        .into_iter()
-                        .map(|id| Pane {
-                            id: id.into(),
-                            index: 0,
-                            title: "Agent".into(),
-                            current_command: Some("codex".into()),
-                            working_directory: None,
-                        })
-                        .collect(),
-                }],
-            }],
-        };
-        snapshot.sessions.push(snapshot.sessions[0].clone());
-        let mut interaction = Interaction::default();
-        interaction.sync_panes(&snapshot);
-        assert_eq!(interaction.selected_pane.as_deref(), Some("%1"));
-        interaction.move_pane_selection(&snapshot, 1);
-        assert_eq!(interaction.selected_pane.as_deref(), Some("%2"));
-        snapshot.sessions[0].windows[0].panes.reverse();
-        interaction.sync_panes(&snapshot);
-        assert_eq!(interaction.selected_pane.as_deref(), Some("%2"));
-        interaction.move_pane_selection(&snapshot, 20);
-        assert_eq!(interaction.selected_pane.as_deref(), Some("%1"));
-        interaction.sync_panes(&Snapshot::default());
-        assert!(interaction.selected_pane.is_none());
-        interaction.move_pane_selection(&Snapshot::default(), 1);
     }
 
     fn items(ids: &[&str]) -> Vec<WorkItemState> {
@@ -917,31 +814,6 @@ mod tests {
         interaction.move_selection(&items(&["A", "B"]), 1);
         interaction.sync(&items(&["B"]));
         assert_eq!(interaction.draft.as_ref().unwrap().item_id, "A");
-    }
-
-    #[test]
-    fn test_unknown_status() {
-        let mut interaction = Interaction::default();
-        interaction.sync(&items(&["A", "B"]));
-        interaction.next_attention(&items(&["A", "B"]));
-        assert_eq!(interaction.selected_id.as_deref(), Some("A"));
-        assert!(interaction.message.unwrap().contains("UNKNOWN"));
-        Interaction::default().next_attention(&[]);
-    }
-
-    #[test]
-    fn test_next_attention() {
-        let mut states = items(&["A", "B", "C", "D", "E"]);
-        states[0].status = AgentStatus::Running;
-        states[1].status = AgentStatus::WaitingForInput;
-        states[2].status = AgentStatus::Idle;
-        states[3].status = AgentStatus::Complete;
-        let mut interaction = Interaction::default();
-        interaction.sync(&states);
-        for id in ["B", "D", "B"] {
-            interaction.next_attention(&states);
-            assert_eq!(interaction.selected_id.as_deref(), Some(id));
-        }
     }
 
     #[test]

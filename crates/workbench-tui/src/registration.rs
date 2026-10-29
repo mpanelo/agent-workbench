@@ -202,7 +202,7 @@ impl RegistrationUi {
             } else if self.saving {
                 "Saving… | Please wait"
             } else if self.draft.is_none() {
-                "Sessions: Esc"
+                "Back: Esc"
             } else {
                 crate::help::Context::Registration.hints()
             }),

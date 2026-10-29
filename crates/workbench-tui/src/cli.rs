@@ -25,11 +25,12 @@ opens the reply editor, and Esc cancels. Changed requests require reopening
 the bar; other prompts open the reply editor directly.
 In REVIEW, Space saves file marks; r reloads while restoring unchanged marks.
 Marks persist across restarts; changed captured diffs require re-review.
-In SESSIONS, j/k or arrows select a pane; <enter> or r opens registration with
+In WORK, Tab shows/hides unregistered coding-agent sessions, hidden at startup.
+Use j/k or arrows to select a row. On an unregistered session, <enter> or r opens registration with
 read-only detected workspace/branch. Only ID, Short Description, and Type are
 editable. <enter> confirms; Tab changes fields; Esc cancels. Missing Git metadata
-blocks SESSIONS registration; workbench register remains available manually.
-SESSIONS defaults to recognized agent commands; f toggles all panes.
+blocks session registration; workbench register remains available manually.
+Registered panes appear only once. Work actions require a registered row.
 In WORK, e edits Work ID and Short Description together; Tab changes fields.
 In WORK, c opens Clean Up Options. Inside it, u unregisters directly without
 another confirmation, keeping pane, files, branch, worktree and review history.

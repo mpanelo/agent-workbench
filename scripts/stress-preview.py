@@ -456,16 +456,16 @@ class Fixture:
                     self.fail("background producer stopped advancing")
 
     def detach(self):
-        self.keys("s")
+        self.keys("?")
         self.in_work = False
         self.pending.clear()
         self.pump(0.6)
         if self.observers():
-            self.fail("observer leaked after leaving WORK")
+            self.fail("observer leaked while help was open")
 
     def resume(self):
         self.expected_starts += 1
-        self.keys("w")
+        self.keys("\x1b")
         self.in_work = True
         self.changed_at = time.monotonic()
         self.pump(0.5)
@@ -584,7 +584,7 @@ class Fixture:
         rows = self.stats([self.server_pid, self.client.pid])
         server_cpu = rows[self.server_pid][1] - self.server_start
         display_cpu = rows[self.client.pid][1] - self.client_start
-        self.keys("q")
+        self.keys("?q")
         deadline = time.monotonic() + 5
         while (
             self.tmux("display-message", "-p", "-t", self.workbench, "#{pane_dead}")

@@ -52,7 +52,7 @@ The checks are fixed before a run:
 
 - No polling invocations, unexpected live reconnections, or missing observer
   during normal load.
-- No stable duplicate observers, leaked observers after leaving WORK, unexpected
+- No stable duplicate observers, leaked observers while help is open, unexpected
   agent input, or unintended focus or agent-pane dimension changes.
 - Busy background producers must keep advancing while delivery is paused.
 - Marker p95 at most 350 ms; an outstanding marker must appear within 1500 ms.

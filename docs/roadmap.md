@@ -8,7 +8,7 @@ in the [README](../README.md), not tracked here as completed backlog entries.
 
 ### Relink a missing agent pane
 
-Allow an explicit replacement-pane choice from SESSIONS for an existing
+Allow an explicit replacement-pane choice from unregistered sessions for an existing
 registration. Preserve its Work ID, description, workspace, and saved review
 history instead of unregistering and registering again. Revalidate the captured
 registration and replacement pane before saving. Never infer a replacement from
