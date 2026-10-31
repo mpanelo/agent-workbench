@@ -45,13 +45,6 @@ cleanup-owner support are outside this first slice.
 
 ## Deferred to v2
 
-### Attention age
-
-Show how long an input request has waited or how recently an agent turn finished,
-without reordering work items or changing selection. Define which events set or
-reset the timestamp and distinguish first observation from verified event time.
-Decide restart behavior, privacy, and retention before implementation.
-
 ### Claude lifecycle-status support
 
 Investigate reliable activity, input-request, and turn-completion signals with
@@ -103,7 +96,3 @@ needs separate lifecycle/layout investigation and approval of its controls.
   target confirmation, dirty-file and unmerged-commit safeguards, and delegation
   to the workspace's owning tool. A finished agent turn is not permission to
   delete its workspace.
-- Durable acknowledgements: require reliable completion identity and explicit
-  restart semantics before retaining dismissals across Workbench runs. Native
-  identity is available with validated Codex hooks, but terminal-only detection
-  remains heuristic. Cross-restart dismissal is not implemented.

@@ -5,7 +5,6 @@ use std::path::PathBuf;
 mod actions;
 mod agent_state;
 mod approvals;
-mod attention;
 mod cleanup;
 mod codex_signals;
 mod git;
@@ -21,7 +20,6 @@ mod work_items;
 
 pub use actions::{ActionError, MAX_INPUT_BYTES, validate_agent_input};
 pub use approvals::{ApprovalDecision, ApprovalError, ApprovalRequest};
-pub use attention::{AttentionError, AttentionTracker, CompletionAcknowledgement, attention_items};
 pub use cleanup::{CleanupDetails, CleanupError, CleanupPreview};
 pub use git::{ChangeKind, ChangedFile, GitError, WorkItemDiff};
 pub use model::{Pane, Session, Snapshot, Window};
@@ -137,8 +135,7 @@ impl Engine {
                         PaneAvailability::Unavailable => "Tmux discovery is unavailable.",
                     }
                     .into(),
-                    attention_prompt: None,
-                    completion_fingerprint: None,
+                    input_prompt: None,
                 }
             })
             .collect())

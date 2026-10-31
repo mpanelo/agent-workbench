@@ -67,7 +67,7 @@ impl ApprovalRequest {
             return Err(ApprovalError::Unsupported);
         }
         let prompt = state
-            .attention_prompt
+            .input_prompt
             .as_deref()
             .ok_or(ApprovalError::Unsupported)?;
         choice_key(prompt, decision).ok_or(ApprovalError::Unsupported)?;
@@ -92,7 +92,7 @@ impl ApprovalRequest {
         state.item == self.item
             && state.status == AgentStatus::WaitingForInput
             && state.pane == PaneAvailability::Present
-            && state.attention_prompt.as_deref() == Some(self.prompt.as_str())
+            && state.input_prompt.as_deref() == Some(self.prompt.as_str())
     }
 }
 
@@ -219,19 +219,18 @@ mod tests {
             pane: PaneAvailability::Present,
             workspace_availability: crate::WorkspaceAvailability::Present,
             status_detail: "approval".into(),
-            attention_prompt: current_approval_prompt(&PaneObservation {
+            input_prompt: current_approval_prompt(&PaneObservation {
                 command: "codex".into(),
                 dead: false,
                 in_mode: false,
                 screen: SCREEN.into(),
             }),
-            completion_fingerprint: None,
         }
     }
 
     #[test]
     fn test_decision_keys() {
-        let prompt = state().attention_prompt.unwrap();
+        let prompt = state().input_prompt.unwrap();
         for prompt in [
             prompt.clone(),
             prompt.replace("› 1.", "1.").replace("  2.", "› 2."),
@@ -256,7 +255,7 @@ mod tests {
 
     #[test]
     fn test_unsafe_choices() {
-        let prompt = state().attention_prompt.unwrap();
+        let prompt = state().input_prompt.unwrap();
         for prompt in [
             prompt.replace("Yes, proceed (y)", "Yes, and don't ask again (y)"),
             prompt.replace("(p)", "(y)"),
@@ -287,7 +286,7 @@ mod tests {
 
     #[test]
     fn test_turn_permissions() {
-        let prompt = state().attention_prompt.unwrap();
+        let prompt = state().input_prompt.unwrap();
         let turn = prompt.replace("Yes, proceed", "Yes, grant these permissions for this turn");
         assert_eq!(choice_key(&turn, ApprovalDecision::ApproveOnce), Some("y"));
         let session = turn.replace("for this turn", "for this session");
@@ -318,7 +317,7 @@ mod tests {
         state.pane = PaneAvailability::Missing;
         assert!(ApprovalRequest::capture(&state, ApprovalDecision::ApproveOnce).is_err());
         state.pane = PaneAvailability::Present;
-        state.attention_prompt = Some("Please choose a plan".into());
+        state.input_prompt = Some("Please choose a plan".into());
         assert!(ApprovalRequest::capture(&state, ApprovalDecision::ApproveOnce).is_err());
     }
 
@@ -332,7 +331,7 @@ mod tests {
             match field {
                 0 => changed.item.pane_id = "%99".into(),
                 1 => changed.item.workspace = "/other".into(),
-                2 => changed.attention_prompt = Some("new request".into()),
+                2 => changed.input_prompt = Some("new request".into()),
                 3 => changed.status = AgentStatus::Running,
                 4 => changed.pane = PaneAvailability::Missing,
                 _ => changed.pane = PaneAvailability::Unavailable,

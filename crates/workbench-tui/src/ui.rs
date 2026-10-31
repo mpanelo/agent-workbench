@@ -29,17 +29,12 @@ pub(crate) fn render_work(
         Constraint::Length(1),
     ])
     .areas(frame.area());
-    let count = match &state.work_items {
-        None => "…".into(),
-        Some(Err(_)) => "unavailable".into(),
-        Some(Ok(_)) => state.attention.len().to_string(),
-    };
     let sessions = if interaction.show_sessions {
         "shown"
     } else {
         "hidden"
     };
-    let title = format!("AGENT WORKBENCH · WORK • attention: {count} • sessions: {sessions}");
+    let title = format!("AGENT WORKBENCH · WORK • sessions: {sessions}");
     frame.render_widget(Paragraph::new(title).style(theme::header()), header);
     let mut lines = Vec::new();
     let rows = state.rows(interaction.show_sessions);
@@ -95,9 +90,9 @@ pub(crate) fn render_work(
                 .min(rows.len().saturating_sub(usize::from(list.height)));
             // Measure all row labels, not only visible rows, so navigation
             // and status changes cannot shift the columns. Reserve space for
-            // selection, gaps, attention and a feedback glyph. Reserve the same
+            // selection, gaps and a feedback glyph. Reserve the same
             // space even without feedback so approval never shifts the columns.
-            let available = usize::from(list.width).saturating_sub(10);
+            let available = usize::from(list.width).saturating_sub(7);
             let id_width = rows
                 .iter()
                 .map(|row| Line::from(visible(row.label())).width())
@@ -130,14 +125,6 @@ pub(crate) fn render_work(
                         |issue| (issue.to_string(), theme::resource_issue(issue)),
                     );
                     heading.push(Span::styled(work_cell(&label, status_width), style));
-                    let attention = state
-                        .attention
-                        .iter()
-                        .any(|attention| attention.item.id == item.id);
-                    heading.push(Span::styled(
-                        if attention { "  !" } else { "   " },
-                        theme::notice(),
-                    ));
                     if let Some(feedback) = interaction
                         .approval_feedback
                         .as_ref()
@@ -155,7 +142,7 @@ pub(crate) fn render_work(
                     ));
                     heading.push(Span::styled(
                         format!(
-                            "      {} ·  {}",
+                            "   {} ·  {}",
                             visible(session),
                             visible(pane.current_command.as_deref().unwrap_or("unavailable"))
                         ),
@@ -279,7 +266,7 @@ pub(crate) fn render_work(
                 {
                     lines.push(Line::from(""));
                     lines.push(Line::styled("  Agent requests input:", theme::notice()));
-                    if let Some(prompt) = &state.attention_prompt {
+                    if let Some(prompt) = &state.input_prompt {
                         prompt_start = Some(lines.len());
                         push_prompt(&mut lines, prompt, inner.width);
                     } else {
@@ -316,7 +303,7 @@ pub(crate) fn render_work(
             if let Some(start) = prompt_start
                 && preview_area.is_some()
                 && lines.len() > usize::from(inner.height)
-                && let Some(prompt) = selected.and_then(|state| state.attention_prompt.as_deref())
+                && let Some(prompt) = selected.and_then(|state| state.input_prompt.as_deref())
             {
                 // A preview must not hide a request that fits at full width.
                 lines.truncate(start);
@@ -396,7 +383,7 @@ pub(crate) fn render_work(
     );
 }
 
-// Keep attention in a fixed column even when no current item has the longest
+// Keep status in a fixed column even when no current item has the longest
 // status label. This is presentation sizing, not an agent-state decision.
 const WORK_STATUS_WIDTH: usize = 17; // Agent and resource labels share the column.
 
@@ -599,8 +586,7 @@ mod tests {
             pane,
             workspace_availability: workbench_core::WorkspaceAvailability::Present,
             status_detail: "Unsupported foreground command.".into(),
-            attention_prompt: None,
-            completion_fingerprint: None,
+            input_prompt: None,
         }
     }
 
@@ -644,7 +630,7 @@ mod tests {
         let text = work_screen(&state, 80, 10, &mut 0);
         assert_eq!(
             text.lines().last().unwrap().trim_end(),
-            "Respond: r | Edit: e | Clean Up: c | Acknowledge finished turn: x | … | Help: ?"
+            "Respond: r | Edit: e | Clean Up: c | Show sessions: Tab | Quit: q | … | Help: ?"
         );
         assert_eq!(text.lines().nth(8).unwrap().trim_end(), "");
         let text = work_screen(&state, 200, 10, &mut 0);
@@ -655,10 +641,51 @@ mod tests {
     }
 
     #[test]
+    fn test_work_chrome() {
+        for status in [AgentStatus::WaitingForInput, AgentStatus::Complete] {
+            let mut item = registered(PaneAvailability::Present, WorkItemKind::Implementation);
+            item.item.id = "界🙂".into();
+            item.status = status;
+            item.input_prompt = (status == AgentStatus::WaitingForInput)
+                .then(|| "Which plan?\n1. Continue\n2. Stop".into());
+            let state = AppState::from_refresh(Ok(snapshot()), Ok(vec![item]));
+            let original = state.items().to_vec();
+            for (width, height) in [(120, 24), (40, 12), (1, 1)] {
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut interaction = Interaction::default();
+                state.sync_selection(&mut interaction);
+                terminal
+                    .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+                    .unwrap();
+                let text: String = terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect();
+                for removed in ["attention:", "Acknowledge", "finished turn: x", "!"] {
+                    assert!(!text.contains(removed), "{text}");
+                }
+                assert!(!text.chars().any(char::is_control));
+                if width == 120 {
+                    assert!(text.contains("WORK • sessions: hidden"));
+                    assert!(text.contains(&status.to_string()));
+                    if status == AgentStatus::WaitingForInput {
+                        assert!(text.contains("Which plan?"));
+                        assert!(text.contains("1. Continue"));
+                    }
+                }
+                assert_eq!(state.items(), original);
+            }
+        }
+    }
+
+    #[test]
     fn test_work_details() {
         let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         waiting.status = AgentStatus::WaitingForInput;
-        waiting.attention_prompt = Some("Would you like to run the following command?\n$ cargo test -- λ🙂\n\nOptions:\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n  3. No, and tell Codex what to do differently (esc)".into());
+        waiting.input_prompt = Some("Would you like to run the following command?\n$ cargo test -- λ🙂\n\nOptions:\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n  3. No, and tell Codex what to do differently (esc)".into());
         let mut complete = registered(PaneAvailability::Present, WorkItemKind::ExternalReview);
         complete.item.id = "PR #1842".into();
         complete.status = AgentStatus::Complete;
@@ -671,15 +698,15 @@ mod tests {
             AppState::from_refresh(Ok(snapshot()), Ok(vec![waiting, complete, hidden, running]));
         let text = work_screen(&state, 320, 30, &mut 0);
         for expected in [
-            "WORK • attention: 2",
-            "ABC-123         WAITING_FOR_INPUT  !",
+            "WORK • sessions: hidden",
+            "ABC-123         WAITING_FOR_INPUT",
             "Agent requests input:",
             "$ cargo test -- λ🙂",
             "Options:",
             "› 1. Yes, proceed (y)",
             "2. Yes, and don't ask again (p)",
             "3. No, and tell Codex what to do differently (esc)",
-            "PR #1842        TURN FINISHED      !",
+            "PR #1842        TURN FINISHED",
             "HIDDEN_UNKNOWN  UNKNOWN",
             "HIDDEN_RUNNING  RUNNING",
             "Details — ABC-123",
@@ -706,14 +733,8 @@ mod tests {
         assert!(!text.contains("Pane:"), "{text}");
         assert!(!text.contains("%14"), "{text}");
         assert!(!text.contains("(present)"), "{text}");
-        assert!(
-            state
-                .attention
-                .iter()
-                .all(|item| item.item.pane_id == "%14")
-        );
         let work = work_screen(&state, 120, 35, &mut 0);
-        assert!(work.contains("attention: 2"));
+        assert!(work.contains("sessions: hidden"));
         assert!(work.contains("Options:"));
         assert!(work.contains("› 1. Yes, proceed (y)"));
         let narrow = work_screen(&state, 80, 24, &mut 0);
@@ -726,7 +747,7 @@ mod tests {
     fn test_static_prompt() {
         let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         waiting.status = AgentStatus::WaitingForInput;
-        waiting.attention_prompt = Some(format!(
+        waiting.input_prompt = Some(format!(
             "Would you like to run the following command?\n\nEnvironment: local\n\nReason: {}Shared metadata requires write access. END-OF-REASON\n\n$ git -c commit.gpgsign=false commit -m \"Remove obsolete Packer installation\"\n\nOptions:\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n     Permission applies only to this command prefix.\n  3. No, and tell Codex what to do differently (esc)",
             "Preserve signing settings for future commits. λ🙂 ".repeat(20)
         ));
@@ -759,7 +780,7 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
         let mut interaction = Interaction::default();
-        interaction.sync(&state.attention);
+        interaction.sync(state.items());
         let mut scroll = 0;
         terminal
             .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
@@ -789,7 +810,7 @@ mod tests {
             let mut state = registered(PaneAvailability::Present, WorkItemKind::Implementation);
             state.item.id = id.into();
             state.status = AgentStatus::WaitingForInput;
-            state.attention_prompt = Some(format!("Question for {id}\n\nOptions:\n› 1. Yes, approve {id} (y)\n  2. No, reject {id} (esc)"));
+            state.input_prompt = Some(format!("Question for {id}\n\nOptions:\n› 1. Yes, approve {id} (y)\n  2. No, reject {id} (esc)"));
             state
         }).collect();
         let state = AppState::from_refresh(Ok(snapshot()), Ok(states));
@@ -835,7 +856,7 @@ mod tests {
     fn test_work_preview() {
         let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         waiting.status = AgentStatus::WaitingForInput;
-        waiting.attention_prompt =
+        waiting.input_prompt =
             Some("Choose a test strategy?\n\nOptions:\n1. Unit tests\n2. Integration tests".into());
         let mut state = AppState::from_refresh(Ok(snapshot()), Ok(vec![waiting]));
         let mut interaction = Interaction::default();
@@ -974,7 +995,7 @@ mod tests {
     fn approval_fixture() -> (AppState, workbench_core::ApprovalRequest) {
         let mut item = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         item.status = AgentStatus::WaitingForInput;
-        item.attention_prompt = Some("Would you like to run the following command?\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)".into());
+        item.input_prompt = Some("Would you like to run the following command?\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)".into());
         let request = workbench_core::ApprovalRequest::capture(
             &item,
             workbench_core::ApprovalDecision::ApproveOnce,
@@ -1040,7 +1061,7 @@ mod tests {
         interaction.sync(state.items());
         interaction.begin_response(state.items());
         if let Some(Ok(items)) = &mut state.work_items {
-            items[0].attention_prompt = Some("A new question remains visible".into());
+            items[0].input_prompt = Some("A new question remains visible".into());
         }
         interaction.sync(state.items());
         let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
@@ -1091,14 +1112,13 @@ mod tests {
         theme::assert_text_style(confirmed, "✓ Approval sent", theme::GREEN, theme::SURFACE);
         assert_eq!(confirmed[(0, 3)].fg, theme::GREEN); // selected details border
         for y in [1, 2] {
-            // ID, actual status, and attention retain their exact cells.
-            for x in 0..31 {
+            // ID and status retain their exact cells while feedback changes.
+            for x in 0..28 {
                 assert_eq!(confirmed[(x, y)], baseline[(x, y)]);
             }
         }
         assert_eq!(interaction.selected_id.as_deref(), Some("ABC-123"));
         assert_eq!(state.items()[0].status, AgentStatus::WaitingForInput);
-        assert_eq!(state.attention.len(), 2);
         assert!(interaction.message.is_none());
         let after_send = std::time::Instant::now();
         assert!(
@@ -1178,15 +1198,15 @@ mod tests {
     fn test_status_colors() {
         let mut waiting = registered(PaneAvailability::Present, WorkItemKind::Implementation);
         waiting.status = AgentStatus::WaitingForInput;
-        waiting.attention_prompt = Some("Question\nReason: permission needed\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, cancel (esc)".into());
+        waiting.input_prompt = Some("Question\nReason: permission needed\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, cancel (esc)".into());
         let mut complete = waiting.clone();
         complete.item.id = "DONE".into();
         complete.item.kind = WorkItemKind::ExternalReview;
         complete.status = AgentStatus::Complete;
-        complete.attention_prompt = None;
+        complete.input_prompt = None;
         let state = AppState::from_refresh(Ok(snapshot()), Ok(vec![waiting, complete]));
         let mut interaction = Interaction::default();
-        interaction.sync(&state.attention);
+        interaction.sync(state.items());
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
         terminal
             .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
@@ -1227,7 +1247,7 @@ mod tests {
         );
         let text = work_screen(&unknown, 120, 15, &mut 0);
         for expected in [
-            "WORK • attention: 1",
+            "WORK • sessions: hidden",
             "Discovery unavailable",
             "ABC-123  UNAVAILABLE",
             "Agent pane unavailable",
@@ -1237,9 +1257,9 @@ mod tests {
         let error =
             AppState::from_refresh(Ok(snapshot()), Err("unsupported schema version".into()));
         let text = work_screen(&error, 120, 12, &mut 0);
-        assert!(text.contains("WORK • attention: unavailable"));
+        assert!(text.contains("WORK • sessions: hidden"));
         assert!(text.contains("unsupported schema version"));
-        assert!(!text.contains("No known items need attention"));
+        assert!(!text.contains("attention:"));
         let mut scroll = u16::MAX;
         work_screen(&error, 1, 1, &mut scroll);
     }
@@ -1277,16 +1297,16 @@ mod tests {
                 let mut state = registered(PaneAvailability::Present, WorkItemKind::Implementation);
                 state.item.id = id.into();
                 state.status = AgentStatus::WaitingForInput;
-                state.attention_prompt =
+                state.input_prompt =
                     Some("Would you like to run the following command?\n$ cargo test".into());
                 state
             })
             .collect();
         let state = AppState::from_refresh(Ok(snapshot()), Ok(states));
         let mut interaction = Interaction::default();
-        interaction.sync(&state.attention);
+        interaction.sync(state.items());
         state.move_row(&mut interaction, 2);
-        interaction.begin_reply(&state.attention);
+        interaction.begin_reply(state.items());
         interaction
             .draft
             .as_mut()
@@ -1335,7 +1355,6 @@ mod tests {
             let state = AppState {
                 discovery: None,
                 work_items: Some(Ok(vec![item])),
-                ..AppState::default()
             };
             let text = work_screen(&state, 100, 15, &mut 0);
             assert!(text.contains(&status.to_string()), "{text}");
@@ -1360,11 +1379,11 @@ mod tests {
             // Header + one content row + one compact shortcut row.
             let text = work_screen(&state, 80, 3, &mut 0);
             let rows: Vec<_> = text.lines().map(str::trim_end).collect();
-            assert_eq!(rows[1], "> ABC-123  TURN FINISHED      !");
+            assert_eq!(rows[1], "> ABC-123  TURN FINISHED");
             assert!(!rows[1].contains(label));
             assert_eq!(
                 rows[2],
-                "Respond: r | Edit: e | Clean Up: c | Acknowledge finished turn: x | … | Help: ?"
+                "Respond: r | Edit: e | Clean Up: c | Show sessions: Tab | Quit: q | … | Help: ?"
             );
             assert_eq!(state.items(), std::slice::from_ref(&original));
             assert_eq!(state.items()[0].item.kind.to_string(), full_name);
@@ -1392,7 +1411,6 @@ mod tests {
                 let state = AppState {
                     discovery: Some(Ok(snapshot())),
                     work_items: Some(Ok(vec![registered(pane, kind)])),
-                    ..AppState::default()
                 };
                 let text = work_screen(&state, 120, 15, &mut 0);
                 for expected in [
@@ -1464,13 +1482,12 @@ mod tests {
                 let mut item = registered(pane, WorkItemKind::Implementation);
                 item.workspace_availability = workspace;
                 item.status = status;
-                item.attention_prompt = (status == AgentStatus::WaitingForInput
+                item.input_prompt = (status == AgentStatus::WaitingForInput
                     && pane == PaneAvailability::Present)
                     .then(|| {
                         "Please choose how to proceed.\nOptions:\n1. Keep working\n2. Stop".into()
                     });
                 let state = AppState::from_refresh(Ok(snapshot()), Ok(vec![item.clone()]));
-                assert_eq!(state.attention, [item.clone()]);
                 let mut interaction = Interaction {
                     selected_id: Some(item.item.id.clone()),
                     ..Interaction::default()
@@ -1490,7 +1507,7 @@ mod tests {
                     rows[1].starts_with(&format!("> ABC-123  {label}")),
                     "{text}"
                 );
-                assert_eq!(rows[1].find('!'), Some(30));
+                assert!(!rows[1].contains('!'));
                 assert!(!rows[1].contains("Build"));
                 theme::assert_text_style(
                     buffer,
@@ -1528,7 +1545,6 @@ mod tests {
                 PaneAvailability::Unavailable,
                 WorkItemKind::Implementation,
             )])),
-            ..AppState::default()
         };
         let text = work_screen(&state, 120, 15, &mut 0);
         assert!(text.contains("Discovery unavailable"));
@@ -1659,13 +1675,12 @@ mod tests {
         ] {
             if let Some(Ok(items)) = &mut state.work_items {
                 items[0].status = AgentStatus::WaitingForInput;
-                items[0].attention_prompt = Some("UNSELECTED PROMPT".repeat(500));
+                items[0].input_prompt = Some("UNSELECTED PROMPT".repeat(500));
                 items[5].status = status;
                 items[5].pane = pane;
                 items[5].workspace_availability = workspace;
-                items[5].attention_prompt = Some("SELECTED PROMPT\n".repeat(200));
+                items[5].input_prompt = Some("SELECTED PROMPT\n".repeat(200));
             }
-            state.refresh_attention(&mut interaction.attention_tracker);
             state.sync_selection(&mut interaction);
             terminal
                 .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
@@ -1725,7 +1740,7 @@ mod tests {
                 row.iter().position(|cell| cell.symbol() == &status[..1]),
                 Some(13)
             ); // prefix + longest ID + gap
-            assert_eq!(row.iter().position(|cell| cell.symbol() == "!"), Some(32));
+            assert!(!row.iter().any(|cell| cell.symbol() == "!"));
             let text: String = row.iter().map(|cell| cell.symbol()).collect();
             assert!(!text.contains("Build"));
             assert!(!text.contains("Review"));
@@ -1809,7 +1824,7 @@ mod tests {
             assert_eq!(*status_column.get_or_insert(column), column);
             let text: String = row.iter().map(|cell| cell.symbol()).collect();
             assert!(text.contains("WAITING_FOR_INPUT"));
-            assert!(text.contains('!'));
+            assert!(!text.contains('!'));
             if id == long_id {
                 assert!(text.contains('…'));
             }
@@ -1831,7 +1846,7 @@ mod tests {
                 let mut item = registered(PaneAvailability::Present, WorkItemKind::Implementation);
                 item.item.id = id.into();
                 item.status = AgentStatus::WaitingForInput;
-                item.attention_prompt = Some(format!("PROMPT FOR {id}\n").repeat(200));
+                item.input_prompt = Some(format!("PROMPT FOR {id}\n").repeat(200));
                 item
             })
             .collect();
@@ -1863,7 +1878,7 @@ mod tests {
         let mut updated = state.clone();
         if let Some(Ok(items)) = &mut updated.work_items {
             items[1]
-                .attention_prompt
+                .input_prompt
                 .as_mut()
                 .unwrap()
                 .push_str("NEW OPTION\n");
@@ -1928,49 +1943,6 @@ mod tests {
                 assert_eq!(interaction.selected_id.as_deref(), Some("ABC-123"));
             }
         }
-    }
-
-    #[test]
-    fn test_acknowledged_row() {
-        let mut item = registered(PaneAvailability::Present, WorkItemKind::Implementation);
-        item.status = AgentStatus::Complete;
-        item.completion_fingerprint = Some(42);
-        let mut state = AppState::from_refresh(Ok(snapshot()), Ok(vec![item]));
-        let mut interaction = Interaction::default();
-        state.refresh_attention(&mut interaction.attention_tracker);
-        state.sync_selection(&mut interaction);
-        let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
-        terminal
-            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
-            .unwrap();
-        let row = |terminal: &Terminal<TestBackend>| -> String {
-            terminal
-                .backend()
-                .buffer()
-                .content()
-                .chunks(80)
-                .nth(1)
-                .unwrap()
-                .iter()
-                .map(|cell| cell.symbol())
-                .collect()
-        };
-        assert!(row(&terminal).contains("TURN FINISHED      !"));
-        interaction.acknowledgement_requested = Some(
-            interaction
-                .attention_tracker
-                .capture(&state.items()[0])
-                .unwrap(),
-        );
-        state.apply_acknowledgement(&mut interaction);
-        terminal
-            .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
-            .unwrap();
-        assert!(row(&terminal).starts_with("> ABC-123  TURN FINISHED"));
-        assert!(!row(&terminal).contains('!'));
-        assert_eq!(interaction.selected_id.as_deref(), Some("ABC-123"));
-        assert_eq!(state.items().len(), 1);
-        assert!(state.attention.is_empty());
     }
 
     #[test]

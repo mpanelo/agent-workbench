@@ -14,11 +14,7 @@ Usage:
   workbench codex-notify JSON [--state-file PATH]  # completion callback
   workbench --help
 
-The TUI defaults to WORK; w returns there, s shows sessions.
-WORK keeps a stable list with separate selected-item details. ! marks attention.
-In WORK, x acknowledges the selected TURN FINISHED observation for this
-Workbench run. New activity/input or changed completion evidence requeues it.
-Acknowledgement does not finish work, mark code reviewed, or dismiss input requests.
+The TUI opens WORK, a stable list with separate selected-item details.
 In WORK, r responds: recognized approvals replace the help bar with choices.
 In that response bar, y approves once, n rejects and opens a reply, <enter>
 opens the reply editor, and Esc cancels. Changed requests require reopening
@@ -44,7 +40,7 @@ j/k or arrows select; <enter> opens the pane in WORK; replies are single-line.
 ? shows the current view's keybindings, except in Clean Up Options where controls
 are shown inline and the bottom help bar is hidden.
 In text fields, ? remains literal text.
-<enter> submits a reply and Esc cancels. Tab selects the next unacknowledged attention item.
+<enter> submits a reply and Esc cancels.
 While composing a reply, <c-u> clears the draft.
 d opens local diff review; j/k select files, Space toggles reviewed, Esc returns.
 Review defaults to HEAD (staged, unstaged, and untracked changes). --diff-base REV
@@ -235,6 +231,20 @@ fn optional_string(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_help() {
+        for removed in [
+            "attention",
+            "acknowledg",
+            "In WORK, x",
+            "w returns there",
+            "s shows sessions",
+        ] {
+            assert!(!HELP.contains(removed));
+        }
+        assert!(HELP.contains("Tab shows/hides unregistered coding-agent sessions"));
+    }
 
     fn args(text: &[&str]) -> Vec<OsString> {
         text.iter().map(OsString::from).collect()

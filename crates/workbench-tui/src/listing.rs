@@ -187,10 +187,9 @@ mod tests {
                 },
                 status: AgentStatus::Unknown,
                 status_detail: String::new(),
-                attention_prompt: None,
+                input_prompt: None,
                 pane: PaneAvailability::Present,
                 workspace_availability: WorkspaceAvailability::Present,
-                completion_fingerprint: None,
             })
             .collect();
         AppState::from_refresh(Ok(snapshot), Ok(items))
@@ -275,7 +274,6 @@ mod tests {
             assert!(interaction.removal_requested.is_none());
             assert!(interaction.review_requested.is_none());
             assert!(interaction.approval_requested.is_none());
-            assert!(interaction.acknowledgement_requested.is_none());
             assert!(interaction.draft.is_none());
         }
         for code in [KeyCode::Enter, KeyCode::Char('r')] {
@@ -287,7 +285,7 @@ mod tests {
         }
         let hints = interaction.help_context().hints();
         assert!(hints.contains("Register: <enter>/r"));
-        for hidden in ["Respond:", "Edit:", "Review:", "Clean Up:", "Acknowledge"] {
+        for hidden in ["Respond:", "Edit:", "Review:", "Clean Up:"] {
             assert!(!hints.contains(hidden));
         }
     }
@@ -336,7 +334,7 @@ mod tests {
         assert_eq!(state.rows(true).len(), 3);
         if let Some(Ok(items)) = &mut state.work_items {
             items[1].status = AgentStatus::WaitingForInput;
-            items[1].attention_prompt = Some("Question?".into());
+            items[1].input_prompt = Some("Question?".into());
         }
         state.sync_selection(&mut interaction);
         assert_eq!(interaction.selected_id.as_deref(), Some("A"));
@@ -378,11 +376,14 @@ mod tests {
         let state = fixture();
         let mut interaction = Interaction::default();
         state.sync_selection(&mut interaction);
-        for code in ['s', 'w', 'f'] {
+        for code in ['s', 'w', 'f', 'x'] {
             key(KeyCode::Char(code), &state, &mut interaction);
         }
         assert!(!interaction.show_sessions);
         assert_eq!(interaction.selected_id.as_deref(), Some("B"));
+        assert!(interaction.message.is_none());
+        assert!(interaction.draft.is_none());
+        assert!(interaction.registration_requested.is_none());
         for modifiers in [
             KeyModifiers::CONTROL,
             KeyModifiers::ALT,
@@ -475,7 +476,6 @@ mod tests {
             let state = AppState {
                 discovery,
                 work_items: Some(Ok(Vec::new())),
-                ..AppState::default()
             };
             let mut interaction = Interaction {
                 show_sessions: true,

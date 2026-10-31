@@ -67,7 +67,7 @@ runtime scope is recorded in the [setup guide](codex-hooks.md).
 | `SessionStart` | Bind a live root process to session, pane, and tmux server. |
 | `UserPromptSubmit` | Start the active root turn and supersede earlier evidence. |
 | `PreToolUse` for `request_user_input` | Retain a bounded question/options candidate; require a matching current dialog. |
-| `PermissionRequest` | Record an approval candidate; confirm visible dialog evidence before claiming human attention. |
+| `PermissionRequest` | Record an approval candidate; confirm visible dialog evidence before reporting an input request. |
 | `PostToolUse` | Resolve matching pending questions, not the whole turn. |
 | `Stop` | Clear pending candidates but stay running, since continuation can reuse the turn. |
 | `agent-turn-complete` notification | Finish only the current matching session/turn. |
@@ -93,7 +93,7 @@ The adapter does not support other clients' `request_user_input_async` requests
 or use transcripts as a hook interface. This hybrid adapter is not a complete
 app-server request-resolution stream.
 
-## Identity, lifetime, and acknowledgements
+## Identity and lifetime
 
 Inherited `TMUX`/`TMUX_PANE`, server identity, pane PID, Codex process ancestry,
 and process start time must agree. Workspace paths are never identity. Check
@@ -104,18 +104,6 @@ reject stale or superseded writes; reconciliation must not overwrite a newer cal
 Signals expire after 24 hours without a callback, not after a brief quiet period.
 A lost completion notification may leave running evidence until another resolving
 event, process exit, or expiry. Quiet generation is not proof of idle or failure.
-
-[Attention tracking](../crates/workbench-core/src/attention.rs) uses completion
-fingerprints and observation generations. With valid hooks, a fingerprint uses
-process/session/turn identity and remains stable across viewport changes. The
-terminal fallback hashes normalized visible completion evidence, excluding draft,
-footer, and banner changes; it cannot reliably distinguish identical fast turns.
-
-Acknowledgements last only for the current Workbench run. They survive view
-switches and pane focus, not restart. New observed activity/input or different
-completion evidence can require attention again; uncertainty alone does not
-clear an acknowledgement. Acknowledgement never hides resource warnings, dismisses
-input requests, removes work items, or changes code-review state.
 
 ## Storage and privacy
 
@@ -198,7 +186,7 @@ cargo test --release -p workbench-tui preview::tests::test_timing -- --ignored -
 Keep parser and transition tests independent of live agents. Cover layout
 anchors, malformed/quoted evidence, approvals and questions, interruption,
 continuation, quiet turns, stale ordering, process identity, storage bounds, and
-acknowledgements across viewport changes. Test that uncertainty does not invent
+status across viewport changes. Test that uncertainty does not invent
 completion or silently resolve a pending request.
 
 For an optional real-runtime smoke test, install the compatible Codex CLI listed

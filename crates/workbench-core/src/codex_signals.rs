@@ -1,8 +1,7 @@
 //! Opt-in, observational Codex callbacks. Never read transcripts or send input.
 use std::{
-    collections::{HashSet, hash_map::DefaultHasher},
+    collections::HashSet,
     fs::{self, OpenOptions},
-    hash::{Hash, Hasher},
     io::{self, Read, Write},
     path::{Path, PathBuf},
     process::Stdio,
@@ -585,15 +584,14 @@ impl Record {
         if terminal_waiting {
             return; // Preserve exact visible approval text for existing y/n safety.
         }
-        state.completion_fingerprint = None;
-        state.attention_prompt = None;
+        state.input_prompt = None;
         if let Some(pending) = &self.pending
             && pending.confirmed
         {
             state.status = AgentStatus::WaitingForInput;
             state.status_detail = "Codex input request remains pending.".into();
             if !pending.questions.is_empty() {
-                state.attention_prompt = Some(
+                state.input_prompt = Some(
                     pending
                         .questions
                         .iter()
@@ -630,22 +628,6 @@ impl Record {
         };
         state.status = status;
         state.status_detail = detail.into();
-        if self.phase == Phase::Complete {
-            let mut hasher = DefaultHasher::new();
-            self.binding.hash_identity(&mut hasher);
-            self.session.hash(&mut hasher);
-            self.turn.hash(&mut hasher);
-            state.completion_fingerprint = Some(hasher.finish());
-        }
-    }
-}
-
-impl Binding {
-    fn hash_identity(&self, hasher: &mut impl Hasher) {
-        self.socket.hash(hasher);
-        self.server.hash(hasher);
-        self.agent_pid.hash(hasher);
-        self.agent_start.hash(hasher);
     }
 }
 
@@ -677,7 +659,7 @@ fn question_dialog(screen: &str, questions: &[Question]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AttentionTracker, PaneAvailability, WorkItem, WorkItemKind};
+    use crate::{PaneAvailability, WorkItem, WorkItemKind};
 
     fn binding() -> Binding {
         Binding {
@@ -724,8 +706,7 @@ mod tests {
             pane: PaneAvailability::Present,
             workspace_availability: crate::WorkspaceAvailability::Present,
             status_detail: String::new(),
-            attention_prompt: None,
-            completion_fingerprint: None,
+            input_prompt: None,
         }
     }
     fn question_event() -> Event {
@@ -780,21 +761,15 @@ mod tests {
         }
     }
     #[test]
-    fn test_completion_identity() {
+    fn test_completion_status() {
         let mut records = vec![active()];
         transition(&mut records, binding(), event("Complete", "turn1"), 3);
         let mut observed = state(AgentStatus::Unknown);
         records[0].apply(&mut observed, None);
-        let fingerprint = observed.completion_fingerprint.unwrap();
-        let mut tracker = AttentionTracker::default();
-        tracker.observe(&[observed.clone()]);
-        let ack = tracker.capture(&observed).unwrap();
-        tracker.acknowledge(&ack).unwrap();
         for screen in ["old history", "draft\nsecond line", "resized UI"] {
             observed.status = AgentStatus::Unknown;
             records[0].apply(&mut observed, Some(screen));
-            assert_eq!(observed.completion_fingerprint, Some(fingerprint));
-            assert!(tracker.observe(&[observed.clone()]).is_empty());
+            assert_eq!(observed.status, AgentStatus::Complete);
         }
         transition(
             &mut records,
@@ -803,11 +778,10 @@ mod tests {
             4,
         );
         records[0].apply(&mut observed, None);
-        tracker.observe(&[observed.clone()]);
+        assert_eq!(observed.status, AgentStatus::Running);
         transition(&mut records, binding(), event("Complete", "turn2"), 5);
         records[0].apply(&mut observed, None);
-        assert_ne!(observed.completion_fingerprint, Some(fingerprint));
-        assert_eq!(tracker.observe(&[observed]).len(), 1);
+        assert_eq!(observed.status, AgentStatus::Complete);
     }
     #[test]
     fn test_late_events() {
@@ -860,7 +834,6 @@ mod tests {
             records[0].apply(&mut observed, None);
             assert_eq!(observed.status, AgentStatus::Idle);
             assert!(records[0].pending.is_none());
-            assert!(observed.completion_fingerprint.is_none());
         }
     }
     #[test]
@@ -888,10 +861,10 @@ mod tests {
             3,
         );
         let mut observed = state(AgentStatus::WaitingForInput);
-        observed.attention_prompt = Some("Exact captured approval".into());
+        observed.input_prompt = Some("Exact captured approval".into());
         records[0].apply(&mut observed, None);
         assert_eq!(
-            observed.attention_prompt.as_deref(),
+            observed.input_prompt.as_deref(),
             Some("Exact captured approval")
         );
         observed.status = AgentStatus::Unknown;
@@ -919,7 +892,7 @@ mod tests {
         assert_eq!(observed.status, AgentStatus::WaitingForInput);
         assert!(
             observed
-                .attention_prompt
+                .input_prompt
                 .unwrap()
                 .contains("Integration — Full flow")
         );
@@ -944,7 +917,7 @@ mod tests {
         transition(&mut records, binding(), question, 3);
         let mut observed = state(AgentStatus::Unknown);
         records[0].apply(&mut observed, Some("Question 1/2 (2 unanswered)\nWhich strategy?\n› 1. Unit tests\n2. Integration\ntab to add notes | enter to submit answer | esc to interrupt"));
-        let prompt = observed.attention_prompt.unwrap();
+        let prompt = observed.input_prompt.unwrap();
         assert!(prompt.contains("Which files?"));
         assert!(prompt.contains("Core — Engine changes"));
         let answered = parse(r#"{"session_id":"session","turn_id":"turn1","hook_event_name":"PostToolUse",

@@ -1,9 +1,6 @@
 //! Conservative, ephemeral terminal observations; no transcript discovery.
 
-use std::{
-    collections::{HashMap, HashSet, hash_map::DefaultHasher},
-    hash::{Hash, Hasher},
-};
+use std::collections::{HashMap, HashSet};
 
 use tokio::task::JoinSet;
 
@@ -83,17 +80,11 @@ impl Engine {
                         {
                             screens.insert(id.clone(), observation.screen.clone());
                         }
-                        (
-                            status,
-                            detail,
-                            approval_prompt(&observation, status),
-                            completion_fingerprint(&observation, status),
-                        )
+                        (status, detail, approval_prompt(&observation, status))
                     }
                     Err(_) => (
                         AgentStatus::Unknown,
                         "Pane capture failed or changed; retrying next refresh.",
-                        None,
                         None,
                     ),
                 };
@@ -101,13 +92,10 @@ impl Engine {
             }
         }
         for state in &mut states {
-            if let Some((status, detail, prompt, completion)) =
-                observations.get(&state.item.pane_id)
-            {
+            if let Some((status, detail, prompt)) = observations.get(&state.item.pane_id) {
                 state.status = *status;
                 state.status_detail = (*detail).into();
-                state.attention_prompt.clone_from(prompt);
-                state.completion_fingerprint = *completion;
+                state.input_prompt.clone_from(prompt);
             }
             if state.pane == PaneAvailability::Present
                 && let Some(mut record) = self
@@ -120,36 +108,6 @@ impl Engine {
         }
         Ok(states)
     }
-}
-
-// Exclude draft/footer/banner changes. Include visible output before the current
-// validated marker, so different answers with the same duration can requeue.
-// Whitespace normalization avoids requeueing solely due to line wrapping.
-// No screen text is retained. This is evidence, not a guaranteed native turn ID.
-fn completion_fingerprint(observation: &PaneObservation, status: AgentStatus) -> Option<u64> {
-    if status != AgentStatus::Complete {
-        return None;
-    }
-    let raw: Vec<_> = observation
-        .screen
-        .lines()
-        .map(str::trim_end)
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    let composer = raw
-        .iter()
-        .rposition(|line| *line == "›" || line.starts_with("› "))?;
-    let lines: Vec<_> = raw[..composer].iter().map(|line| line.trim()).collect();
-    let marker = preceding_activity(&lines).filter(|line| completion_indicator(line))?;
-    let end = lines.iter().rposition(|line| *line == marker)?;
-    let mut hasher = DefaultHasher::new();
-    for word in lines[..=end]
-        .iter()
-        .flat_map(|line| line.trim_matches('─').split_whitespace())
-    {
-        word.hash(&mut hasher);
-    }
-    Some(hasher.finish())
 }
 
 fn supported(command: Option<&str>) -> bool {
@@ -605,53 +563,6 @@ mod tests {
     }
 
     #[test]
-    fn test_completion_evidence() {
-        let screen = format!("• Completed the task λ🙂\nWorked for 9s • 1:15 PM\n{FOOTER}");
-        let fingerprint = |screen: &str| {
-            let pane = observation(screen);
-            completion_fingerprint(&pane, infer(&pane).0)
-        };
-        let original = fingerprint(&screen).unwrap();
-        assert_eq!(
-            fingerprint(&screen.replace("›", "› draft λ🙂")),
-            Some(original)
-        );
-        assert_eq!(
-            fingerprint(&screen.replace("Completed the task", "Completed\n  the task")),
-            Some(original)
-        );
-        assert_eq!(
-            fingerprint(
-                &screen.replace("Worked for 9s • 1:15 PM", "── Worked for 9s • 1:15 PM ────")
-            ),
-            Some(original)
-        );
-        assert_eq!(
-            fingerprint(&screen.replace(
-                "Worked for 9s • 1:15 PM",
-                "Worked for 9s • 1:15 PM\n5h limit: 62% left · /status"
-            )),
-            Some(original)
-        );
-        assert_ne!(
-            fingerprint(&screen.replace("task", "next task")),
-            Some(original)
-        );
-        assert_ne!(
-            fingerprint(&screen.replace("1:15 PM", "1:16 PM")),
-            Some(original)
-        );
-        for text in [
-            APPROVAL.to_owned(),
-            format!("Working (9s • esc to interrupt)\n{FOOTER}"),
-            FOOTER.to_owned(),
-            screen.replace("Worked for 9s", "Worked for bogus"),
-        ] {
-            assert!(fingerprint(&text).is_none(), "{text}");
-        }
-    }
-
-    #[test]
     fn test_approval_chrome() {
         for title in [
             "Would you like to run the following command?",
@@ -760,7 +671,6 @@ mod tests {
             let observed = observation(&screen);
             let (status, _) = infer(&observed);
             assert_eq!(status, AgentStatus::Running, "{screen}");
-            assert!(!status.needs_attention());
             assert!(approval_prompt(&observed, status).is_none());
             for in_mode in [false, true] {
                 let mut inactive = observation(&screen);
@@ -1114,16 +1024,15 @@ mod tests {
     }
 
     #[test]
-    fn test_attention_status() {
-        for (status, label, attention) in [
-            (AgentStatus::Running, "RUNNING", false),
-            (AgentStatus::WaitingForInput, "WAITING_FOR_INPUT", true),
-            (AgentStatus::Idle, "IDLE", false),
-            (AgentStatus::Complete, "TURN FINISHED", true),
-            (AgentStatus::Unknown, "UNKNOWN", false),
+    fn test_status_labels() {
+        for (status, label) in [
+            (AgentStatus::Running, "RUNNING"),
+            (AgentStatus::WaitingForInput, "WAITING_FOR_INPUT"),
+            (AgentStatus::Idle, "IDLE"),
+            (AgentStatus::Complete, "TURN FINISHED"),
+            (AgentStatus::Unknown, "UNKNOWN"),
         ] {
             assert_eq!(status.to_string(), label);
-            assert_eq!(status.needs_attention(), attention);
         }
     }
 
@@ -1417,12 +1326,11 @@ cat '{}/'$5
             assert_eq!(states[0].workspace_availability, crate::WorkspaceAvailability::Present);
             assert_eq!(states[1].workspace_availability, crate::WorkspaceAvailability::Missing);
             assert_eq!(states[1].resource_issue(), Some(crate::ResourceIssue::WorkspaceMissing));
-            assert!(states[1].needs_attention());
             assert_eq!(
-                states[0].attention_prompt.is_some(),
+                states[0].input_prompt.is_some(),
                 expected == AgentStatus::WaitingForInput
             );
-            assert_eq!(states[0].attention_prompt, states[1].attention_prompt);
+            assert_eq!(states[0].input_prompt, states[1].input_prompt);
             assert_eq!(states[2].status, AgentStatus::Unknown);
             assert_eq!(states[3].pane, PaneAvailability::Missing);
             assert_eq!(states[4].status, AgentStatus::Unknown);
@@ -1454,7 +1362,7 @@ cat '{}/'$5
                     .iter()
                     .all(|state| state.status == AgentStatus::Unknown)
             );
-            assert!(states.iter().all(|state| state.attention_prompt.is_none()));
+            assert!(states.iter().all(|state| state.input_prompt.is_none()));
         }
         assert_eq!(fs::read_to_string(&log).unwrap(), calls_before);
         assert_eq!(fs::read(&path).unwrap(), stored);
@@ -1617,14 +1525,10 @@ cat '{}/'$5
                 observed = states[0].status;
                 if observed == expected {
                     assert_eq!(
-                        crate::attention_items(&states).len(),
-                        usize::from(expected.needs_attention())
-                    );
-                    assert_eq!(
-                        states[0].attention_prompt.is_some(),
+                        states[0].input_prompt.is_some(),
                         expected == AgentStatus::WaitingForInput
                     );
-                    if let Some(prompt) = &states[0].attention_prompt {
+                    if let Some(prompt) = &states[0].input_prompt {
                         assert!(prompt.contains("$ cargo test"));
                     }
                     break;
@@ -1670,8 +1574,7 @@ cat '{}/'$5
             .unwrap();
         assert_eq!(states[0].pane, PaneAvailability::Missing);
         assert_eq!(states[0].status, AgentStatus::Unknown);
-        assert_eq!(crate::attention_items(&states).len(), 1);
-        assert!(states[0].attention_prompt.is_none());
+        assert!(states[0].input_prompt.is_none());
         assert_eq!(engine.work_items().unwrap().len(), 1);
     }
 }

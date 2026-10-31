@@ -253,8 +253,7 @@ mod tests {
             pane: PaneAvailability::Present,
             workspace_availability: WorkspaceAvailability::Present,
             status_detail: String::new(),
-            attention_prompt: None,
-            completion_fingerprint: None,
+            input_prompt: None,
         }
     }
 
@@ -371,7 +370,7 @@ mod tests {
             observed.status = status;
             observed.pane = PaneAvailability::Missing;
             observed.workspace_availability = WorkspaceAvailability::Missing;
-            observed.attention_prompt = Some("A new prompt".into());
+            observed.input_prompt = Some("A new prompt".into());
             menu.observe(Some(&[observed.clone()]));
             assert_eq!(
                 menu.help_context(),

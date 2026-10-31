@@ -52,10 +52,10 @@ ambiguous context is ignored, never guessed from the working directory.
 
 - Submitted prompts establish running turns; typing drafts does not.
 - `Stop` may trigger continuation, so only a matching `agent-turn-complete`
-  notification marks completion. Native session/turn identity also makes
-  session-only acknowledgements stable across scrolling and resizing.
+  notification marks completion. Completion status remains available while
+  scrolling, resizing, or typing a draft.
 - Approval and structured question hooks require a recognized live dialog before
-  claiming human attention. Scrolling a confirmed request out of view does not
+  reporting an input request. Scrolling a confirmed request out of view does not
   resolve it. Free-form answers are handled in Codex; Workbench does not store answers.
 - Hooks are observational: they cannot grant permissions or bypass the existing
   approval shortcuts' exact-current-dialog safety check.

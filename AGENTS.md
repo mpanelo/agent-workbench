@@ -11,7 +11,7 @@ The core problem is that developers can run several coding agents concurrently, 
 The product should make it easy to:
 
 - see all active work items and agent sessions
-- identify which agents need human attention
+- identify agents waiting for input or with missing resources
 - jump to an agent quickly
 - respond to an agent without manually navigating tmux
 - review agent-generated Git diffs
@@ -217,10 +217,10 @@ REVIEW
 
 Avoid putting business logic into widgets.
 
-WORK combines supervision and attention. Keep its compact list in registration
-order, with details in a separate viewport. Status/prompt changes must not move
-the selected item or its list row. Acknowledging attention keeps the item visible.
-Unregistered agent sessions share this list and are hidden by default. Showing
+WORK combines agent supervision and session registration. Keep its compact list
+in registration order, with details in a separate viewport. Status/prompt changes
+must not move the selected item or its list row. Unregistered agent sessions
+share this list and are hidden by default. Showing
 them must not duplicate registered panes or enable work actions on session rows.
 
 Rendering code should receive state from the core and emit user intents/actions back to the core.

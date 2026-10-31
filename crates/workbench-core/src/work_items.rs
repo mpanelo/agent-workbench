@@ -52,13 +52,6 @@ pub enum AgentStatus {
     Unknown,
 }
 
-impl AgentStatus {
-    /// Only affirmative input/completion evidence creates an attention item.
-    pub fn needs_attention(self) -> bool {
-        matches!(self, Self::WaitingForInput | Self::Complete)
-    }
-}
-
 impl fmt::Display for AgentStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -99,10 +92,7 @@ pub struct WorkItemState {
     pub status_detail: String,
     /// Bounded visible approval context, only for a current detected input request.
     /// Not a transcript. Opt-in signals retain only bounded pending questions.
-    pub attention_prompt: Option<String>,
-    /// Opaque hash of completion evidence (screen or native session/turn identity).
-    /// Used only for session-local acknowledgement; never terminal text.
-    pub completion_fingerprint: Option<u64>,
+    pub input_prompt: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1101,7 +1091,6 @@ mod tests {
                 WorkspaceAvailability::Missing
             );
             assert_eq!(states[0].resource_issue(), Some(issue));
-            assert!(states[0].needs_attention());
             assert_eq!(states[0].item, registered);
         }
         fs::create_dir(&registered.workspace).unwrap();
@@ -1137,5 +1126,76 @@ mod tests {
             PathBuf::from("/home/dev/.local/state/agent-workbench/work-items.json")
         );
         assert!(state_file_from(None, None, None).is_err());
+    }
+
+    #[test]
+    fn test_resource_health() {
+        use crate::ResourceIssue;
+        for (pane, workspace, issue) in [
+            (
+                PaneAvailability::Present,
+                WorkspaceAvailability::Present,
+                None,
+            ),
+            (
+                PaneAvailability::Missing,
+                WorkspaceAvailability::Present,
+                Some(ResourceIssue::PaneMissing),
+            ),
+            (
+                PaneAvailability::Unavailable,
+                WorkspaceAvailability::Present,
+                Some(ResourceIssue::Unavailable),
+            ),
+            (
+                PaneAvailability::Present,
+                WorkspaceAvailability::Missing,
+                Some(ResourceIssue::WorkspaceMissing),
+            ),
+            (
+                PaneAvailability::Missing,
+                WorkspaceAvailability::Missing,
+                Some(ResourceIssue::ResourcesMissing),
+            ),
+            (
+                PaneAvailability::Unavailable,
+                WorkspaceAvailability::Missing,
+                Some(ResourceIssue::WorkspaceMissing),
+            ),
+            (
+                PaneAvailability::Present,
+                WorkspaceAvailability::Unavailable,
+                Some(ResourceIssue::Unavailable),
+            ),
+            (
+                PaneAvailability::Missing,
+                WorkspaceAvailability::Unavailable,
+                Some(ResourceIssue::PaneMissing),
+            ),
+            (
+                PaneAvailability::Unavailable,
+                WorkspaceAvailability::Unavailable,
+                Some(ResourceIssue::Unavailable),
+            ),
+        ] {
+            for status in [
+                AgentStatus::Running,
+                AgentStatus::WaitingForInput,
+                AgentStatus::Idle,
+                AgentStatus::Complete,
+                AgentStatus::Unknown,
+            ] {
+                let item = WorkItemState {
+                    item: item("A", WorkItemKind::Implementation),
+                    status,
+                    pane,
+                    workspace_availability: workspace,
+                    status_detail: String::new(),
+                    input_prompt: None,
+                };
+                assert_eq!(item.resource_issue(), issue);
+                assert_eq!(item.status, status);
+            }
+        }
     }
 }

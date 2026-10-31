@@ -202,8 +202,6 @@ pub(crate) struct Interaction {
     pub registration_requested: Option<String>,
     pub maintenance_requested: Option<crate::maintenance::Request>,
     pub removal_requested: Option<workbench_core::WorkItem>,
-    pub attention_tracker: workbench_core::AttentionTracker,
-    pub acknowledgement_requested: Option<workbench_core::CompletionAcknowledgement>,
     pub approval_requested: Option<ApprovalRequest>,
     pub approval_feedback: Option<ApprovalFeedback>,
     pub response_bar: Option<ResponseBar>,
@@ -555,8 +553,7 @@ mod tests {
                 pane: PaneAvailability::Present,
                 workspace_availability: workbench_core::WorkspaceAvailability::Present,
                 status_detail: "Unsupported foreground command.".into(),
-                attention_prompt: None,
-                completion_fingerprint: None,
+                input_prompt: None,
             })
             .collect()
     }
@@ -564,14 +561,14 @@ mod tests {
     fn approval_request(decision: ApprovalDecision) -> ApprovalRequest {
         let mut item = items(&["approved-task"]).remove(0);
         item.status = AgentStatus::WaitingForInput;
-        item.attention_prompt = Some("Would you like to run the following command?\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)".into());
+        item.input_prompt = Some("Would you like to run the following command?\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)".into());
         ApprovalRequest::capture(&item, decision).unwrap()
     }
 
     fn response_items() -> Vec<WorkItemState> {
         let mut items = items(&["approved-task", "other"]);
         items[0].status = AgentStatus::WaitingForInput;
-        items[0].attention_prompt = Some("Would you like to run the following command?\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)".into());
+        items[0].input_prompt = Some("Would you like to run the following command?\n$ cargo test\n\nOptions:\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)".into());
         items
     }
 
@@ -611,7 +608,7 @@ mod tests {
             interaction.begin_response(&original);
             let mut changed = original.clone();
             match field {
-                0 => changed[0].attention_prompt = Some("new request".into()),
+                0 => changed[0].input_prompt = Some("new request".into()),
                 1 => changed[0].status = AgentStatus::Running,
                 2 => changed[0].item.pane_id = "%9".into(),
                 _ => {
@@ -647,7 +644,7 @@ mod tests {
             AgentStatus::WaitingForInput,
         ] {
             states[0].status = status;
-            states[0].attention_prompt = Some("Please choose an approach".into());
+            states[0].input_prompt = Some("Please choose an approach".into());
             let mut interaction = Interaction::default();
             interaction.sync(&states);
             interaction.begin_response(&states);
@@ -676,7 +673,7 @@ mod tests {
     #[test]
     fn test_approval_only() {
         let mut states = response_items();
-        states[0].attention_prompt = Some(states[0].attention_prompt.as_ref().unwrap().replace(
+        states[0].input_prompt = Some(states[0].input_prompt.as_ref().unwrap().replace(
             "No, and tell Codex what to do differently",
             "No, continue without permissions",
         ));

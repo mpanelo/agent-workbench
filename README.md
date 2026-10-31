@@ -39,7 +39,7 @@ Workmux is optional unless you use workspace cleanup.
    branch are detected automatically. Press `<enter>` to save.
 5. Press `Tab` to hide unregistered sessions when you want to focus on work.
 
-WORK keeps registered items in a stable order, with `!` marking attention.
+WORK keeps registered items in a stable order, with each agent's current status.
 Unregistered sessions are hidden at startup. `Tab` shows them below registered
 work in the same list. Only recognized coding-agent panes appear, and registered
 panes are not repeated. Select an unregistered session to see its details;
@@ -63,7 +63,6 @@ Long input requests take priority when space is limited.
 | Review diff | `d` |
 | Edit ID and description | `e` |
 | Open cleanup options | `c` |
-| Acknowledge finished turn | `x` |
 
 Press `?` for contextual help and `q` to quit from WORK. Menu controls
 are shown inline. Use tmux navigation to return after opening an agent pane.
@@ -123,8 +122,8 @@ report `UNKNOWN` when evidence is hidden. Other agents support pane navigation,
 replies, and review without lifecycle detection.
 
 `TURN FINISHED` means a response ended, not that the task succeeded.
-Acknowledgements last for the current Workbench run. Missing or inaccessible
-resources are reported separately; registrations are never removed automatically.
+Missing or inaccessible resources are reported separately; registrations are
+never removed automatically.
 
 The default state file is `~/.local/state/agent-workbench/work-items.json`, or
 under an absolute `$XDG_STATE_HOME` when set. Override it with `--state-file PATH`

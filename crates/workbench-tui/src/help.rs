@@ -46,13 +46,13 @@ impl Context {
             Self::Work {
                 sessions: false, ..
             } => {
-                "Respond: r | Edit: e | Clean Up: c | Acknowledge finished turn: x | Show sessions: Tab | Quit: q | Open: <enter> | Review: d | Help: ?"
+                "Respond: r | Edit: e | Clean Up: c | Show sessions: Tab | Quit: q | Open: <enter> | Review: d | Help: ?"
             }
             Self::Work {
                 sessions: true,
                 unregistered: false,
             } => {
-                "Respond: r | Edit: e | Clean Up: c | Acknowledge finished turn: x | Hide sessions: Tab | Quit: q | Open: <enter> | Review: d | Help: ?"
+                "Respond: r | Edit: e | Clean Up: c | Hide sessions: Tab | Quit: q | Open: <enter> | Review: d | Help: ?"
             }
             Self::Work {
                 sessions: true,
@@ -319,6 +319,7 @@ mod tests {
             assert!(!text.contains("Work: a"));
             assert!(!text.contains("Views:"));
             assert!(!context.hints().contains("Views:"));
+            assert!(!context.hints().contains("Acknowledge"));
             assert!(!text.contains("Sessions: s"));
             assert!(!text.contains("Work: w"));
             for hidden in ["j/k", "↑", "↓", "←", "→", "(arrows)"] {
