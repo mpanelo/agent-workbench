@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location(
     "stress_preview", Path(__file__).with_name("stress-preview.py")
@@ -19,6 +20,28 @@ spec.loader.exec_module(stress)
 
 
 class Calculations(unittest.TestCase):
+    def test_recovery(self):
+        fixture = stress.Fixture.__new__(stress.Fixture)
+        fixture.pending = {}
+        fixture.faults = {}
+        fixture.expected_live = True
+        fixture.workbench = "%7"
+        fixture.observers = lambda: [(1, "observer")]
+        fixture.pump = lambda seconds: None
+        # Recovery can occur between latency pulses. Continuous pane content
+        # identifies the selected fixture even with generic panel titles.
+        fixture.tmux = lambda *args: (
+            "Pane preview\nfixture 0, row 05, update 00000001"
+            if args[0] == "capture-pane"
+            else ""
+        )
+        failures = []
+        fixture.fail = failures.append
+        with patch.object(stress.time, "monotonic", side_effect=[0, 1, 6]):
+            fixture.fault(0)
+        self.assertEqual(failures, [])
+        self.assertEqual(fixture.faults, {"detach": 1})
+
     def test_cleanup(self):
         fixture = stress.Fixture.__new__(stress.Fixture)
         fixture.real_tmux = None

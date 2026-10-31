@@ -255,7 +255,7 @@ impl ReviewUi {
         let id = self.current.as_deref().unwrap_or("—");
         frame.render_widget(
             Paragraph::new(format!(
-                "AGENT WORKBENCH — {} — {}",
+                "{} · {}",
                 if self.since_review
                     && self
                         .sessions
@@ -634,6 +634,7 @@ mod tests {
         session.diff.files.truncate(1);
         session.diff.files[0].patch = patch.into();
         let text = screen(&mut review, 120, 24);
+        assert!(!text.contains("AGENT WORKBENCH"));
         for expected in [
             "-    before",
             "+    after",
@@ -713,7 +714,7 @@ mod tests {
         key(&mut review, KeyCode::Char(' '));
         let text = screen(&mut review, 120, 24);
         for expected in [
-            "REVIEW — A",
+            "REVIEW · A",
             "1 / 2 reviewed",
             "+2 -2",
             "source.rs",
@@ -759,7 +760,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
         terminal.draw(|frame| review.render(frame)).unwrap();
         let buffer = terminal.backend().buffer();
-        theme::assert_text_style(buffer, "AGENT WORKBENCH", theme::LAVENDER, theme::MANTLE);
+        theme::assert_text_style(buffer, "REVIEW", theme::LAVENDER, theme::MANTLE);
         theme::assert_text_style(buffer, "✓ source.rs", theme::GREEN, theme::SURFACE);
         theme::assert_text_style(buffer, "+++ b/source.rs", theme::PINK, theme::MANTLE);
         theme::assert_text_style(buffer, "@@ -1 +1 @@", theme::PEACH, theme::MANTLE);

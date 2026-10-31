@@ -21,21 +21,13 @@ pub(crate) fn render_work(
     // Details always render from the top; list navigation reveals the selected row.
     *scroll = 0;
     theme::paint(frame);
-    let [header, body, notice, composer, footer] = Layout::vertical([
-        Constraint::Length(1),
+    let [body, notice, composer, footer] = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(if interaction.message.is_some() { 2 } else { 0 }),
         Constraint::Length(if interaction.draft.is_some() { 3 } else { 0 }),
         Constraint::Length(1),
     ])
     .areas(frame.area());
-    let sessions = if interaction.show_sessions {
-        "shown"
-    } else {
-        "hidden"
-    };
-    let title = format!("AGENT WORKBENCH · WORK • sessions: {sessions}");
-    frame.render_widget(Paragraph::new(title).style(theme::header()), header);
     let mut lines = Vec::new();
     let rows = state.rows(interaction.show_sessions);
     match &state.work_items {
@@ -161,16 +153,11 @@ pub(crate) fn render_work(
                 .filter(|feedback| selected.is_some_and(|state| feedback.item_id == state.item.id));
             let mut title = vec![Span::raw("Details")];
             if let Some(feedback) = feedback {
-                title.push(Span::raw(" — "));
+                title.push(Span::raw(" · "));
                 title.push(Span::styled(
                     feedback.label(),
                     approval_feedback_style(feedback.phase),
                 ));
-            }
-            if let Some(state) = selected {
-                title.push(Span::raw(format!(" — {}", visible(&state.item.id))));
-            } else if let Some(row) = rows.iter().find(|row| row.selected(interaction)) {
-                title.push(Span::raw(format!(" · {}", visible(row.label()))));
             }
             let block = Block::bordered()
                 .title(Line::from(title))
@@ -630,7 +617,7 @@ mod tests {
         let text = work_screen(&state, 80, 10, &mut 0);
         assert_eq!(
             text.lines().last().unwrap().trim_end(),
-            "Respond: r | Edit: e | Clean Up: c | Show sessions: Tab | Quit: q | … | Help: ?"
+            "Show sessions: Tab | Respond: r | Edit: e | Clean Up: c | Quit: q | … | Help: ?"
         );
         assert_eq!(text.lines().nth(8).unwrap().trim_end(), "");
         let text = work_screen(&state, 200, 10, &mut 0);
@@ -638,13 +625,32 @@ mod tests {
         assert!(footer.contains("Show sessions: Tab"));
         assert!(!footer.contains("Work: w"));
         assert!(!footer.contains("Views:"));
+        for show_sessions in [false, true] {
+            let mut interaction = Interaction {
+                show_sessions,
+                ..Interaction::default()
+            };
+            let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+            terminal
+                .draw(|frame| render_work(frame, &state, &mut 0, &mut interaction))
+                .unwrap();
+            let footer: String = terminal.backend().buffer().content()[9 * 40..]
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(footer.starts_with(if show_sessions {
+                "Hide sessions: Tab"
+            } else {
+                "Show sessions: Tab"
+            }));
+        }
     }
 
     #[test]
     fn test_work_chrome() {
         for status in [AgentStatus::WaitingForInput, AgentStatus::Complete] {
             let mut item = registered(PaneAvailability::Present, WorkItemKind::Implementation);
-            item.item.id = "界🙂".into();
+            item.item.id = "界🙂\x1b".into();
             item.status = status;
             item.input_prompt = (status == AgentStatus::WaitingForInput)
                 .then(|| "Which plan?\n1. Continue\n2. Stop".into());
@@ -664,12 +670,26 @@ mod tests {
                     .iter()
                     .map(|cell| cell.symbol())
                     .collect();
-                for removed in ["attention:", "Acknowledge", "finished turn: x", "!"] {
+                for removed in [
+                    "AGENT WORKBENCH",
+                    "WORK •",
+                    "attention:",
+                    "Acknowledge",
+                    "finished turn: x",
+                    "!",
+                ] {
                     assert!(!text.contains(removed), "{text}");
                 }
                 assert!(!text.chars().any(char::is_control));
+                if width > 1 {
+                    assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), ">");
+                }
                 if width == 120 {
-                    assert!(text.contains("WORK • sessions: hidden"));
+                    assert!(text.contains("Show sessions: Tab"));
+                    assert!(text.contains("Details"));
+                    assert!(text.contains("Pane preview"));
+                    let compact: String = text.chars().filter(|ch| !ch.is_whitespace()).collect();
+                    assert_eq!(compact.matches("界🙂\\u{1b}").count(), 1);
                     assert!(text.contains(&status.to_string()));
                     if status == AgentStatus::WaitingForInput {
                         assert!(text.contains("Which plan?"));
@@ -698,7 +718,7 @@ mod tests {
             AppState::from_refresh(Ok(snapshot()), Ok(vec![waiting, complete, hidden, running]));
         let text = work_screen(&state, 320, 30, &mut 0);
         for expected in [
-            "WORK • sessions: hidden",
+            "Show sessions: Tab",
             "ABC-123         WAITING_FOR_INPUT",
             "Agent requests input:",
             "$ cargo test -- λ🙂",
@@ -709,7 +729,7 @@ mod tests {
             "PR #1842        TURN FINISHED",
             "HIDDEN_UNKNOWN  UNKNOWN",
             "HIDDEN_RUNNING  RUNNING",
-            "Details — ABC-123",
+            "Details",
             "Open: <enter>",
             "Respond: r",
             "Help: ?",
@@ -734,7 +754,7 @@ mod tests {
         assert!(!text.contains("%14"), "{text}");
         assert!(!text.contains("(present)"), "{text}");
         let work = work_screen(&state, 120, 35, &mut 0);
-        assert!(work.contains("sessions: hidden"));
+        assert!(work.contains("Show sessions: Tab"));
         assert!(work.contains("Options:"));
         assert!(work.contains("› 1. Yes, proceed (y)"));
         let narrow = work_screen(&state, 80, 24, &mut 0);
@@ -763,8 +783,7 @@ mod tests {
                 .contains("$git-ccommit.gpgsign=falsecommit-m\"RemoveobsoletePackerinstallation\""),
             "{text}"
         );
-        // Prompt content is still complete; only the compact footer truncates.
-        assert!(!text.lines().take(44).any(|line| line.contains('…')));
+        assert!(compact.contains("Permissionappliesonlytothiscommandprefix."));
         assert!(text.lines().last().unwrap().contains("… | Help: ?"));
 
         let wide = work_screen(&state, 120, 35, &mut 0);
@@ -892,7 +911,7 @@ mod tests {
             let details = rows.iter().position(|row| row.contains("Details")).unwrap();
             let preview = rows
                 .iter()
-                .position(|row| row.contains("Pane preview: ABC-123"))
+                .position(|row| row.contains("Pane preview"))
                 .unwrap();
             if width >= 120 {
                 assert_eq!(details, preview);
@@ -978,10 +997,9 @@ mod tests {
             ] {
                 theme::assert_text_style(buffer, text, fg, bg);
             }
-            assert_eq!(buffer[(119, 0)].bg, theme::MANTLE);
-            assert_eq!(buffer[(119, 1)].bg, theme::SURFACE);
-            assert_eq!(buffer[(45, 2)].bg, theme::BASE);
-            assert_eq!(buffer[(119, 2)].bg, theme::MANTLE);
+            assert_eq!(buffer[(119, 0)].bg, theme::SURFACE);
+            assert_eq!(buffer[(45, 1)].bg, theme::BASE);
+            assert_eq!(buffer[(119, 1)].bg, theme::MANTLE);
             let line = metadata("Branch", "feature/λ\x1b", Style::default().fg(theme::PINK));
             let rendered: String = line
                 .spans
@@ -1110,8 +1128,8 @@ mod tests {
             .unwrap();
         let confirmed = terminal.backend().buffer();
         theme::assert_text_style(confirmed, "✓ Approval sent", theme::GREEN, theme::SURFACE);
-        assert_eq!(confirmed[(0, 3)].fg, theme::GREEN); // selected details border
-        for y in [1, 2] {
+        assert_eq!(confirmed[(0, 2)].fg, theme::GREEN); // selected details border
+        for y in [0, 1] {
             // ID and status retain their exact cells while feedback changes.
             for x in 0..28 {
                 assert_eq!(confirmed[(x, y)], baseline[(x, y)]);
@@ -1127,7 +1145,7 @@ mod tests {
         terminal
             .draw(|frame| render_work(frame, &state, &mut scroll, &mut interaction))
             .unwrap();
-        assert_eq!(terminal.backend().buffer()[(0, 3)].fg, theme::TEAL);
+        assert_eq!(terminal.backend().buffer()[(0, 2)].fg, theme::TEAL);
         assert!(
             interaction.tick_approval_feedback(after_send + std::time::Duration::from_millis(1500))
         );
@@ -1156,10 +1174,10 @@ mod tests {
             .chunks(80)
             .map(|row| row.iter().map(|cell| cell.symbol()).collect())
             .collect();
-        assert!(rows[1].contains("✓ Approval sent"));
-        assert!(!rows[2].contains("✓"));
-        assert!(rows[3].contains("Details — other"));
-        assert_eq!(terminal.backend().buffer()[(0, 3)].fg, theme::TEAL);
+        assert!(rows[0].contains("✓ Approval sent"));
+        assert!(!rows[1].contains("✓"));
+        assert!(rows[2].contains("Details"));
+        assert_eq!(terminal.backend().buffer()[(0, 2)].fg, theme::TEAL);
         if let Some(Ok(items)) = &mut state.work_items {
             items[0].status = AgentStatus::Running;
         }
@@ -1213,7 +1231,6 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         for (text, fg, bg) in [
-            ("AGENT WORKBENCH", theme::LAVENDER, theme::MANTLE),
             ("> ABC-123", theme::TEAL, theme::SURFACE),
             ("WAITING_FOR_INPUT", theme::YELLOW, theme::SURFACE),
             ("TURN FINISHED", theme::GREEN, theme::BASE),
@@ -1247,7 +1264,7 @@ mod tests {
         );
         let text = work_screen(&unknown, 120, 15, &mut 0);
         for expected in [
-            "WORK • sessions: hidden",
+            "Show sessions: Tab",
             "Discovery unavailable",
             "ABC-123  UNAVAILABLE",
             "Agent pane unavailable",
@@ -1257,7 +1274,7 @@ mod tests {
         let error =
             AppState::from_refresh(Ok(snapshot()), Err("unsupported schema version".into()));
         let text = work_screen(&error, 120, 12, &mut 0);
-        assert!(text.contains("WORK • sessions: hidden"));
+        assert!(text.contains("Show sessions: Tab"));
         assert!(text.contains("unsupported schema version"));
         assert!(!text.contains("attention:"));
         let mut scroll = u16::MAX;
@@ -1376,14 +1393,14 @@ mod tests {
             finished.status = AgentStatus::Complete;
             let original = finished.clone();
             let state = AppState::from_refresh(Ok(snapshot()), Ok(vec![finished]));
-            // Header + one content row + one compact shortcut row.
-            let text = work_screen(&state, 80, 3, &mut 0);
+            // One content row and one compact shortcut row.
+            let text = work_screen(&state, 80, 2, &mut 0);
             let rows: Vec<_> = text.lines().map(str::trim_end).collect();
-            assert_eq!(rows[1], "> ABC-123  TURN FINISHED");
-            assert!(!rows[1].contains(label));
+            assert_eq!(rows[0], "> ABC-123  TURN FINISHED");
+            assert!(!rows[0].contains(label));
             assert_eq!(
-                rows[2],
-                "Respond: r | Edit: e | Clean Up: c | Show sessions: Tab | Quit: q | … | Help: ?"
+                rows[1],
+                "Show sessions: Tab | Respond: r | Edit: e | Clean Up: c | Quit: q | … | Help: ?"
             );
             assert_eq!(state.items(), std::slice::from_ref(&original));
             assert_eq!(state.items()[0].item.kind.to_string(), full_name);
@@ -1414,7 +1431,7 @@ mod tests {
                 };
                 let text = work_screen(&state, 120, 15, &mut 0);
                 for expected in [
-                    "WORK",
+                    "Show sessions: Tab",
                     "Fix retries",
                     "/work/repo",
                     "/work/ABC-123",
@@ -1504,11 +1521,11 @@ mod tests {
                     .collect();
                 let text = rows.join("\n");
                 assert!(
-                    rows[1].starts_with(&format!("> ABC-123  {label}")),
+                    rows[0].starts_with(&format!("> ABC-123  {label}")),
                     "{text}"
                 );
-                assert!(!rows[1].contains('!'));
-                assert!(!rows[1].contains("Build"));
+                assert!(!rows[0].contains('!'));
+                assert!(!rows[0].contains("Build"));
                 theme::assert_text_style(
                     buffer,
                     label,
@@ -1701,7 +1718,7 @@ mod tests {
                 *initial_offset.get_or_insert(interaction.work_list_offset),
                 interaction.work_list_offset
             );
-            assert!(rows.iter().any(|row| row.contains("Details — F")));
+            assert!(rows.iter().any(|row| row.contains("Details")));
             assert!(!rows.iter().any(|row| row.contains("UNSELECTED PROMPT")));
             assert_eq!(interaction.selected_id.as_deref(), Some("F"));
         }
@@ -1735,7 +1752,7 @@ mod tests {
             .into_iter()
             .enumerate()
         {
-            let row = &terminal.backend().buffer().content()[(index + 1) * 80..(index + 2) * 80];
+            let row = &terminal.backend().buffer().content()[index * 80..(index + 1) * 80];
             assert_eq!(
                 row.iter().position(|cell| cell.symbol() == &status[..1]),
                 Some(13)
@@ -1873,7 +1890,7 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(text.contains("> B  WAITING_FOR_INPUT"));
-        assert!(text.contains("Details — B"));
+        assert!(text.contains("Details"));
         assert!(text.contains("Type: Build"));
         let mut updated = state.clone();
         if let Some(Ok(items)) = &mut updated.work_items {

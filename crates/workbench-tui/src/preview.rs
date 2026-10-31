@@ -74,7 +74,7 @@ impl PreviewUi {
 
     pub fn render(&self, frame: &mut Frame<'_>, area: Rect, item: &WorkItem) {
         let block = Block::bordered()
-            .title(format!("Pane preview: {}", visible(&item.id)))
+            .title("Pane preview")
             .title_bottom(Line::styled("Read-only · recent output", theme::muted()))
             .style(theme::panel())
             .border_style(theme::border(false))
@@ -250,10 +250,13 @@ mod tests {
         assert!(ui.content.is_none());
         ui.finish(current, Ok(capture("new output")));
         let text = screen(&ui, &b, 45, 8);
-        assert!(text.contains("Pane preview: B"));
+        assert!(text.contains("Pane preview"));
+        assert!(!text.contains("Pane preview:"));
         assert!(text.contains("new output"));
         assert!(!text.contains("old output"));
-        assert!(!screen(&ui, &a, 45, 8).contains("new output"));
+        let stale = screen(&ui, &a, 45, 8);
+        assert!(!stale.contains("new output"));
+        assert!(stale.contains("Loading pane preview"));
         assert!(!ui.select(Some(&b)));
         let mut edited = b.clone();
         edited.title = "Changed".into();

@@ -46,18 +46,18 @@ impl Context {
             Self::Work {
                 sessions: false, ..
             } => {
-                "Respond: r | Edit: e | Clean Up: c | Show sessions: Tab | Quit: q | Open: <enter> | Review: d | Help: ?"
+                "Show sessions: Tab | Respond: r | Edit: e | Clean Up: c | Quit: q | Open: <enter> | Review: d | Help: ?"
             }
             Self::Work {
                 sessions: true,
                 unregistered: false,
             } => {
-                "Respond: r | Edit: e | Clean Up: c | Hide sessions: Tab | Quit: q | Open: <enter> | Review: d | Help: ?"
+                "Hide sessions: Tab | Respond: r | Edit: e | Clean Up: c | Quit: q | Open: <enter> | Review: d | Help: ?"
             }
             Self::Work {
                 sessions: true,
                 unregistered: true,
-            } => "Register: <enter>/r | Hide sessions: Tab | Quit: q | Help: ?",
+            } => "Hide sessions: Tab | Register: <enter>/r | Quit: q | Help: ?",
             Self::Review => {
                 "Toggle mark: Space | Scroll: <c-d>/<c-u> | Reload: r | Full/since: c | Pending: Tab | Back: Esc | Quit: q | Help: ?"
             }

@@ -501,7 +501,7 @@ class Fixture:
             self.closed_pane = True
             self.pump(2.5)
             screen = self.tmux("capture-pane", "-p", "-t", self.workbench)
-            if "missing" not in screen.lower() or "Pane preview: fixture-5" in screen:
+            if "missing" not in screen.lower() or "fixture 5, row " in screen:
                 self.fail("missing pane retained a stale preview")
         else:
             return
@@ -514,7 +514,7 @@ class Fixture:
             screen = self.tmux("capture-pane", "-p", "-t", self.workbench)
             if (
                 len(self.observers()) == 1
-                and "Pane preview: fixture-0" in screen
+                and "fixture 0, row " in screen
                 and "Preview unavailable" not in screen
                 and "Loading pane preview" not in screen
             ):
